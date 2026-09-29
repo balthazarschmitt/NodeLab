@@ -1,9 +1,12 @@
 #include "ui/Inspector.h"
 
+#include <cstdio>
+
 #include <imgui.h>
 
 #include "io/Paths.h"
 #include "ui/FileDialog.h"
+#include "ui/ParamWidgets.h"
 
 static const char* kImageFilter = "Images|*.png;*.jpg;*.jpeg;*.bmp;*.tga|All files|*.*";
 
@@ -16,8 +19,10 @@ bool editParam(Node& node, int i, float width, bool compact) {
     switch (d.kind) {
         case ParamKind::Float: {
             float v = node.paramF(i);
-            if (compact) {
-                changed = ImGui::DragFloat(label.c_str(), &v, (d.max - d.min) / 300.0f, d.min, d.max, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+            if (compact || d.hardMax > d.max || d.hardMin < d.min) {
+                // Unbounded (math) values: drag field whose speed follows the soft range.
+                changed = ImGui::DragFloat(label.c_str(), &v, (d.max - d.min) / 300.0f, d.hardMin, d.hardMax, "%.3f",
+                                           ImGuiSliderFlags_AlwaysClamp);
             } else {
                 changed = ImGui::SliderFloat(label.c_str(), &v, d.min, d.max, "%.3f", ImGuiSliderFlags_AlwaysClamp);
             }
@@ -64,6 +69,23 @@ bool editParam(Node& node, int i, float width, bool compact) {
             if (!path.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", path.c_str());
             break;
         }
+        case ParamKind::Text: {
+            char buf[1024];
+            std::snprintf(buf, sizeof(buf), "%s", node.paramS(i).c_str());
+            if (ImGui::InputText(label.c_str(), buf, sizeof(buf))) {
+                node.params[i] = std::string(buf);
+                changed = true;
+            }
+            break;
+        }
+        case ParamKind::Curve:
+            ImGui::TextUnformatted(d.name.c_str());
+            changed = curveEditor("##curves", node.params[i]);
+            break;
+        case ParamKind::Ramp:
+            ImGui::TextUnformatted(d.name.c_str());
+            changed = rampEditor("##ramp", node.params[i]);
+            break;
     }
     ImGui::PopID();
     return changed;
@@ -81,6 +103,15 @@ bool drawInspector(Graph& g, int selectedNode) {
     ImGui::Text("%s", info.displayName.c_str());
     ImGui::SameLine();
     ImGui::TextDisabled("(%s)", info.category.c_str());
+    if (info.type == "conv.expression" || info.type == "conv.image_expression") {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Variables: r g b a (Image input), in1 in2, x y (pixel), u v (0..1), w h\n"
+                              "Functions: sin cos tan pow sqrt abs floor ceil log ln exp atan2\n"
+                              "           min max clamp mix step smoothstep fract\n"
+                              "Example: mix(r, b, smoothstep(0.3, 0.7, v))");
+    }
     ImGui::Separator();
 
     if (info.params.empty()) {

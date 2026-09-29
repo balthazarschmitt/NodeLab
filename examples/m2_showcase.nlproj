@@ -1,0 +1,19 @@
+{"app":"NodeLab","version":1,"graph":{"nextId":40,
+ "nodes":[
+  {"id":1,"type":"io.image_input","pos":[0,120],"params":{"File":"scene.png"}},
+  {"id":2,"type":"color.curves","pos":[240,0],"params":{"Factor":1.0,"Curves":{"master":[[0,0],[0.25,0.18],[0.75,0.85],[1,1]],"r":[[0,0],[1,1]],"g":[[0,0],[1,1]],"b":[[0,0],[0.5,0.6],[1,1]]}}},
+  {"id":3,"type":"color.luminance","pos":[240,230],"params":{"Method":0}},
+  {"id":4,"type":"conv.color_ramp","pos":[480,230],"params":{"Factor":0.5,"Ramp":{"interp":0,"stops":[[0.0,0.05,0.0,0.1,1],[0.45,0.8,0.1,0.2,1],[0.8,1.0,0.8,0.3,1],[1.0,1,1,0.9,1]]}}},
+  {"id":5,"type":"conv.color_key","pos":[240,360],"params":{"Hue":120,"Hue Range":35,"Sat Min":0.2,"Sat Max":1,"Value Min":0.05,"Value Max":1,"Softness":0.1,"Invert":false}},
+  {"id":6,"type":"math.blend","pos":[720,120],"params":{"Factor":1.0,"Mode":0,"Clamp":true}},
+  {"id":7,"type":"io.output","pos":[960,120],"params":{}}],
+ "links":[
+  {"id":10,"from":[1,0],"to":[2,0]},
+  {"id":11,"from":[1,0],"to":[3,0]},
+  {"id":12,"from":[3,0],"to":[4,0]},
+  {"id":13,"from":[1,0],"to":[5,0]},
+  {"id":14,"from":[2,0],"to":[6,0]},
+  {"id":15,"from":[4,0],"to":[6,1]},
+  {"id":16,"from":[5,0],"to":[6,2]},
+  {"id":17,"from":[6,0],"to":[7,0]}]},
+ "ui":{}}

@@ -20,6 +20,7 @@ size_t Evaluator::ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unor
     std::string key = info.type;
     key += ctx.proxy ? "|p|" : "|f|";
     key += nlohmann::json(n->params).dump();
+    key += n->signatureExtra();
 
     std::vector<Value> inputs(info.inputs.size());
     for (size_t i = 0; i < info.inputs.size(); ++i) {
@@ -28,6 +29,9 @@ size_t Evaluator::ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unor
             key += "|L" + std::to_string(up) + ":" + std::to_string(l->fromPin);
             const auto& outs = cache_[l->fromNode].outs;
             if (l->fromPin < int(outs.size())) inputs[i] = outs[l->fromPin];
+            // A wire carrying nothing (e.g. from an image input with no file) acts like no wire.
+            if (inputs[i].empty() && info.inputs[i].fallbackParam >= 0)
+                inputs[i] = Value(n->paramF(info.inputs[i].fallbackParam));
         } else {
             key += "|-";
             int fp = info.inputs[i].fallbackParam;

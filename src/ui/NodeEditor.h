@@ -61,7 +61,7 @@ private:
         float titleH = 0;
         std::vector<ImVec2> inPins, outPins;
         std::vector<ImRect> valueBoxes;  // per input; zero-size when no inline value
-        std::vector<ImRect> pathBoxes;   // per param; zero-size unless Path
+        std::vector<ImRect> paramBoxes;  // per param row on the body; zero-size if not shown
     };
 
     Layout layoutFor(const Node& n) const;
@@ -78,6 +78,7 @@ private:
     void drawLinks(ImDrawList* dl, const Graph& g) const;
     bool drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result& r);
     bool drawValueBox(Node& n, int param, const ImRect& box, ImDrawList* dl, const char* label);
+    bool drawParamRow(ImDrawList* dl, Node& n, int param, const ImRect& box, bool canInteract);
     void updateInsertCandidate(const Graph& g);
     void finishLinkDrag(Graph& g, Result& r);
     void doFrame(const Graph& g);
@@ -117,6 +118,7 @@ private:
     // Value field currently being dragged. It must keep being submitted even when the mouse leaves
     // its node, otherwise ImGui drops the active item mid-drag.
     int activeNode_ = 0, activeParam_ = -1;
+    int enumNode_ = 0, enumParam_ = -1;  // node/param whose dropdown popup is open
 
     // menus
     ImVec2 menuPos_{};

@@ -7,6 +7,8 @@
 
 #include <imgui_internal.h>
 
+#include "core/Curve.h"
+#include "core/Ramp.h"
 #include "graph/NodeRegistry.h"
 #include "io/Paths.h"
 #include "ui/FileDialog.h"
@@ -36,15 +38,37 @@ bool containsNoCase(const std::string& hay, const char* needle) {
 ImU32 categoryColor(const std::string& cat) {
     if (cat == "Input / Output") return IM_COL32(56, 108, 78, 255);
     if (cat == "Color") return IM_COL32(64, 88, 148, 255);
-    if (cat == "Math / Mix") return IM_COL32(104, 74, 136, 255);
+    if (cat == "Mix") return IM_COL32(104, 74, 136, 255);
+    if (cat == "Converter") return IM_COL32(42, 108, 118, 255);
+    if (cat == "Group") return IM_COL32(40, 120, 60, 255);
     return IM_COL32(80, 80, 92, 255);
+}
+
+bool pinBacked(const NodeInfo& info, int param) {
+    for (const auto& p : info.inputs)
+        if (p.fallbackParam == param) return true;
+    return false;
+}
+
+// Rows a param occupies on the node body (0 = inspector only / shown on its input pin).
+int paramRows(const NodeInfo& info, int i) {
+    switch (info.params[i].kind) {
+        case ParamKind::Float: return pinBacked(info, i) ? 0 : 1;
+        case ParamKind::Path:
+        case ParamKind::Enum:
+        case ParamKind::Bool:
+        case ParamKind::Text:
+        case ParamKind::Ramp: return 1;
+        case ParamKind::Curve: return 4;
+        case ParamKind::Int: return 0;
+    }
+    return 0;
 }
 
 float nodeHeightGrid(const Node& n) {
     const NodeInfo& info = n.info();
     int rows = int(info.inputs.size() + info.outputs.size());
-    for (const auto& p : info.params)
-        if (p.kind == ParamKind::Path) ++rows;
+    for (int i = 0; i < int(info.params.size()); ++i) rows += paramRows(info, i);
     return kTitleH + kPad * 2 + rows * kRowH;
 }
 
@@ -127,11 +151,12 @@ NodeEditor::Layout NodeEditor::layoutFor(const Node& n) const {
     float y = L.min.y + (kTitleH + kPad) * z;
     const float row = kRowH * z;
     for (size_t i = 0; i < info.outputs.size(); ++i, y += row) L.outPins.emplace_back(L.max.x, y + row * 0.5f);
-    L.pathBoxes.resize(info.params.size());
-    for (size_t i = 0; i < info.params.size(); ++i) {
-        if (info.params[i].kind != ParamKind::Path) continue;
-        L.pathBoxes[i] = ImRect(L.min.x + 8 * z, y + 2 * z, L.max.x - 8 * z, y + row - 2 * z);
-        y += row;
+    L.paramBoxes.resize(info.params.size());
+    for (int i = 0; i < int(info.params.size()); ++i) {
+        int rows = paramRows(info, i);
+        if (rows == 0) continue;
+        L.paramBoxes[i] = ImRect(L.min.x + 10 * z, y + 2 * z, L.max.x - 10 * z, y + row * rows - 2 * z);
+        y += row * rows;
     }
     for (size_t i = 0; i < info.inputs.size(); ++i, y += row) {
         L.inPins.emplace_back(L.min.x, y + row * 0.5f);
@@ -322,6 +347,159 @@ bool NodeEditor::drawValueBox(Node& n, int param, const ImRect& box, ImDrawList*
     return changed;
 }
 
+// One param row on the node body. canInteract: this node is topmost under the mouse.
+bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box, bool canInteract) {
+    const ParamDesc& d = n.info().params[i];
+    const float z = zoom_;
+    const float fs = ImGui::GetFontSize() * z;
+    const bool showText = fs >= 5.0f;
+    const ImU32 textCol = IM_COL32(222, 222, 228, 255);
+    const ImVec4 bclip(box.Min.x + 3 * z, box.Min.y, box.Max.x - 3 * z, box.Max.y);
+    auto text = [&](float x, const char* s, ImU32 col) {
+        if (showText) dl->AddText(ImGui::GetFont(), fs, ImVec2(x, box.GetCenter().y - fs * 0.5f), col, s, nullptr, 0.0f, &bclip);
+    };
+    const bool mineEditing = editing_.node == n.id && editing_.param == i;
+    const bool mineActive = activeNode_ == n.id && activeParam_ == i;
+    const bool mineMenu = enumNode_ == n.id && enumParam_ == i;
+    bool changed = false;
+    bool hovered = false;
+    ImGui::PushID(2000 + i);
+
+    auto button = [&]() {
+        ImGui::SetCursorScreenPos(box.Min);
+        bool clicked = ImGui::InvisibleButton("##row", box.GetSize());
+        hovered = ImGui::IsItemHovered();
+        return clicked;
+    };
+
+    switch (d.kind) {
+        case ParamKind::Float:
+            if (canInteract || mineEditing || mineActive) changed = drawValueBox(n, i, box, dl, d.name.c_str());
+            else drawValueField(dl, box, d.name.c_str(), n.paramF(i), d, fs, z, false);
+            break;
+        case ParamKind::Path: {
+            std::string path = n.paramS(i);
+            std::string label = path.empty() ? "Choose image..." : pathToU8(u8ToPath(path).filename());
+            if (canInteract && button()) {
+                if (auto p = openFileDialog("Choose image", kImageFilter)) {
+                    n.params[i] = *p;
+                    changed = true;
+                }
+            }
+            if (hovered && !path.empty()) ImGui::SetTooltip("%s", path.c_str());
+            dl->AddRectFilled(box.Min, box.Max, hovered ? IM_COL32(70, 74, 88, 255) : IM_COL32(54, 56, 66, 255), 3 * z);
+            text(box.Min.x + 6 * z, label.c_str(), textCol);
+            break;
+        }
+        case ParamKind::Enum: {
+            int v = n.paramI(i);
+            const char* opt = (v >= 0 && v < int(d.options.size())) ? d.options[v].c_str() : "?";
+            if (canInteract && button()) {
+                enumNode_ = n.id;
+                enumParam_ = i;
+                ImGui::OpenPopup("##enum");
+            }
+            dl->AddRectFilled(box.Min, box.Max, hovered ? IM_COL32(70, 74, 88, 255) : IM_COL32(54, 56, 66, 255), 3 * z);
+            text(box.Min.x + 6 * z, opt, textCol);
+            float ax = box.Max.x - 10 * z, ay = box.GetCenter().y, as = 3.5f * z;
+            dl->AddTriangleFilled(ImVec2(ax - as, ay - as * 0.6f), ImVec2(ax + as, ay - as * 0.6f), ImVec2(ax, ay + as * 0.8f), textCol);
+            // The popup lives in this node's ID scope, so it is drawn here while open even if the
+            // mouse has moved off the node.
+            if (enumNode_ == n.id && enumParam_ == i) {
+                if (ImGui::BeginPopup("##enum")) {
+                    for (int k = 0; k < int(d.options.size()); ++k)
+                        if (ImGui::Selectable(d.options[k].c_str(), k == v)) {
+                            n.params[i] = k;
+                            changed = true;
+                        }
+                    ImGui::EndPopup();
+                } else {
+                    enumNode_ = 0;
+                    enumParam_ = -1;
+                }
+            }
+            (void)mineMenu;
+            break;
+        }
+        case ParamKind::Bool: {
+            if (canInteract && button()) {
+                n.params[i] = !n.paramB(i);
+                changed = true;
+            }
+            const float sz = box.GetHeight() - 4 * z;
+            ImVec2 c0(box.Min.x + 2 * z, box.GetCenter().y - sz * 0.5f), c1(c0.x + sz, c0.y + sz);
+            dl->AddRectFilled(c0, c1, hovered ? IM_COL32(70, 74, 88, 255) : IM_COL32(54, 56, 66, 255), 3 * z);
+            if (n.paramB(i))
+                dl->AddRectFilled(ImVec2(c0.x + 3 * z, c0.y + 3 * z), ImVec2(c1.x - 3 * z, c1.y - 3 * z),
+                                  IM_COL32(90, 130, 210, 255), 2 * z);
+            text(c1.x + 6 * z, d.name.c_str(), textCol);
+            break;
+        }
+        case ParamKind::Text: {
+            if (mineEditing) {
+                char buf[512];
+                std::snprintf(buf, sizeof(buf), "%s", n.paramS(i).c_str());
+                ImGui::SetCursorScreenPos(box.Min);
+                ImGui::SetNextItemWidth(box.GetWidth());
+                ImGui::SetWindowFontScale(z);
+                if (editing_.frames++ == 0) ImGui::SetKeyboardFocusHere();
+                if (ImGui::InputText("##text", buf, sizeof(buf))) {
+                    n.params[i] = std::string(buf);
+                    changed = true;
+                }
+                const bool active = ImGui::IsItemActive();
+                ImGui::SetWindowFontScale(1.0f);
+                if (active) editing_.wasActive = true;
+                else if (editing_.wasActive || editing_.frames > 3) editing_ = {};
+                break;
+            }
+            if (canInteract && button()) editing_ = EditState{n.id, i, 0, false};
+            dl->AddRectFilled(box.Min, box.Max, hovered ? IM_COL32(34, 34, 40, 255) : IM_COL32(26, 26, 30, 255), 3 * z);
+            text(box.Min.x + 6 * z, n.paramS(i).c_str(), IM_COL32(200, 230, 200, 255));
+            if (hovered) ImGui::SetTooltip("%s - click to edit", d.name.c_str());
+            break;
+        }
+        case ParamKind::Ramp: {
+            // Gradient preview; stops are edited in the inspector.
+            ColorRamp ramp = rampFromJson(n.params[i]);
+            const int segs = 48;
+            auto col = [](const float* c) { return ImGui::GetColorU32(ImVec4(c[0], c[1], c[2], 1.0f)); };
+            for (int k = 0; k < segs; ++k) {
+                float c0[4], c1[4];
+                ramp.eval(float(k) / segs, c0);
+                ramp.eval(float(k + 1) / segs, c1);
+                float x0 = box.Min.x + box.GetWidth() * k / segs, x1 = box.Min.x + box.GetWidth() * (k + 1) / segs;
+                dl->AddRectFilledMultiColor(ImVec2(x0, box.Min.y), ImVec2(x1, box.Max.y), col(c0), col(c1), col(c1), col(c0));
+            }
+            dl->AddRect(box.Min, box.Max, IM_COL32(20, 20, 24, 255));
+            break;
+        }
+        case ParamKind::Curve: {
+            dl->AddRectFilled(box.Min, box.Max, IM_COL32(26, 26, 30, 255), 3 * z);
+            dl->AddLine(ImVec2(box.Min.x, box.Max.y), ImVec2(box.Max.x, box.Min.y), IM_COL32(60, 60, 68, 255));
+            const char* keys[4] = {"r", "g", "b", "master"};
+            const ImU32 cols[4] = {IM_COL32(220, 80, 80, 200), IM_COL32(80, 200, 90, 200), IM_COL32(90, 130, 230, 200),
+                                   IM_COL32(235, 235, 240, 255)};
+            const nlohmann::json& cj = n.params[i];
+            for (int c = 0; c < 4; ++c) {
+                CurvePoints pts = curveFromJson(cj.is_object() && cj.contains(keys[c]) ? cj[keys[c]] : nlohmann::json());
+                if (c < 3 && isIdentityCurve(pts)) continue;
+                ImVec2 prev;
+                for (int k = 0; k <= 32; ++k) {
+                    float x = k / 32.0f, y = evalCurve(pts, x);
+                    ImVec2 p(box.Min.x + x * box.GetWidth(), box.Max.y - y * box.GetHeight());
+                    if (k) dl->AddLine(prev, p, cols[c], 1.5f);
+                    prev = p;
+                }
+            }
+            break;
+        }
+        case ParamKind::Int: break;
+    }
+    ImGui::PopID();
+    return changed;
+}
+
 bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result& r) {
     const NodeInfo& info = n.info();
     const Layout L = layoutFor(n);
@@ -373,30 +551,9 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
     }
 
     for (int i = 0; i < int(info.params.size()); ++i) {
-        const ImRect& box = L.pathBoxes[i];
+        const ImRect& box = L.paramBoxes[i];
         if (box.GetWidth() <= 0) continue;
-        std::string path = n.paramS(i);
-        std::string label = path.empty() ? "Choose image..." : pathToU8(u8ToPath(path).filename());
-        bool hovered = false;
-        if (interactive && ownsMouse) {
-            ImGui::SetCursorScreenPos(box.Min);
-            ImGui::PushID(1000 + i);
-            if (ImGui::InvisibleButton("##path", box.GetSize())) {
-                if (auto p = openFileDialog("Choose image", kImageFilter)) {
-                    n.params[i] = *p;
-                    changed = true;
-                }
-            }
-            hovered = ImGui::IsItemHovered();
-            if (hovered && !path.empty()) ImGui::SetTooltip("%s", path.c_str());
-            ImGui::PopID();
-        }
-        dl->AddRectFilled(box.Min, box.Max, hovered ? IM_COL32(70, 74, 88, 255) : IM_COL32(54, 56, 66, 255), 3 * z);
-        if (showText) {
-            ImVec4 bclip(box.Min.x + 4 * z, box.Min.y, box.Max.x - 4 * z, box.Max.y);
-            dl->AddText(ImGui::GetFont(), fs, ImVec2(box.Min.x + 6 * z, box.GetCenter().y - fs * 0.5f), labelCol,
-                        label.c_str(), nullptr, 0.0f, &bclip);
-        }
+        changed |= drawParamRow(dl, n, i, box, interactive && ownsMouse);
     }
 
     for (int i = 0; i < int(info.inputs.size()); ++i) {

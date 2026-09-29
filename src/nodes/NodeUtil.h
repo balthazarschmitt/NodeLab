@@ -57,10 +57,33 @@ inline ChannelSampler paramSampler(const Node& node, int pin, const ChannelPtr& 
     ChannelSampler s{c.get(), w, h};
     int fp = node.info().inputs[pin].fallbackParam;
     if (fp >= 0) {
-        s.lo = node.info().params[fp].min;
-        s.hi = node.info().params[fp].max;
+        s.lo = node.info().params[fp].hardMin;
+        s.hi = node.info().params[fp].hardMax;
     }
     return s;
+}
+
+// New image of src's size; fn(x, y, srcPixel, dstPixel) fills each pixel (runs in parallel).
+template <typename Fn>
+std::shared_ptr<Image> mapImage(const Image& src, Fn&& fn) {
+    auto out = std::make_shared<Image>(src.w, src.h);
+    parallelFor(src.h, [&](int y) {
+        for (int x = 0; x < src.w; ++x) {
+            size_t i = size_t(y) * src.w + x;
+            fn(x, y, src.pixel(i), out->pixel(i));
+        }
+    });
+    return out;
+}
+
+// New channel of size w x h; fn(x, y) returns each value.
+template <typename Fn>
+std::shared_ptr<Channel> makeChannel(int w, int h, Fn&& fn) {
+    auto out = std::make_shared<Channel>(Channel::makeSized(w, h));
+    parallelFor(h, [&](int y) {
+        for (int x = 0; x < w; ++x) out->data[size_t(y) * w + x] = fn(x, y);
+    });
+    return out;
 }
 
 // Same idea for images: returns a pointer to the RGBA of the nearest source pixel.

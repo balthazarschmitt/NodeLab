@@ -1,0 +1,12 @@
+# build-dev\NodeLab.exe examples\m2_showcase.nlproj --script tests\ui\editors.txt
+settle
+click 670 141
+wait 3
+shot build/smoke/e1_curves.png
+click 790 260
+wait 3
+shot build/smoke/e2_ramp.png
+click 925 232
+wait 4
+shot build/smoke/e3_enum.png
+quit

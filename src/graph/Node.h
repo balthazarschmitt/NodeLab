@@ -18,26 +18,51 @@ struct PinDesc {
     int fallbackParam = -1;
 };
 
-enum class ParamKind { Float, Int, Bool, Enum, Path };
+enum class ParamKind { Float, Int, Bool, Enum, Path, Text, Curve, Ramp };
 
 struct ParamDesc {
     std::string name;
     ParamKind kind = ParamKind::Float;
-    float min = 0.0f, max = 1.0f;
+    float min = 0.0f, max = 1.0f;          // slider (soft) range
+    float hardMin = 0.0f, hardMax = 1.0f;  // values are clamped to this
     nlohmann::json def;
     std::vector<std::string> options;  // Enum labels
 
-    static ParamDesc Float(std::string n, float def, float mn, float mx) {
-        return {std::move(n), ParamKind::Float, mn, mx, def, {}};
+    // Clamped to [mn, mx].
+    static ParamDesc Float(std::string n, float def, float mn, float mx) { return make(std::move(n), ParamKind::Float, mn, mx, mn, mx, def); }
+    // Slider shows [mn, mx] but any value is allowed (math inputs).
+    static ParamDesc FloatFree(std::string n, float def, float mn, float mx) {
+        return make(std::move(n), ParamKind::Float, mn, mx, -1e6f, 1e6f, def);
     }
     static ParamDesc Int(std::string n, int def, int mn, int mx) {
-        return {std::move(n), ParamKind::Int, float(mn), float(mx), def, {}};
+        return make(std::move(n), ParamKind::Int, float(mn), float(mx), float(mn), float(mx), def);
     }
-    static ParamDesc Bool(std::string n, bool def) { return {std::move(n), ParamKind::Bool, 0, 1, def, {}}; }
+    static ParamDesc Bool(std::string n, bool def) { return make(std::move(n), ParamKind::Bool, 0, 1, 0, 1, def); }
     static ParamDesc Enum(std::string n, int def, std::vector<std::string> opts) {
-        return {std::move(n), ParamKind::Enum, 0, float(opts.size() - 1), def, std::move(opts)};
+        float mx = float(opts.size()) - 1;
+        ParamDesc d = make(std::move(n), ParamKind::Enum, 0, mx, 0, mx, def);
+        d.options = std::move(opts);
+        return d;
     }
-    static ParamDesc Path(std::string n) { return {std::move(n), ParamKind::Path, 0, 0, "", {}}; }
+    static ParamDesc Path(std::string n) { return make(std::move(n), ParamKind::Path, 0, 0, 0, 0, ""); }
+    static ParamDesc Text(std::string n, std::string def) { return make(std::move(n), ParamKind::Text, 0, 0, 0, 0, std::move(def)); }
+    // Tone curves: {"master":[[x,y],...], "r":[...], "g":[...], "b":[...]}.
+    static ParamDesc Curve(std::string n);
+    // Color ramp: {"interp": 0..3, "stops": [[pos, r, g, b, a], ...]}.
+    static ParamDesc Ramp(std::string n);
+
+private:
+    static ParamDesc make(std::string n, ParamKind k, float mn, float mx, float hmn, float hmx, nlohmann::json def) {
+        ParamDesc d;
+        d.name = std::move(n);
+        d.kind = k;
+        d.min = mn;
+        d.max = mx;
+        d.hardMin = hmn;
+        d.hardMax = hmx;
+        d.def = std::move(def);
+        return d;
+    }
 };
 
 struct NodeInfo {
@@ -47,6 +72,7 @@ struct NodeInfo {
     std::vector<PinDesc> inputs;
     std::vector<PinDesc> outputs;
     std::vector<ParamDesc> params;
+    bool hidden = false;  // not offered in the add-node menu (group internals)
 };
 
 struct EvalContext {
@@ -62,6 +88,12 @@ public:
     virtual const NodeInfo& info() const = 0;
     // inputs[i] is already filled with the fallback param value for unconnected pins that have one.
     virtual void evaluate(EvalContext& ctx, const std::vector<Value>& inputs, std::vector<Value>& outputs) = 0;
+
+    // Extra per-node state beyond params (node groups store their inner graph here).
+    virtual void saveExtra(nlohmann::json&) const {}
+    virtual void loadExtra(const nlohmann::json&) {}
+    // Folded into the evaluation cache key so changes to extra state trigger recomputation.
+    virtual std::string signatureExtra() const { return {}; }
 
     void initParams() {
         params.clear();

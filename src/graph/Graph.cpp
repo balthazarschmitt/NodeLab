@@ -23,7 +23,12 @@ Node* Graph::duplicateNode(int id, float dx, float dy) {
     Node* src = find(id);
     if (!src) return nullptr;
     Node* n = addNode(src->info().type, src->x + dx, src->y + dy);
-    if (n) n->params = src->params;
+    if (n) {
+        n->params = src->params;
+        nlohmann::json extra;
+        src->saveExtra(extra);
+        if (!extra.is_null()) n->loadExtra(extra);
+    }
     return n;
 }
 
@@ -114,6 +119,9 @@ nlohmann::json Graph::toJson(const fs::path* baseDir) const {
                 v = makeRelativeU8(v.get<std::string>(), *baseDir);
             jp[descs[i].name] = v;
         }
+        nlohmann::json extra;
+        n->saveExtra(extra);
+        if (!extra.is_null()) o["extra"] = extra;
         jn.push_back(o);
     }
     auto& jl = j["links"] = nlohmann::json::array();
@@ -145,6 +153,7 @@ void Graph::fromJson(const nlohmann::json& j, const fs::path* baseDir) {
                 node->params[i] = val;
             }
         }
+        if (auto ex = o.find("extra"); ex != o.end()) node->loadExtra(*ex);
         maxId = std::max(maxId, node->id);
         nodes_[node->id] = std::move(node);
     }

@@ -26,4 +26,5 @@ void registerAllNodes() {
     registerIONodes(r);
     registerColorNodes(r);
     registerMathNodes(r);
+    registerConverterNodes(r);
 }
