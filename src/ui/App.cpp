@@ -12,6 +12,7 @@
 #include <imgui_impl_opengl3.h>
 #include <imgui_internal.h>
 
+#include "core/Version.h"
 #include "io/ImageIO.h"
 #include "io/Paths.h"
 #include "io/ProjectFile.h"
@@ -462,7 +463,7 @@ void App::drawMainMenu() {
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Help")) {
-        ImGui::TextDisabled("NodeLab 0.2 - node-based image manipulation");
+        ImGui::TextDisabled("NodeLab %s - node-based image manipulation", versionString().c_str());
         ImGui::Separator();
         ImGui::TextUnformatted("Right-click canvas: add node          Drag pin to empty space: add connected node");
         ImGui::TextUnformatted("Drag empty space: pan   Wheel: zoom   Shift+drag: box select   Home / . : frame all / selected");
@@ -793,7 +794,7 @@ void App::markChanged(bool eval) {
 
 void App::updateTitle() {
     std::string name = projectPath_.empty() ? "Untitled" : pathToU8(u8ToPath(projectPath_).filename());
-    std::string title = name + (modified_ ? " *" : "") + " - NodeLab";
+    std::string title = name + (modified_ ? " *" : "") + " - NodeLab " + kNodeLabVersion;
     if (title != lastTitle_) {
         glfwSetWindowTitle(window_, title.c_str());
         lastTitle_ = title;

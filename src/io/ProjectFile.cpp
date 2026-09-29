@@ -2,6 +2,7 @@
 
 #include <fstream>
 
+#include "core/Version.h"
 #include "io/Paths.h"
 
 namespace fs = std::filesystem;
@@ -12,6 +13,7 @@ bool saveProject(const std::string& pathU8, const Graph& g, const nlohmann::json
     nlohmann::json j;
     j["app"] = "NodeLab";
     j["version"] = kProjectVersion;
+    j["appVersion"] = kNodeLabVersion;
     j["graph"] = g.toJson(&base);
     j["ui"] = ui;
 
@@ -54,7 +56,8 @@ bool loadProject(const std::string& pathU8, Graph& g, nlohmann::json& ui, std::s
             return false;
         }
         if (j.value("version", 0) > kProjectVersion) {
-            err = "project was saved by a newer NodeLab version";
+            err = "project was saved by NodeLab " + j.value("appVersion", std::string("(newer)")) +
+                  ", which uses a newer file format than " + kNodeLabVersion + " can read";
             return false;
         }
         fs::path base = fs::absolute(path).parent_path();

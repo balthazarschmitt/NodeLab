@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <string>
 
+#include "core/Version.h"
 #include "graph/Evaluator.h"
 #include "graph/NodeRegistry.h"
 #include "io/ImageCache.h"
@@ -9,6 +10,10 @@
 #include "nodes/io/IONodes.h"
 #include "nodes/utility/UtilityNodes.h"
 #include "ui/App.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 // NodeLab.exe --render project.nlproj out.png  : evaluate at full resolution without a window.
 static int renderHeadless(const std::string& project, const std::string& outPath) {
@@ -48,10 +53,32 @@ static int renderHeadless(const std::string& project, const std::string& outPath
     return 0;
 }
 
+// The Release exe is a GUI app (-mwindows) with no console; when started from a terminal for a
+// command-line mode, reattach to that terminal so printf output shows up.
+static void attachParentConsole() {
+#ifdef _WIN32
+    // Output already redirected to a pipe or file: leave it there.
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (out && out != INVALID_HANDLE_VALUE) return;
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        std::freopen("CONOUT$", "w", stdout);
+        std::freopen("CONOUT$", "w", stderr);
+    }
+#endif
+}
+
 int main(int argc, char** argv) {
+    if (argc >= 2 && (std::string(argv[1]) == "--version" || std::string(argv[1]) == "-v")) {
+        attachParentConsole();
+        std::printf("NodeLab %s\n", versionString().c_str());
+        return 0;
+    }
     registerAllNodes();
     // Note: argv is in the ANSI code page on Windows; fine for ASCII paths in headless mode.
-    if (argc >= 4 && std::string(argv[1]) == "--render") return renderHeadless(argv[2], argv[3]);
+    if (argc >= 4 && std::string(argv[1]) == "--render") {
+        attachParentConsole();
+        return renderHeadless(argv[2], argv[3]);
+    }
 
     App::RunOptions opt;
     for (int i = 1; i < argc; ++i) {

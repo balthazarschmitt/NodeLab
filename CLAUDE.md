@@ -11,22 +11,41 @@ Nothing is installed system-wide.
 
 ```
 set PATH=C:\Projects\NodeLab\.toolchain\bin;%PATH%
-cmake -S . -B build-test -G Ninja -DCMAKE_BUILD_TYPE=Release -DFETCHCONTENT_BASE_DIR=C:/Projects/NodeLab/build/_deps
-cmake --build build-test
-build-test\nodelab_tests.exe
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+build\nodelab_tests.exe
 ```
 
-- **Build directories:** `build/`, `build-dev/` and `build-test/` are all gitignored.
-  - The user often has `build\NodeLab.exe` or `build-dev\NodeLab.exe` running, which locks the exe
-    ("cannot open output file ... Permission denied"). Build into a directory the user isn't running.
+- **One build directory:** always build into `build/`. The user wants no other build folders, so don't
+  create `build-dev/`, `build-test/` or similar.
+  - The user often has `build\NodeLab.exe` running. A pre-link step (`cmake/MoveAsideExe.cmake`)
+    renames the running exe to `NodeLab.old-<timestamp>.exe`, because Windows allows renaming a
+    running exe but not overwriting it. The next build deletes old copies that are no longer running.
   - Never kill the user's NodeLab process.
 - **Dependencies:** FetchContent pulls glfw, imgui (v1.91.8-docking), nlohmann/json, stb, tinyexpr and
   doctest.
   - `CMakeLists.txt` defaults `CMAKE_TLS_CAINFO` to Git for Windows' CA bundle, because WinLibs'
     CMake has none.
-  - Pass `-DFETCHCONTENT_BASE_DIR=.../build/_deps` so new build directories reuse the downloads.
 - **Release linking:** the Release exe links statically (`-static`, `-mwindows`). It needs only
   Windows system DLLs and OpenGL 3.0.
+
+## Versioning
+
+- **App version:** `project(NodeLab VERSION x.y.z)` in `CMakeLists.txt` is the single source.
+  - It reaches the code through `core/Version.h` (`kNodeLabVersion`, `kNodeLabCommit`, `versionString()`).
+  - `cmake/GitVersion.cmake` stamps the git hash at build time, with `-dirty` for uncommitted changes.
+  - It appears in the window title, the Help menu, `NodeLab.exe --version`, and the exe's
+    Properties > Details (`cmake/NodeLab.rc.in`).
+- **Bumping (semver while 0.x):**
+  - Minor (0.3.0 → 0.4.0) when a feature set lands; patch (0.3.0 → 0.3.1) for fixes only.
+  - Bump when the user asks to commit a finished feature set, not on every commit.
+  - Update `CHANGELOG.md` under the new version, commit, then tag it: `git tag -a v0.4.0 -m "NodeLab 0.4.0"`.
+  - Add changes that aren't released yet under `## Unreleased` in `CHANGELOG.md`.
+- **Project file format:** `.nlproj` has `version` (the format, `kProjectVersion` in
+  `io/ProjectFile.h`) and `appVersion` (the app that saved it).
+  - New node types or params don't need a format bump, because unknown params fall back to defaults.
+  - Bump `kProjectVersion` only for changes older builds would misread, and make `loadProject`
+    upgrade the old layout. Never break loading of older projects.
 
 ## Testing
 

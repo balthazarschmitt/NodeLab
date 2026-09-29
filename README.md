@@ -30,6 +30,12 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TLS_CAINFO="C:/P
 
 The Release exe is statically linked, so no extra DLLs are needed to run it.
 
+Always build into the one `build/` folder. Rebuilding works while `build\NodeLab.exe` is open: the
+running copy is renamed to `NodeLab.old-*.exe` and deleted by a later build once it has closed.
+
+Version: `NodeLab.exe --version` (also in the window title, Help menu and the exe's Properties).
+See [CHANGELOG.md](CHANGELOG.md).
+
 Headless render: `NodeLab.exe --render project.nlproj out.png`
 Screenshot of the UI (debug aid): `NodeLab.exe project.nlproj --screenshot shot.png`
 Scripted UI test (feeds input straight to ImGui, ignores the real mouse; see `src/ui/UiScript.h`):

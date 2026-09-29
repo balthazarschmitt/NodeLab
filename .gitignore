@@ -1,7 +1,5 @@
-build/
+build*/
 cmake-build-*/
 .idea/
 *.nlproj.tmp
 .toolchain/
-build-dev/
-build-test/
