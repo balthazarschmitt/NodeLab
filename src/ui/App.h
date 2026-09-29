@@ -1,4 +1,5 @@
 #pragma once
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -10,6 +11,7 @@
 #include "ui/NodeEditor.h"
 
 struct GLFWwindow;
+class GroupNode;
 
 class App {
 public:
@@ -25,6 +27,17 @@ public:
 private:
     enum class Pending { None, New, Open, Quit };
 
+    // An image panel showing a node's output. viewers_[0] is the main "Result" viewer, which
+    // follows the Ctrl+click preview (or the Output node); extra viewers can pin any node.
+    struct Viewer {
+        int id = 0;
+        bool open = true;
+        NodePath pin;  // empty = follow the preview / Output node
+        GLTexture tex;
+        ViewState view;
+        std::string error;
+    };
+
     // project lifecycle
     void newProject();
     bool openProject(const std::string& path);
@@ -36,11 +49,24 @@ private:
 
     // frame
     void drawFrame();
-    void drawMenuBar();
-    void drawPanes();
+    void drawMainMenu();
+    void drawStatusBar();
+    void buildDefaultLayout(unsigned dockId);
+    void drawOriginalWindow();
+    void drawEditorWindow();
+    void drawInspectorWindow();
+    void drawViewerWindow(Viewer& v, bool isMain);
     void drawUnsavedModal();
     void handleShortcuts();
     void handleDrops();
+
+    // groups
+    Graph& currentGraph();
+    GroupNode* currentGroupOwner();  // group whose inside is being edited, or null at the root
+    void enterGroup(int nodeId);
+    void exitGroup();
+    void setGroupPath(std::vector<int> path);
+    std::string pathLabel(const NodePath& p);
 
     void markChanged(bool eval);
     void resetHistory();
@@ -50,8 +76,8 @@ private:
     void redo();
     void restoreSnapshot(const nlohmann::json& j);
     void updateTitle();
-    int leftImageNode() const;
-    int previewTarget() const;
+    NodePath resultTarget();
+    bool pathValid(const NodePath& p);
     void updateTextures();
     bool saveFramebuffer(const std::string& path);
     nlohmann::json uiState() const;
@@ -60,25 +86,35 @@ private:
     GLFWwindow* window_ = nullptr;
     ImageCache cache_;
     std::unique_ptr<AsyncEvaluator> eval_;
-    Graph graph_;
+    Graph graph_;  // root graph
     NodeEditor editor_;
 
-    GLTexture leftTex_, rightTex_;
-    ImagePtr leftShown_;
-    ViewState view_;
+    std::vector<int> groupPath_;  // group ids from the root to the graph being edited
+    std::map<std::vector<int>, nlohmann::json> groupViews_;  // editor pan/zoom per level
 
-    int selected_ = 0;
-    int preview_ = 0;
+    GLTexture leftTex_;
+    ImagePtr leftShown_;
+    std::string leftLabel_;
+    ViewState view_;  // shared by Original and Result so they stay in sync
+    std::vector<std::unique_ptr<Viewer>> viewers_;
+    int nextViewerId_ = 1;
+    std::vector<NodePath> submittedTargets_;
+
+    int selected_ = 0;       // selected node in the current graph
+    NodePath previewPath_;   // Ctrl+click preview; empty = Output node
     std::string projectPath_;
     bool modified_ = false;
     bool evalDirty_ = true;
     std::string lastTitle_;
 
     std::string status_;
-    std::string evalError_;
     double evalMs_ = 0;
 
-    float leftFrac_ = 0.28f, rightFrac_ = 0.28f, editorFrac_ = 0.66f;
+    // panels / layout
+    bool showOriginal_ = true, showEditor_ = true, showInspector_ = true, showResult_ = true;
+    bool resetLayout_ = false;
+    bool automated_ = false;
+    std::string iniPath_;
 
     std::vector<nlohmann::json> undo_, redo_;
     nlohmann::json committed_;  // graph as of the last snapshot

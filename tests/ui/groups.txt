@@ -1,0 +1,40 @@
+# build-dev\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\groups.txt
+# Docked default layout, graph view fixed at zoom 1 / pan 0: canvas origin (439, 72).
+settle
+# Splice Invert into the Input->Output wire.
+drag 739 345 789 115
+settle
+# Group it (Ctrl+G) and look inside (Tab).
+ctrl on
+key g
+ctrl off
+settle
+shot build/smoke/g1_grouped.png
+key tab
+settle
+wait 5
+shot build/smoke/g2_inside.png
+key tab
+settle
+wait 5
+# Select the group node, frame it (Ctrl+J), check inspector + frame.
+click 789 115
+ctrl on
+key j
+ctrl off
+wait 3
+shot build/smoke/g3_frame.png
+# Undo the frame, then ungroup (Ctrl+Alt+G).
+ctrl on
+key z
+ctrl off
+wait 3
+click 789 115
+ctrl on
+alt on
+key g
+alt off
+ctrl off
+settle
+shot build/smoke/g4_ungrouped.png
+quit

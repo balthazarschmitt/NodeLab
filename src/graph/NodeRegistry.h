@@ -41,3 +41,4 @@ void registerIONodes(NodeRegistry& r);
 void registerColorNodes(NodeRegistry& r);
 void registerMathNodes(NodeRegistry& r);
 void registerConverterNodes(NodeRegistry& r);
+void registerGroupNodes(NodeRegistry& r);

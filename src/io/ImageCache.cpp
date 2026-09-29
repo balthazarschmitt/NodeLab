@@ -8,18 +8,28 @@ ImagePtr ImageCache::get(const std::string& pathU8, bool proxy, std::string* err
         return nullptr;
     }
     std::lock_guard lock(mutex_);
-    auto it = entries_.find(pathU8);
-    if (it == entries_.end()) {
-        Entry e;
-        e.full = loadImage(pathU8, e.error);
-        if (e.full) e.proxy = downscaleToFit(e.full, kProxyEdge);
-        it = entries_.emplace(pathU8, std::move(e)).first;
-    }
-    if (!it->second.full) {
-        if (err) *err = it->second.error;
+    Entry& e = entries_[pathU8];
+    if (!e.error.empty()) {
+        if (err) *err = e.error;
         return nullptr;
     }
-    return proxy ? it->second.proxy : it->second.full;
+    if (proxy && e.proxy) return e.proxy;
+    if (!proxy)
+        if (ImagePtr full = e.full.lock()) return full;
+
+    // Decode. Only the preview proxy is kept; the full-resolution image (16 bytes per pixel) lives
+    // only as long as someone (an export) holds it, then is decoded again when next needed.
+    std::string loadErr;
+    std::shared_ptr<const Image> full = loadImage(pathU8, loadErr);
+    if (!full) {
+        e.error = loadErr.empty() ? "could not load image" : loadErr;
+        if (err) *err = e.error;
+        return nullptr;
+    }
+    if (!e.proxy) e.proxy = downscaleToFit(full, kProxyEdge);
+    if (proxy) return e.proxy;
+    e.full = full;
+    return full;
 }
 
 void ImageCache::clear() {

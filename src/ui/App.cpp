@@ -3,16 +3,19 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include <imgui_internal.h>
 
 #include "io/ImageIO.h"
 #include "io/Paths.h"
 #include "io/ProjectFile.h"
+#include "nodes/group/GroupNodes.h"
 #include "nodes/io/IONodes.h"
 #include "ui/FileDialog.h"
 #include "ui/Inspector.h"
@@ -23,6 +26,7 @@ namespace fs = std::filesystem;
 static const char* kProjectFilter = "NodeLab project (*.nlproj)|*.nlproj|All files|*.*";
 static const char* kImageFilter = "Images|*.png;*.jpg;*.jpeg;*.bmp;*.tga|All files|*.*";
 static const char* kExportFilter = "PNG image|*.png|JPEG image|*.jpg";
+static const char* kDockName = "NodeLabDockSpace";
 
 void dropCallback(GLFWwindow* w, int count, const char** paths) {
     auto* app = static_cast<App*>(glfwGetWindowUserPointer(w));
@@ -33,6 +37,19 @@ void closeCallback(GLFWwindow* w) {
     auto* app = static_cast<App*>(glfwGetWindowUserPointer(w));
     glfwSetWindowShouldClose(w, GLFW_FALSE);
     app->requestAction(App::Pending::Quit);
+}
+
+// Per-user settings folder (%APPDATA%\NodeLab), created on demand.
+static fs::path settingsDir() {
+#ifdef _WIN32
+    if (const wchar_t* appdata = _wgetenv(L"APPDATA")) {
+        fs::path p = fs::path(appdata) / "NodeLab";
+        std::error_code ec;
+        fs::create_directories(p, ec);
+        return p;
+    }
+#endif
+    return fs::current_path();
 }
 
 App::App() = default;
@@ -49,7 +66,7 @@ int App::run(const RunOptions& opt) {
             return 1;
         }
     }
-    const bool automated = !opt.screenshot.empty() || script.active();
+    automated_ = !opt.screenshot.empty() || script.active();
     if (!glfwInit()) {
         std::fprintf(stderr, "failed to init GLFW\n");
         return 1;
@@ -57,8 +74,8 @@ int App::run(const RunOptions& opt) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
     // Automated runs use a fixed size and never take focus from whatever the user is doing.
-    glfwWindowHint(GLFW_MAXIMIZED, automated ? GLFW_FALSE : GLFW_TRUE);
-    if (automated) {
+    glfwWindowHint(GLFW_MAXIMIZED, automated_ ? GLFW_FALSE : GLFW_TRUE);
+    if (automated_) {
         glfwWindowHint(GLFW_FOCUSED, GLFW_FALSE);
         glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
     }
@@ -77,8 +94,22 @@ int App::run(const RunOptions& opt) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = nullptr;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    // Panels can be dragged out of the main window into their own OS windows (not in test runs,
+    // which need a deterministic single-window frame).
+    if (!automated_) io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    io.ConfigWindowsMoveFromTitleBarOnly = true;
+
+    // Layout persists per user; automated runs always start from the default layout.
+    iniPath_ = pathToU8(settingsDir() / "layout.ini");
+    bool haveLayout = false;
+    if (automated_) {
+        io.IniFilename = nullptr;
+    } else {
+        io.IniFilename = iniPath_.c_str();
+        haveLayout = fs::exists(u8ToPath(iniPath_));
+    }
+    resetLayout_ = !haveLayout;
 
     float xscale = 1.0f, yscale = 1.0f;
     glfwGetWindowContentScale(window_, &xscale, &yscale);
@@ -88,7 +119,9 @@ int App::run(const RunOptions& opt) {
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowRounding = 0.0f;
     style.FrameRounding = 3.0f;
+    style.TabRounding = 3.0f;
     style.ScaleAllSizes(dpi);
+    style.Colors[ImGuiCol_WindowBg].w = 1.0f;  // opaque, also for floating viewports
 
     const char* uiFont = "C:/Windows/Fonts/segoeui.ttf";
     if (fs::exists(uiFont)) io.Fonts->AddFontFromFileTTF(uiFont, 17.0f * dpi);
@@ -99,12 +132,15 @@ int App::run(const RunOptions& opt) {
     ImGui_ImplOpenGL3_Init("#version 130");
 
     eval_ = std::make_unique<AsyncEvaluator>(cache_);
+    auto main = std::make_unique<Viewer>();
+    main->id = 0;
+    viewers_.push_back(std::move(main));
 
     if (opt.project.empty() || !openProject(opt.project)) newProject();
 
     int frame = 0, settled = 0;
     while (!quit_) {
-        glfwWaitEventsTimeout(eval_->busy() || evalDirty_ || automated ? 0.01 : 0.05);
+        glfwWaitEventsTimeout(eval_->busy() || evalDirty_ || automated_ ? 0.01 : 0.05);
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -131,12 +167,20 @@ int App::run(const RunOptions& opt) {
             }
         }
         if (!shotPath.empty() && !saveFramebuffer(shotPath)) std::fprintf(stderr, "screenshot failed\n");
+
+        // Floating panels live in their own OS windows.
+        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+            GLFWwindow* backup = glfwGetCurrentContext();
+            ImGui::UpdatePlatformWindows();
+            ImGui::RenderPlatformWindowsDefault();
+            glfwMakeContextCurrent(backup);
+        }
         glfwSwapBuffers(window_);
     }
 
     eval_.reset();
     leftTex_.reset();
-    rightTex_.reset();
+    viewers_.clear();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
@@ -149,28 +193,31 @@ void App::drawFrame() {
     handleDrops();
     handleShortcuts();
 
+    drawMainMenu();
+    drawStatusBar();
+
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(vp->WorkPos);
-    ImGui::SetNextWindowSize(vp->WorkSize);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 6));
-    ImGui::Begin("##main", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoBringToFrontOnFocus);
-    ImGui::PopStyleVar();
-    drawMenuBar();
-    drawPanes();
+    const ImGuiID dockId = ImHashStr(kDockName);
+    if (resetLayout_) {
+        buildDefaultLayout(dockId);
+        resetLayout_ = false;
+    }
+    ImGui::DockSpaceOverViewport(dockId, vp);
+
+    if (showOriginal_) drawOriginalWindow();
+    if (showEditor_) drawEditorWindow();
+    if (showInspector_) drawInspectorWindow();
+    if (showResult_) drawViewerWindow(*viewers_[0], true);
+    for (size_t i = 1; i < viewers_.size(); ++i) drawViewerWindow(*viewers_[i], false);
+    std::erase_if(viewers_, [](const std::unique_ptr<Viewer>& v) { return v->id != 0 && !v->open; });
+
     drawUnsavedModal();
-    ImGui::End();
 
     // Kick evaluation after the UI had a chance to change the graph this frame.
     if (evalDirty_) {
-        int target = previewTarget();
-        if (target) {
-            eval_->submit(graph_.toJson(), target);
-        } else {
-            rightTex_.reset();
-            evalError_ = "Add an Output node (right-click the canvas).";
-        }
+        submittedTargets_.clear();
+        for (auto& v : viewers_) submittedTargets_.push_back(v->id == 0 || v->pin.empty() ? resultTarget() : v->pin);
+        eval_->submit(graph_.toJson(), submittedTargets_);
         evalDirty_ = false;
     }
     updateTextures();
@@ -185,166 +232,158 @@ void App::drawFrame() {
     }
 }
 
-// ---------------------------------------------------------------- undo / redo (whole-graph snapshots)
+// ---------------------------------------------------------------- layout & panels
 
-void App::resetHistory() {
-    undo_.clear();
-    redo_.clear();
-    committed_ = graph_.toJson();
-    historyDirty_ = false;
+void App::buildDefaultLayout(unsigned dockIdU) {
+    const ImGuiID dockId = dockIdU;
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::DockBuilderRemoveNode(dockId);
+    ImGui::DockBuilderAddNode(dockId, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(dockId, vp->WorkSize);
+    ImGuiID center = dockId;
+    ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.27f, nullptr, &center);
+    ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.37f, nullptr, &center);
+    ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.34f, nullptr, &center);
+    ImGui::DockBuilderDockWindow("###Original", left);
+    ImGui::DockBuilderDockWindow("###Result", right);
+    ImGui::DockBuilderDockWindow("###NodeEditor", center);
+    ImGui::DockBuilderDockWindow("###Inspector", bottom);
+    for (size_t i = 1; i < viewers_.size(); ++i)
+        ImGui::DockBuilderDockWindow(("###Viewer" + std::to_string(viewers_[i]->id)).c_str(), right);
+    ImGui::DockBuilderFinish(dockId);
+    showOriginal_ = showEditor_ = showInspector_ = showResult_ = true;
 }
 
-bool App::commitHistory() {
-    nlohmann::json cur = graph_.toJson();
-    if (cur == committed_) return false;
-    undo_.push_back(std::move(committed_));
-    if (undo_.size() > 200) undo_.erase(undo_.begin());
-    committed_ = std::move(cur);
-    redo_.clear();
-    return true;
-}
+static constexpr ImGuiWindowFlags kCanvasFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 
-bool App::canUndo() const { return !undo_.empty() || historyDirty_; }
-
-void App::restoreSnapshot(const nlohmann::json& j) {
-    try {
-        graph_.fromJson(j);
-    } catch (const std::exception& e) {
-        status_ = std::string("Undo failed: ") + e.what();
-        return;
-    }
-    editor_.onGraphReplaced(false);
-    if (!graph_.find(preview_)) preview_ = 0;
-    selected_ = 0;
-    modified_ = true;
-    evalDirty_ = true;
-    historyDirty_ = false;
-}
-
-void App::undo() {
-    commitHistory();  // include any not-yet-snapshotted change so it is what gets undone
-    if (undo_.empty()) return;
-    redo_.push_back(std::move(committed_));
-    committed_ = std::move(undo_.back());
-    undo_.pop_back();
-    restoreSnapshot(committed_);
-    status_ = "Undo";
-}
-
-void App::redo() {
-    if (redo_.empty()) return;
-    undo_.push_back(std::move(committed_));
-    committed_ = std::move(redo_.back());
-    redo_.pop_back();
-    restoreSnapshot(committed_);
-    status_ = "Redo";
-}
-
-// ---------------------------------------------------------------- layout
-
-static bool splitter(const char* id, bool vertical, float thickness, float length, float& frac, float total,
-                     float minFrac, float maxFrac, bool invert = false) {
-    ImVec2 size = vertical ? ImVec2(thickness, length) : ImVec2(length, thickness);
-    ImGui::InvisibleButton(id, size);
-    bool active = ImGui::IsItemActive();
-    if (ImGui::IsItemHovered() || active)
-        ImGui::SetMouseCursor(vertical ? ImGuiMouseCursor_ResizeEW : ImGuiMouseCursor_ResizeNS);
-    ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
-    ImGui::GetWindowDrawList()->AddRectFilled(a, b, active ? IM_COL32(90, 90, 110, 255) : IM_COL32(40, 40, 46, 255));
-    if (active) {
-        float d = vertical ? ImGui::GetIO().MouseDelta.x : ImGui::GetIO().MouseDelta.y;
-        frac = std::clamp(frac + (invert ? -d : d) / total, minFrac, maxFrac);
-        return true;
-    }
-    return false;
-}
-
-void App::drawPanes() {
-    const float split = 6.0f;
-    ImVec2 avail = ImGui::GetContentRegionAvail();
-    const float statusH = ImGui::GetFrameHeight();
-    const float contentH = std::max(50.0f, avail.y - statusH - ImGui::GetStyle().ItemSpacing.y);
-    const float leftW = avail.x * leftFrac_;
-    const float rightW = avail.x * rightFrac_;
-    const float midW = std::max(50.0f, avail.x - leftW - rightW - 2 * split);
-
-    // Panes and splitters butt against each other; SameLine(0, 0) and the Y nudges remove item spacing
-    // between them without changing spacing inside the panes.
-    const float gapY = ImGui::GetStyle().ItemSpacing.y;
-
-    // Left: original
-    ImGui::BeginChild("left", ImVec2(leftW, contentH), ImGuiChildFlags_Borders,
-                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    {
-        int in = leftImageNode();
-        std::string label = "Original";
-        if (Node* n = graph_.find(in); n && !n->paramS(0).empty())
-            label += "  -  " + pathToU8(u8ToPath(n->paramS(0)).filename());
-        ImGui::TextUnformatted(label.c_str());
+void App::drawOriginalWindow() {
+    std::string title = "Original" + (leftLabel_.empty() ? "" : "  -  " + leftLabel_) + "###Original";
+    if (ImGui::Begin(title.c_str(), &showOriginal_, kCanvasFlags))
         drawImageView("##leftview", leftTex_, view_, "Drop an image here or use File > Import Image");
-    }
-    ImGui::EndChild();
-    ImGui::SameLine(0, 0);
-    splitter("##split_l", true, split, contentH, leftFrac_, avail.x, 0.1f, 0.45f);
-    ImGui::SameLine(0, 0);
+    ImGui::End();
+}
 
-    // Middle: node editor + inspector
-    ImGui::BeginChild("middle", ImVec2(midW, contentH), ImGuiChildFlags_None,
-                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    {
-        const float editorH = std::max(80.0f, (contentH - split) * editorFrac_);
-        ImGui::BeginChild("editor", ImVec2(0, editorH), ImGuiChildFlags_Borders,
-                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-        NodeEditor::Result r = editor_.draw(graph_, selected_, preview_);
-        ImGui::EndChild();
-        if (r.evalChanged || r.previewChanged) evalDirty_ = true;
+void App::drawEditorWindow() {
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
+    const bool visible = ImGui::Begin("Node Editor###NodeEditor", &showEditor_, kCanvasFlags);
+    ImGui::PopStyleVar();
+    if (visible) {
+        // Breadcrumb: Root > Group > ...; click a level to go back up.
+        if (!groupPath_.empty()) {
+            if (ImGui::SmallButton("Root")) setGroupPath({});
+            Graph* g = &graph_;
+            for (size_t i = 0; i < groupPath_.size() && g; ++i) {
+                auto* grp = dynamic_cast<GroupNode*>(g->find(groupPath_[i]));
+                if (!grp) break;
+                ImGui::SameLine();
+                ImGui::TextDisabled(">");
+                ImGui::SameLine();
+                ImGui::PushID(int(i));
+                if (ImGui::SmallButton(grp->name.c_str()) && i + 1 < groupPath_.size())
+                    setGroupPath(std::vector<int>(groupPath_.begin(), groupPath_.begin() + i + 1));
+                ImGui::PopID();
+                g = &grp->inner();
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("  (Tab to exit group)");
+        }
+
+        Graph& g = currentGraph();
+        // The editor works on ids within the current graph; map the preview path in and out.
+        int preview = 0;
+        if (previewPath_.size() == groupPath_.size() + 1 &&
+            std::equal(groupPath_.begin(), groupPath_.end(), previewPath_.begin()))
+            preview = previewPath_.back();
+        const int previewBefore = preview;
+        NodeEditor::Result r = editor_.draw(g, selected_, preview);
+        if (preview != previewBefore || r.previewChanged) {
+            previewPath_.clear();
+            if (preview) {
+                previewPath_ = groupPath_;
+                previewPath_.push_back(preview);
+            }
+            evalDirty_ = true;
+        }
+        if (r.evalChanged) evalDirty_ = true;
         if (r.docChanged) {
             modified_ = true;
             historyDirty_ = true;
         }
-
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() - gapY);
-        splitter("##split_m", false, split, midW, editorFrac_, contentH, 0.25f, 0.9f);
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() - gapY);
-
-        ImGui::BeginChild("inspector", ImVec2(0, 0), ImGuiChildFlags_Borders);
-        if (drawInspector(graph_, selected_)) markChanged(true);
-        ImGui::EndChild();
+        if (r.enterGroup) enterGroup(r.enterGroup);
+        else if (r.exitGroup) exitGroup();
     }
-    ImGui::EndChild();
-    ImGui::SameLine(0, 0);
-    splitter("##split_r", true, split, contentH, rightFrac_, avail.x, 0.1f, 0.45f, true);
-    ImGui::SameLine(0, 0);
+    ImGui::End();
+}
 
-    // Right: result
-    ImGui::BeginChild("right", ImVec2(0, contentH), ImGuiChildFlags_Borders,
-                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    {
-        std::string label = "Result";
-        if (Node* n = graph_.find(preview_)) label = "Preview: " + n->info().displayName + "  (Ctrl+click to clear)";
-        ImGui::TextUnformatted(label.c_str());
-        const char* emptyMsg = !evalError_.empty() ? evalError_.c_str()
-                             : graph_.find(preview_) ? "This node has no output yet - connect its inputs"
-                                                     : "No output yet - connect something to the Output node";
-        drawImageView("##rightview", rightTex_, view_, emptyMsg);
+void App::drawInspectorWindow() {
+    if (ImGui::Begin("Inspector###Inspector", &showInspector_)) {
+        Graph& g = currentGraph();
+        Graph* parent = groupPath_.empty()
+                            ? nullptr
+                            : resolveGroupPath(graph_, std::vector<int>(groupPath_.begin(), groupPath_.end() - 1));
+        if (drawInspector(g, selected_, currentGroupOwner(), parent)) markChanged(true);
     }
-    ImGui::EndChild();
+    ImGui::End();
+}
 
-    // Status bar
-    std::string st;
-    if (rightTex_.valid())
-        st = std::to_string(rightTex_.width()) + " x " + std::to_string(rightTex_.height()) + " preview  |  " +
-             std::to_string(int(evalMs_)) + " ms";
-    if (eval_->busy()) st += "  |  evaluating...";
-    if (!evalError_.empty()) st += "  |  " + evalError_;
-    if (!status_.empty()) st += "  |  " + status_;
-    ImGui::TextDisabled("%s", st.c_str());
+void App::drawViewerWindow(Viewer& v, bool isMain) {
+    std::string title;
+    if (isMain) title = "Result###Result";
+    else title = "Viewer " + std::to_string(v.id) + "###Viewer" + std::to_string(v.id);
+    bool* open = isMain ? &showResult_ : &v.open;
+    if (ImGui::Begin(title.c_str(), open, kCanvasFlags)) {
+        // Toolbar: what is shown, and pin controls for extra viewers.
+        NodePath shown = isMain || v.pin.empty() ? resultTarget() : v.pin;
+        std::string label = shown.empty() ? "(nothing)" : pathLabel(shown);
+        if (isMain && !previewPath_.empty()) label = "Preview: " + label + "  (Ctrl+click it again to clear)";
+        if (!isMain) {
+            if (ImGui::SmallButton("Pin Selected") && selected_) {
+                v.pin = groupPath_;
+                v.pin.push_back(selected_);
+                evalDirty_ = true;
+            }
+            ImGui::SameLine();
+            ImGui::BeginDisabled(v.pin.empty());
+            if (ImGui::SmallButton("Unpin")) {
+                v.pin.clear();
+                evalDirty_ = true;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (!v.pin.empty()) label = "Pinned: " + label;
+        }
+        ImGui::TextDisabled("%s", label.c_str());
+        const char* emptyMsg = !v.error.empty() ? v.error.c_str()
+                               : shown.empty() ? "Add an Output node (right-click the canvas)"
+                                               : "No output yet - connect this node's inputs";
+        drawImageView(isMain ? "##result" : "##viewer", v.tex, isMain ? view_ : v.view, emptyMsg);
+    }
+    ImGui::End();
+}
+
+void App::drawStatusBar() {
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar;
+    if (ImGui::BeginViewportSideBar("##status", ImGui::GetMainViewport(), ImGuiDir_Down, ImGui::GetFrameHeight(), flags)) {
+        if (ImGui::BeginMenuBar()) {
+            const Viewer& main = *viewers_[0];
+            std::string st;
+            if (main.tex.valid())
+                st = std::to_string(main.tex.width()) + " x " + std::to_string(main.tex.height()) + " preview  |  " +
+                     std::to_string(int(evalMs_)) + " ms";
+            if (eval_->busy()) st += "  |  evaluating...";
+            if (!main.error.empty()) st += "  |  " + main.error;
+            if (!status_.empty()) st += "  |  " + status_;
+            ImGui::TextDisabled("%s", st.c_str());
+            ImGui::EndMenuBar();
+        }
+    }
+    ImGui::End();
 }
 
 // ---------------------------------------------------------------- menus & shortcuts
 
-void App::drawMenuBar() {
-    if (!ImGui::BeginMenuBar()) return;
+void App::drawMainMenu() {
+    if (!ImGui::BeginMainMenuBar()) return;
     if (ImGui::BeginMenu("File")) {
         if (ImGui::MenuItem("New", "Ctrl+N")) requestAction(Pending::New);
         if (ImGui::MenuItem("Open Project...", "Ctrl+O")) requestAction(Pending::Open);
@@ -359,36 +398,65 @@ void App::drawMenuBar() {
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Edit")) {
+        Graph& g = currentGraph();
         if (ImGui::MenuItem("Undo", "Ctrl+Z", false, canUndo())) undo();
         if (ImGui::MenuItem("Redo", "Ctrl+Y", false, !redo_.empty())) redo();
         ImGui::Separator();
-        if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, editor_.hasSelection()) && editor_.duplicateSelection(graph_))
+        if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, editor_.hasSelection()) && editor_.duplicateSelection(g))
             markChanged(true);
-        if (ImGui::MenuItem("Delete", "Del", false, editor_.hasSelection()) && editor_.deleteSelection(graph_, preview_))
+        int preview = 0;
+        if (ImGui::MenuItem("Delete", "Del", false, editor_.hasSelection()) && editor_.deleteSelection(g, preview))
             markChanged(true);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Group Selected", "Ctrl+G", false, editor_.hasSelection()) && editor_.groupSelection(g))
+            markChanged(true);
+        if (ImGui::MenuItem("Ungroup", "Ctrl+Alt+G", false, editor_.selectedGroup(g) != 0) && editor_.ungroupSelection(g))
+            markChanged(true);
+        if (ImGui::MenuItem("Edit Group", "Tab", false, editor_.selectedGroup(g) != 0)) enterGroup(editor_.selectedGroup(g));
+        if (ImGui::MenuItem("Exit Group", "Tab", false, !groupPath_.empty())) exitGroup();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Frame Selected", "Ctrl+J") && editor_.frameSelection(g)) markChanged(false);
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("View")) {
+        ImGui::MenuItem("Original", nullptr, &showOriginal_);
+        ImGui::MenuItem("Result", nullptr, &showResult_);
+        ImGui::MenuItem("Node Editor", nullptr, &showEditor_);
+        ImGui::MenuItem("Inspector", nullptr, &showInspector_);
+        if (ImGui::MenuItem("New Viewer")) {
+            auto v = std::make_unique<Viewer>();
+            v->id = nextViewerId_++;
+            if (selected_) {
+                v->pin = groupPath_;
+                v->pin.push_back(selected_);
+            }
+            viewers_.push_back(std::move(v));
+            evalDirty_ = true;
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Reset Layout")) resetLayout_ = true;
+        ImGui::Separator();
         if (ImGui::MenuItem("Frame All Nodes", "F")) editor_.frameAll();
-        if (ImGui::MenuItem("Reset Zoom", "double-click image")) view_.reset();
-        if (ImGui::MenuItem("Clear Node Preview", nullptr, false, preview_ != 0)) {
-            preview_ = 0;
+        if (ImGui::MenuItem("Reset Image Zoom", "double-click image")) view_.reset();
+        if (ImGui::MenuItem("Clear Node Preview", nullptr, false, !previewPath_.empty())) {
+            previewPath_.clear();
             evalDirty_ = true;
         }
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Help")) {
-        ImGui::TextDisabled("NodeLab 0.1 - node-based image manipulation");
+        ImGui::TextDisabled("NodeLab 0.2 - node-based image manipulation");
         ImGui::Separator();
-        ImGui::TextUnformatted("Right-click canvas: add node");
-        ImGui::TextUnformatted("Drag from a pin: connect   Drag an input wire off: disconnect");
-        ImGui::TextUnformatted("Delete: remove selected   Ctrl+click node: preview it");
-        ImGui::TextUnformatted("Images: wheel zoom, drag pan, double-click reset");
+        ImGui::TextUnformatted("Right-click canvas: add node          Drag pin to empty space: add connected node");
+        ImGui::TextUnformatted("Drag empty space: pan   Wheel: zoom   Shift+drag: box select   F: frame all");
+        ImGui::TextUnformatted("Ctrl+click node: preview   Ctrl+D: duplicate   Del: delete");
+        ImGui::TextUnformatted("Ctrl+G: group   Ctrl+Alt+G: ungroup   Tab: enter / exit group   Ctrl+J: frame");
+        ImGui::TextUnformatted("Panels: drag a tab to dock it anywhere or pull it out into its own window");
         ImGui::Separator();
         ImGui::TextUnformatted("Wires: amber = Image, gray = Channel, blue = Number");
         ImGui::EndMenu();
     }
-    ImGui::EndMenuBar();
+    ImGui::EndMainMenuBar();
 }
 
 void App::handleShortcuts() {
@@ -420,6 +488,114 @@ void App::handleDrops() {
             importImage(p);
         }
     }
+}
+
+// ---------------------------------------------------------------- groups
+
+Graph& App::currentGraph() {
+    if (Graph* g = resolveGroupPath(graph_, groupPath_)) return *g;
+    groupPath_.clear();
+    return graph_;
+}
+
+GroupNode* App::currentGroupOwner() {
+    if (groupPath_.empty()) return nullptr;
+    Graph* parent = resolveGroupPath(graph_, std::vector<int>(groupPath_.begin(), groupPath_.end() - 1));
+    return parent ? dynamic_cast<GroupNode*>(parent->find(groupPath_.back())) : nullptr;
+}
+
+void App::setGroupPath(std::vector<int> path) {
+    groupViews_[groupPath_] = editor_.viewState();
+    const int leaving = groupPath_.size() > path.size() ? groupPath_[path.size()] : 0;
+    groupPath_ = std::move(path);
+    auto it = groupViews_.find(groupPath_);
+    editor_.onGraphReplaced(it == groupViews_.end());
+    if (it != groupViews_.end()) editor_.setViewState(it->second);
+    if (leaving) editor_.select(leaving);  // going up: highlight the group we came out of
+    selected_ = 0;
+}
+
+void App::enterGroup(int nodeId) {
+    if (!dynamic_cast<GroupNode*>(currentGraph().find(nodeId))) return;
+    auto p = groupPath_;
+    p.push_back(nodeId);
+    setGroupPath(p);
+}
+
+void App::exitGroup() {
+    if (groupPath_.empty()) return;
+    setGroupPath(std::vector<int>(groupPath_.begin(), groupPath_.end() - 1));
+}
+
+std::string App::pathLabel(const NodePath& p) {
+    std::string label;
+    Graph* g = &graph_;
+    for (size_t i = 0; i < p.size() && g; ++i) {
+        Node* n = g->find(p[i]);
+        if (!n) return "(missing)";
+        if (!label.empty()) label += " > ";
+        label += n->info().displayName;
+        auto* grp = dynamic_cast<GroupNode*>(n);
+        g = grp ? &grp->inner() : nullptr;
+    }
+    return label;
+}
+
+// ---------------------------------------------------------------- undo / redo (whole-graph snapshots)
+
+void App::resetHistory() {
+    undo_.clear();
+    redo_.clear();
+    committed_ = graph_.toJson();
+    historyDirty_ = false;
+}
+
+bool App::commitHistory() {
+    nlohmann::json cur = graph_.toJson();
+    if (cur == committed_) return false;
+    undo_.push_back(std::move(committed_));
+    if (undo_.size() > 200) undo_.erase(undo_.begin());
+    committed_ = std::move(cur);
+    redo_.clear();
+    return true;
+}
+
+bool App::canUndo() const { return !undo_.empty() || historyDirty_; }
+
+void App::restoreSnapshot(const nlohmann::json& j) {
+    try {
+        graph_.fromJson(j);
+    } catch (const std::exception& e) {
+        status_ = std::string("Undo failed: ") + e.what();
+        return;
+    }
+    // Stay inside the current group if it still exists, otherwise back out to where it does.
+    while (!groupPath_.empty() && !resolveGroupPath(graph_, groupPath_)) groupPath_.pop_back();
+    editor_.onGraphReplaced(false);
+    if (!pathValid(previewPath_)) previewPath_.clear();
+    selected_ = 0;
+    modified_ = true;
+    evalDirty_ = true;
+    historyDirty_ = false;
+}
+
+void App::undo() {
+    commitHistory();  // include any not-yet-snapshotted change so it is what gets undone
+    if (undo_.empty()) return;
+    redo_.push_back(std::move(committed_));
+    committed_ = std::move(undo_.back());
+    undo_.pop_back();
+    restoreSnapshot(committed_);
+    status_ = "Undo";
+}
+
+void App::redo() {
+    if (redo_.empty()) return;
+    undo_.push_back(std::move(committed_));
+    committed_ = std::move(redo_.back());
+    redo_.pop_back();
+    restoreSnapshot(committed_);
+    status_ = "Redo";
 }
 
 // ---------------------------------------------------------------- unsaved-changes flow
@@ -479,15 +655,17 @@ void App::newProject() {
     Node* in = graph_.addNode(ImageInputNode::staticInfo().type, 40, 80);
     Node* out = graph_.addNode(OutputNode::staticInfo().type, 460, 80);
     graph_.connect(in->id, 0, out->id, 0);
+    groupPath_.clear();
+    groupViews_.clear();
     editor_.onGraphReplaced(true);
     editor_.select(in->id);
     resetHistory();
     projectPath_.clear();
-    preview_ = selected_ = 0;
+    previewPath_.clear();
+    selected_ = 0;
     view_.reset();
     modified_ = false;
     evalDirty_ = true;
-    evalError_.clear();
     status_ = "New project";
 }
 
@@ -500,6 +678,8 @@ bool App::openProject(const std::string& path) {
         return false;
     }
     graph_ = std::move(g);
+    groupPath_.clear();
+    groupViews_.clear();
     editor_.onGraphReplaced(true);
     projectPath_ = path;
     selected_ = 0;
@@ -507,7 +687,6 @@ bool App::openProject(const std::string& path) {
     resetHistory();
     modified_ = false;
     evalDirty_ = true;
-    evalError_.clear();
     status_ = "Opened " + pathToU8(u8ToPath(path).filename());
     return true;
 }
@@ -537,14 +716,15 @@ void App::importImage(const std::string& path) {
         return;
     }
     // Reuse an empty Image Input if there is one, otherwise add a new node.
+    Graph& g = currentGraph();
     Node* target = nullptr;
-    for (const auto& [id, n] : graph_.nodes())
+    for (const auto& [id, n] : g.nodes())
         if (n->info().type == ImageInputNode::staticInfo().type && n->paramS(0).empty()) {
             target = n.get();
             break;
         }
     if (!target) {
-        target = graph_.addNode(ImageInputNode::staticInfo().type);
+        target = g.addNode(ImageInputNode::staticInfo().type);
         editor_.placeAtScreen(*target, editor_.canvasCenter());
     }
     target->params[0] = path;
@@ -596,20 +776,30 @@ void App::updateTitle() {
     }
 }
 
-int App::leftImageNode() const {
-    if (Node* n = graph_.find(selected_); n && n->info().type == ImageInputNode::staticInfo().type) return selected_;
-    return graph_.firstOfType(ImageInputNode::staticInfo().type);
+bool App::pathValid(const NodePath& p) {
+    if (p.empty()) return false;
+    Graph* g = resolveGroupPath(graph_, std::vector<int>(p.begin(), p.end() - 1));
+    return g && g->find(p.back());
 }
 
-int App::previewTarget() const {
-    if (preview_ && graph_.find(preview_)) return preview_;
-    return graph_.firstOfType(OutputNode::staticInfo().type);
+NodePath App::resultTarget() {
+    if (pathValid(previewPath_)) return previewPath_;
+    int out = graph_.firstOfType(OutputNode::staticInfo().type);
+    return out ? NodePath{out} : NodePath{};
 }
 
 void App::updateTextures() {
-    // Left pane follows the selected (or first) Image Input.
+    // Original panel: the selected Image Input (in the graph being edited), else the root's first.
+    Graph& cur = currentGraph();
+    Node* src = cur.find(selected_);
+    if (!src || src->info().type != ImageInputNode::staticInfo().type)
+        src = graph_.find(graph_.firstOfType(ImageInputNode::staticInfo().type));
     ImagePtr left;
-    if (Node* n = graph_.find(leftImageNode())) left = cache_.get(n->paramS(0), true);
+    leftLabel_.clear();
+    if (src && !src->paramS(0).empty()) {
+        left = cache_.get(src->paramS(0), true);
+        leftLabel_ = pathToU8(u8ToPath(src->paramS(0)).filename());
+    }
     if (left != leftShown_) {
         leftShown_ = left;
         if (left) leftTex_.upload(*left);
@@ -618,9 +808,13 @@ void App::updateTextures() {
 
     if (auto res = eval_->poll()) {
         evalMs_ = res->ms;
-        evalError_ = res->error;
-        if (res->image) rightTex_.upload(*res->image);
-        else rightTex_.reset();
+        // Results are in submission order; match them to the viewers that still exist.
+        for (size_t i = 0; i < viewers_.size() && i < res->images.size(); ++i) {
+            Viewer& v = *viewers_[i];
+            v.error = res->errors[i];
+            if (res->images[i]) v.tex.upload(*res->images[i]);
+            else v.tex.reset();
+        }
     }
 }
 
@@ -640,28 +834,39 @@ bool App::saveFramebuffer(const std::string& path) {
 }
 
 nlohmann::json App::uiState() const {
+    nlohmann::json viewers = nlohmann::json::array();
+    for (size_t i = 1; i < viewers_.size(); ++i) viewers.push_back({{"pin", viewers_[i]->pin}});
     return {{"view", {view_.zoom, view_.panX, view_.panY}},
-            {"panes", {leftFrac_, rightFrac_, editorFrac_}},
-            {"preview", preview_},
-            {"graphView", editor_.viewState()}};
+            {"preview", previewPath_},
+            {"graphView", groupPath_.empty() ? editor_.viewState()
+                          : groupViews_.count(std::vector<int>()) ? groupViews_.at(std::vector<int>()) : nlohmann::json()},
+            {"viewers", viewers}};
 }
 
 void App::applyUiState(const nlohmann::json& j) {
     view_.reset();
+    viewers_.resize(1);
+    previewPath_.clear();
     try {
         if (auto v = j.find("view"); v != j.end() && v->size() == 3) {
             view_.zoom = (*v)[0].get<float>();
             view_.panX = (*v)[1].get<float>();
             view_.panY = (*v)[2].get<float>();
         }
-        if (auto p = j.find("panes"); p != j.end() && p->size() == 3) {
-            leftFrac_ = std::clamp((*p)[0].get<float>(), 0.1f, 0.45f);
-            rightFrac_ = std::clamp((*p)[1].get<float>(), 0.1f, 0.45f);
-            editorFrac_ = std::clamp((*p)[2].get<float>(), 0.25f, 0.9f);
-        }
         if (auto gv = j.find("graphView"); gv != j.end()) editor_.setViewState(*gv);
-        preview_ = j.value("preview", 0);
-        if (!graph_.find(preview_)) preview_ = 0;
+        if (auto p = j.find("preview"); p != j.end()) {
+            // Older projects stored a plain node id.
+            if (p->is_number_integer() && p->get<int>() != 0) previewPath_ = {p->get<int>()};
+            else if (p->is_array()) previewPath_ = p->get<NodePath>();
+        }
+        if (!pathValid(previewPath_)) previewPath_.clear();
+        if (auto vs = j.find("viewers"); vs != j.end() && vs->is_array())
+            for (const auto& vj : *vs) {
+                auto v = std::make_unique<Viewer>();
+                v->id = nextViewerId_++;
+                v->pin = vj.value("pin", NodePath{});
+                viewers_.push_back(std::move(v));
+            }
     } catch (const std::exception&) {
         // UI state is cosmetic; ignore anything malformed.
     }

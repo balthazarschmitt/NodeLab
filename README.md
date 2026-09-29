@@ -52,6 +52,11 @@ Try `examples/demo.nlproj`: the red channel drives saturation, so only red thing
 | Undo / redo | Ctrl+Z / Ctrl+Y |
 | Edit a value | Drag the field sideways (Shift = fine), or click it to type |
 | Preview any node | Ctrl+click it (again to clear) |
+| Group / ungroup | Ctrl+G / Ctrl+Alt+G; Tab (or double-click) enters a group, Tab leaves |
+| Group pins | Select the group (or its Group Input/Output inside) and edit in the Inspector |
+| Frame | Ctrl+J around the selection; drag its title to move it with its nodes, corner to resize, double-click to rename, right-click for color |
+| Panels | Drag a panel's tab to dock it elsewhere, or out of the window; View > Reset Layout |
+| Extra viewers | View > New Viewer, then "Pin Selected" to watch any node |
 | Zoom / pan images | Mouse wheel / drag; double-click resets. Both panes stay in sync |
 | Import image | File > Import Image, or drop a file on the window |
 
@@ -67,14 +72,32 @@ Conversions are automatic:
 Most sliders on a node are Channel inputs too. For example, Split RGB → R into Saturation → Amount
 makes the saturation follow the red channel pixel by pixel.
 
-Projects (`.nlproj`) are JSON. Image paths are stored relative to the project file.
+Projects (`.nlproj`) are JSON. Image paths are stored relative to the project file. The panel
+layout is saved per user in `%APPDATA%\NodeLab\layout.ini`.
+
+## Nodes
+
+| Category | Nodes |
+|---|---|
+| Input / Output | Image Input, Output, Number |
+| Color | Brightness / Contrast, Saturation, Hue Shift, Exposure, Gamma, Levels, Curves, Invert, Split/Combine RGB, Split/Combine HSV, Split/Combine Lab, Luminance |
+| Mix | Mix, Blend (19 modes: Multiply, Screen, Overlay, Soft Light, Difference, Hue, Color, ...) |
+| Converter | Color Ramp, Color Key (hue/saturation/value range mask), Map Range, Math (21 ops), Clamp, Threshold, Expression, Image Expression |
+| Group | Groups (Ctrl+G) with Group Input / Group Output inside |
+
+Color adjustment outputs are clamped to 0..1 and their parameters to their ranges. Math and
+converter nodes are unclamped (enable Clamp where offered) so intermediate values can go
+negative or above 1.
+
+Expression variables: `r g b a` (Image input), `in1 in2`, `x y` (pixel), `u v` (0..1), `w h`;
+functions include `sin cos pow sqrt abs floor ceil log exp atan2 min max clamp mix step smoothstep fract`.
 
 ## Layout
 
 ```
 src/core    Image/Channel/Value types, conversions, parallelFor
 src/graph   Node model, Graph (links, cycle check, JSON), Evaluator (cached, background thread)
-src/nodes   Node implementations by family (io, color, math, ...)
+src/nodes   Node implementations by family (io, color, math, converter, group)
 src/io      Image load/save, source image cache, project files
 src/ui      App window, node editor (imnodes), inspector, image views, file dialogs
 tests       doctest unit tests

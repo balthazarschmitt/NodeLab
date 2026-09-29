@@ -21,15 +21,35 @@ Node* Graph::addNode(const std::string& type, float x, float y) {
 
 Node* Graph::duplicateNode(int id, float dx, float dy) {
     Node* src = find(id);
-    if (!src) return nullptr;
-    Node* n = addNode(src->info().type, src->x + dx, src->y + dy);
+    return src ? cloneNode(*src, src->x + dx, src->y + dy) : nullptr;
+}
+
+Node* Graph::cloneNode(const Node& src, float x, float y) {
+    // Snapshot first: src may be in this graph, and adding a node must not disturb it.
+    nlohmann::json extra;
+    src.saveExtra(extra);
+    auto params = src.params;
+    Node* n = addNode(src.info().type, x, y);
     if (n) {
-        n->params = src->params;
-        nlohmann::json extra;
-        src->saveExtra(extra);
+        n->params = std::move(params);
         if (!extra.is_null()) n->loadExtra(extra);
     }
     return n;
+}
+
+void Graph::remapPins(int nodeId, bool outputs, const std::function<int(int)>& map) {
+    std::vector<Link> kept;
+    for (Link l : links_) {
+        if (outputs && l.fromNode == nodeId) {
+            l.fromPin = map(l.fromPin);
+            if (l.fromPin < 0) continue;
+        } else if (!outputs && l.toNode == nodeId) {
+            l.toPin = map(l.toPin);
+            if (l.toPin < 0) continue;
+        }
+        kept.push_back(l);
+    }
+    links_ = std::move(kept);
 }
 
 void Graph::removeNode(int id) {
@@ -80,6 +100,17 @@ int Graph::connect(int fromNode, int fromPin, int toNode, int toPin, std::string
     return l.id;
 }
 
+int Graph::pruneInvalidLinks() {
+    size_t before = links_.size();
+    std::erase_if(links_, [&](const Link& l) {
+        const Node* a = find(l.fromNode);
+        const Node* b = find(l.toNode);
+        return !a || !b || l.fromPin < 0 || l.toPin < 0 || l.fromPin >= int(a->info().outputs.size()) ||
+               l.toPin >= int(b->info().inputs.size());
+    });
+    return int(before - links_.size());
+}
+
 void Graph::removeLink(int linkId) {
     std::erase_if(links_, [linkId](const Link& l) { return l.id == linkId; });
 }
@@ -96,9 +127,31 @@ int Graph::firstOfType(const std::string& type) const {
     return 0;
 }
 
+Frame* Graph::addFrame(float x, float y, float w, float h) {
+    Frame f;
+    f.id = nextId_++;
+    f.x = x;
+    f.y = y;
+    f.w = w;
+    f.h = h;
+    frames_.push_back(f);
+    return &frames_.back();
+}
+
+void Graph::removeFrame(int id) {
+    std::erase_if(frames_, [id](const Frame& f) { return f.id == id; });
+}
+
+Frame* Graph::findFrame(int id) {
+    for (auto& f : frames_)
+        if (f.id == id) return &f;
+    return nullptr;
+}
+
 void Graph::clear() {
     nodes_.clear();
     links_.clear();
+    frames_.clear();
     nextId_ = 1;
 }
 
@@ -127,6 +180,12 @@ nlohmann::json Graph::toJson(const fs::path* baseDir) const {
     auto& jl = j["links"] = nlohmann::json::array();
     for (const auto& l : links_)
         jl.push_back({{"id", l.id}, {"from", {l.fromNode, l.fromPin}}, {"to", {l.toNode, l.toPin}}});
+    if (!frames_.empty()) {
+        auto& jf = j["frames"] = nlohmann::json::array();
+        for (const auto& f : frames_)
+            jf.push_back({{"id", f.id}, {"label", f.label}, {"rect", {f.x, f.y, f.w, f.h}},
+                          {"color", {f.color[0], f.color[1], f.color[2]}}});
+    }
     return j;
 }
 
@@ -167,6 +226,23 @@ void Graph::fromJson(const nlohmann::json& j, const fs::path* baseDir) {
         if (!find(l.fromNode) || !find(l.toNode)) continue;
         maxId = std::max(maxId, l.id);
         links_.push_back(l);
+    }
+    if (auto jf = j.find("frames"); jf != j.end() && jf->is_array()) {
+        for (const auto& o : *jf) {
+            Frame f;
+            f.id = o.value("id", 0);
+            f.label = o.value("label", std::string("Frame"));
+            if (auto r = o.find("rect"); r != o.end() && r->size() == 4) {
+                f.x = (*r)[0].get<float>();
+                f.y = (*r)[1].get<float>();
+                f.w = (*r)[2].get<float>();
+                f.h = (*r)[3].get<float>();
+            }
+            if (auto c = o.find("color"); c != o.end() && c->size() == 3)
+                for (int k = 0; k < 3; ++k) f.color[k] = (*c)[k].get<float>();
+            maxId = std::max(maxId, f.id);
+            frames_.push_back(f);
+        }
     }
     nextId_ = std::max(j.value("nextId", 1), maxId + 1);
 }

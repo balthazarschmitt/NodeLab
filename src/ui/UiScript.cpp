@@ -62,7 +62,7 @@ bool UiScript::load(const std::string& path, std::string& err) {
             push("wait", 2);
             push("up", bt);
             push("wait", 2);
-        } else if (op == "text" || op == "shot" || op == "key" || op == "ctrl") {
+        } else if (op == "text" || op == "shot" || op == "key" || op == "ctrl" || op == "alt" || op == "shift") {
             std::string rest;
             std::getline(in >> std::ws, rest);
             push(op, 0, 0, rest);
@@ -113,6 +113,10 @@ std::string UiScript::step(bool evalIdle, bool& quit) {
         io.AddInputCharactersUTF8(s.s.c_str());
     } else if (s.op == "key" || s.op == "keyup") {
         io.AddKeyEvent(keyFromName(s.s), s.op == "key");
+    } else if (s.op == "alt" || s.op == "shift") {
+        bool on = s.s == "on";
+        io.AddKeyEvent(s.op == "alt" ? ImGuiMod_Alt : ImGuiMod_Shift, on);
+        io.AddKeyEvent(s.op == "alt" ? ImGuiKey_LeftAlt : ImGuiKey_LeftShift, on);
     } else if (s.op == "ctrl") {
         bool on = s.s == "on";
         io.AddKeyEvent(ImGuiMod_Ctrl, on);

@@ -10,6 +10,7 @@
 #include "core/Curve.h"
 #include "core/Ramp.h"
 #include "graph/NodeRegistry.h"
+#include "nodes/group/GroupNodes.h"
 #include "io/Paths.h"
 #include "ui/FileDialog.h"
 
@@ -168,7 +169,8 @@ NodeEditor::Layout NodeEditor::layoutFor(const Node& n) const {
     return L;
 }
 
-void NodeEditor::syncOrder(const Graph& g) {
+void NodeEditor::syncOrder(Graph& g) {
+    g.pruneInvalidLinks();  // safety net: never draw a wire to a pin that no longer exists
     std::erase_if(order_, [&](int id) { return !g.find(id); });
     for (const auto& [id, n] : g.nodes())
         if (std::find(order_.begin(), order_.end(), id) == order_.end()) order_.push_back(id);
@@ -179,7 +181,6 @@ void NodeEditor::syncOrder(const Graph& g) {
 }
 
 void NodeEditor::doFrame(const Graph& g) {
-    fitPending_ = false;
     if (g.nodes().empty() || size_.x < 50 || size_.y < 50) {
         zoom_ = 1.0f;
         pan_ = ImVec2(40, 40);
@@ -202,11 +203,12 @@ void NodeEditor::onGraphReplaced(bool frame) {
     order_.clear();
     mode_ = Mode::None;
     editing_ = {};
+    selectedFrame_ = 0;
     activeNode_ = 0;
     activeParam_ = -1;
     insertLink_ = 0;
     hoverPin_ = {};
-    if (frame) fitPending_ = true;
+    if (frame) fitFrames_ = 3;
 }
 
 void NodeEditor::select(int nodeId) {
@@ -220,7 +222,7 @@ void NodeEditor::setViewState(const nlohmann::json& j) {
     if (!j.is_array() || j.size() != 3) return;
     pan_ = ImVec2(j[0].get<float>(), j[1].get<float>());
     zoom_ = std::clamp(j[2].get<float>(), kMinZoom, kMaxZoom);
-    fitPending_ = false;
+    fitFrames_ = 0;
 }
 
 // ---------------------------------------------------------------- hit testing
@@ -691,7 +693,10 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview) {
     size_.x = std::max(size_.x, 1.0f);
     size_.y = std::max(size_.y, 1.0f);
     syncOrder(g);
-    if (fitPending_) doFrame(g);
+    if (fitFrames_ > 0) {
+        doFrame(g);
+        --fitFrames_;
+    }
 
     // Background item catches clicks that no node widget takes.
     ImGui::SetNextItemAllowOverlap();
@@ -709,6 +714,7 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview) {
     dl->PushClipRect(canvas.Min, canvas.Max, true);
     dl->AddRectFilled(canvas.Min, canvas.Max, IM_COL32(30, 30, 36, 255));
     drawGrid(dl);
+    drawFrames(dl, g);
     drawLinks(dl, g);
     for (int id : std::vector<int>(order_))
         if (Node* n = g.find(id)) drawNode(dl, g, *n, preview, r);
@@ -770,7 +776,11 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview) {
             order_.erase(std::find(order_.begin(), order_.end(), nid));
             order_.push_back(nid);
             selectedLink_ = 0;
-            if (io.KeyCtrl) {
+            selectedFrame_ = 0;
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && dynamic_cast<GroupNode*>(g.find(nid))) {
+                r.enterGroup = nid;
+                mode_ = Mode::None;
+            } else if (io.KeyCtrl) {
                 preview = (preview == nid) ? 0 : nid;
                 r.previewChanged = true;
                 mode_ = Mode::None;
@@ -785,9 +795,36 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview) {
                 for (int id : selection_) dragStart_[id] = ImVec2(g.find(id)->x, g.find(id)->y);
                 mode_ = Mode::PressNode;
             }
+        } else if (int fc = hitFrameCorner(g, mouse)) {
+            Frame* f = g.findFrame(fc);
+            selectedFrame_ = fc;
+            selection_.clear();
+            frameStart_[0] = f->x, frameStart_[1] = f->y, frameStart_[2] = f->w, frameStart_[3] = f->h;
+            mode_ = Mode::ResizeFrame;
+        } else if (int ft = hitFrameTitle(g, mouse)) {
+            Frame* f = g.findFrame(ft);
+            selectedFrame_ = ft;
+            selection_.clear();
+            selectedLink_ = 0;
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                menuFrame_ = ft;
+                std::snprintf(frameLabel_, sizeof(frameLabel_), "%s", f->label.c_str());
+                ImGui::OpenPopup("FrameRename");
+                mode_ = Mode::None;
+            } else {
+                // Nodes whose center lies inside the frame travel with it.
+                frameStart_[0] = f->x, frameStart_[1] = f->y, frameStart_[2] = f->w, frameStart_[3] = f->h;
+                frameNodes_.clear();
+                for (const auto& [id, n] : g.nodes()) {
+                    float cx = n->x + kNodeW * 0.5f, cy = n->y + nodeHeightGrid(*n) * 0.5f;
+                    if (cx > f->x && cx < f->x + f->w && cy > f->y && cy < f->y + f->h) frameNodes_[id] = ImVec2(n->x, n->y);
+                }
+                mode_ = Mode::DragFrame;
+            }
         } else if (int lid = hitLink(g, mouse)) {
             selectedLink_ = lid;
             selection_.clear();
+            selectedFrame_ = 0;
             mode_ = Mode::None;
         } else {
             mode_ = io.KeyShift ? Mode::BoxSelect : Mode::Pan;
@@ -803,6 +840,10 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview) {
             menuNode_ = nid;
             if (!selection_.count(nid)) selection_ = {nid};
             ImGui::OpenPopup("NodeMenu");
+        } else if (int ft = hitFrameTitle(g, mouse)) {
+            menuFrame_ = ft;
+            selectedFrame_ = ft;
+            ImGui::OpenPopup("FrameMenu");
         } else {
             ImGui::OpenPopup("AddNode");
         }
@@ -819,6 +860,7 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview) {
                 if (ImLengthSqr(mouse - pressPos_) < 9.0f && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
                     selection_.clear();
                     selectedLink_ = 0;
+                    selectedFrame_ = 0;
                 }
                 mode_ = Mode::None;
             }
@@ -874,6 +916,30 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview) {
                 mode_ = Mode::None;
             }
             break;
+        case Mode::DragFrame:
+        case Mode::ResizeFrame: {
+            Frame* f = g.findFrame(selectedFrame_);
+            if (!f) {
+                mode_ = Mode::None;
+                break;
+            }
+            ImVec2 d((mouse.x - pressPos_.x) / zoom_, (mouse.y - pressPos_.y) / zoom_);
+            if (mode_ == Mode::DragFrame) {
+                f->x = std::round(frameStart_[0] + d.x);
+                f->y = std::round(frameStart_[1] + d.y);
+                for (auto& [id, start] : frameNodes_)
+                    if (Node* n = g.find(id)) {
+                        n->x = std::round(start.x + d.x);
+                        n->y = std::round(start.y + d.y);
+                    }
+            } else {
+                f->w = std::max(120.0f, std::round(frameStart_[2] + d.x));
+                f->h = std::max(80.0f, std::round(frameStart_[3] + d.y));
+            }
+            r.docChanged = true;
+            if (!leftDown) mode_ = Mode::None;
+            break;
+        }
         case Mode::None: break;
     }
 
@@ -887,16 +953,31 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview) {
     // ---- keyboard
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !io.WantTextInput) {
         if (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace)) {
-            if (deleteSelection(g, preview)) r.evalChanged = r.docChanged = true;
+            if (selectedFrame_) {
+                g.removeFrame(selectedFrame_);  // the frame only; its nodes stay
+                selectedFrame_ = 0;
+                r.docChanged = true;
+            } else if (deleteSelection(g, preview)) {
+                r.evalChanged = r.docChanged = true;
+            }
+        }
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_G) && groupSelection(g)) r.evalChanged = r.docChanged = true;
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Alt | ImGuiKey_G) && ungroupSelection(g))
+            r.evalChanged = r.docChanged = true;
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_J) && frameSelection(g)) r.docChanged = true;
+        if (ImGui::IsKeyPressed(ImGuiKey_Tab) && !io.KeyCtrl) {
+            if (int gid = selectedGroup(g)) r.enterGroup = gid;
+            else r.exitGroup = true;
         }
         if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_D) && duplicateSelection(g)) r.evalChanged = r.docChanged = true;
         if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_A))
             for (const auto& [id, n] : g.nodes()) selection_.insert(id);
-        if (ImGui::IsKeyPressed(ImGuiKey_F) && !io.KeyCtrl) fitPending_ = true;
+        if (ImGui::IsKeyPressed(ImGuiKey_F) && !io.KeyCtrl) fitFrames_ = 1;
     }
 
     drawAddMenu(g, r);
     drawNodeMenu(g, preview, r);
+    drawFrameMenu(g, r);
 
     // Node widgets moved the layout cursor around; leave it at a valid spot covering the canvas.
     ImGui::SetCursorScreenPos(origin_);
@@ -927,6 +1008,14 @@ void NodeEditor::drawAddMenu(Graph& g, Result& r) {
         });
     };
 
+    if (!src && ImGui::MenuItem("Frame", "Ctrl+J")) {
+        ImVec2 gp = toGrid(menuPos_);
+        g.addFrame(std::round(gp.x), std::round(gp.y), 360, 240);
+        r.docChanged = true;
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
     if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
     ImGui::SetNextItemWidth(220);
     ImGui::InputTextWithHint("##search", "Search nodes...", search_, sizeof(search_));
@@ -989,6 +1078,158 @@ void NodeEditor::drawNodeMenu(Graph& g, int& preview, Result& r) {
         r.previewChanged = true;
     }
     ImGui::Separator();
+    if (ImGui::MenuItem("Group", "Ctrl+G") && groupSelection(g)) r.evalChanged = r.docChanged = true;
+    const bool isGroup = dynamic_cast<GroupNode*>(g.find(menuNode_)) != nullptr;
+    if (ImGui::MenuItem("Ungroup", "Ctrl+Alt+G", false, isGroup) && ungroupSelection(g)) r.evalChanged = r.docChanged = true;
+    if (ImGui::MenuItem("Edit Group", "Tab", false, isGroup)) r.enterGroup = menuNode_;
+    if (ImGui::MenuItem("Frame Selection", "Ctrl+J") && frameSelection(g)) r.docChanged = true;
+    ImGui::Separator();
     if (ImGui::MenuItem("Delete", "Del") && deleteSelection(g, preview)) r.evalChanged = r.docChanged = true;
     ImGui::EndPopup();
+}
+
+// ---------------------------------------------------------------- frames
+
+void NodeEditor::drawFrames(ImDrawList* dl, const Graph& g) const {
+    const float z = zoom_;
+    const float fs = ImGui::GetFontSize() * z;
+    for (const Frame& f : g.frames()) {
+        ImVec2 a = toScreen(ImVec2(f.x, f.y)), b = toScreen(ImVec2(f.x + f.w, f.y + f.h));
+        ImU32 body = ImGui::GetColorU32(ImVec4(f.color[0], f.color[1], f.color[2], 0.35f));
+        ImU32 title = ImGui::GetColorU32(ImVec4(f.color[0] * 1.2f, f.color[1] * 1.2f, f.color[2] * 1.2f, 0.85f));
+        dl->AddRectFilled(a, b, body, 6 * z);
+        dl->AddRectFilled(a, ImVec2(b.x, a.y + kTitleH * z), title, 6 * z, ImDrawFlags_RoundCornersTop);
+        const bool sel = f.id == selectedFrame_;
+        dl->AddRect(a, b, sel ? IM_COL32(240, 196, 100, 255) : IM_COL32(0, 0, 0, 80), 6 * z, 0, sel ? 2.0f : 1.0f);
+        if (fs >= 5.0f) {
+            ImVec4 clip(a.x, a.y, b.x, b.y);
+            dl->AddText(ImGui::GetFont(), fs * 1.1f, ImVec2(a.x + 8 * z, a.y + (kTitleH * z - fs * 1.1f) * 0.5f),
+                        IM_COL32(245, 245, 250, 255), f.label.c_str(), nullptr, 0.0f, &clip);
+        }
+        // resize grip
+        float gs = 12 * z;
+        dl->AddTriangleFilled(ImVec2(b.x - gs, b.y - 2), ImVec2(b.x - 2, b.y - gs), ImVec2(b.x - 2, b.y - 2),
+                              IM_COL32(255, 255, 255, 60));
+    }
+}
+
+int NodeEditor::hitFrameTitle(const Graph& g, ImVec2 p) const {
+    for (auto it = g.frames().rbegin(); it != g.frames().rend(); ++it) {
+        ImVec2 a = toScreen(ImVec2(it->x, it->y)), b = toScreen(ImVec2(it->x + it->w, it->y + kTitleH));
+        if (ImRect(a, b).Contains(p)) return it->id;
+    }
+    return 0;
+}
+
+int NodeEditor::hitFrameCorner(const Graph& g, ImVec2 p) const {
+    for (auto it = g.frames().rbegin(); it != g.frames().rend(); ++it) {
+        ImVec2 b = toScreen(ImVec2(it->x + it->w, it->y + it->h));
+        float gs = std::max(10.0f, 14 * zoom_);
+        if (ImRect(ImVec2(b.x - gs, b.y - gs), b).Contains(p)) return it->id;
+    }
+    return 0;
+}
+
+void NodeEditor::drawFrameMenu(Graph& g, Result& r) {
+    if (ImGui::BeginPopup("FrameMenu")) {
+        Frame* f = g.findFrame(menuFrame_);
+        if (!f) {
+            ImGui::CloseCurrentPopup();
+        } else {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "%s", f->label.c_str());
+            ImGui::SetNextItemWidth(200);
+            if (ImGui::InputText("Label", buf, sizeof(buf))) {
+                f->label = buf;
+                r.docChanged = true;
+            }
+            static const float presets[][3] = {{0.30f, 0.34f, 0.42f}, {0.45f, 0.22f, 0.22f}, {0.22f, 0.40f, 0.24f},
+                                               {0.22f, 0.30f, 0.50f}, {0.46f, 0.40f, 0.18f}, {0.38f, 0.24f, 0.46f}};
+            for (int k = 0; k < 6; ++k) {
+                if (k) ImGui::SameLine();
+                ImGui::PushID(k);
+                if (ImGui::ColorButton("##preset", ImVec4(presets[k][0], presets[k][1], presets[k][2], 1.0f))) {
+                    std::copy(presets[k], presets[k] + 3, f->color);
+                    r.docChanged = true;
+                }
+                ImGui::PopID();
+            }
+            if (ImGui::ColorEdit3("Color", f->color, ImGuiColorEditFlags_NoInputs)) r.docChanged = true;
+            ImGui::Separator();
+            if (ImGui::MenuItem("Fit to Contents")) {
+                float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+                for (const auto& [id, n] : g.nodes()) {
+                    float cx = n->x + kNodeW * 0.5f, cy = n->y + nodeHeightGrid(*n) * 0.5f;
+                    if (cx < f->x || cx > f->x + f->w || cy < f->y || cy > f->y + f->h) continue;
+                    x0 = std::min(x0, n->x), y0 = std::min(y0, n->y);
+                    x1 = std::max(x1, n->x + kNodeW), y1 = std::max(y1, n->y + nodeHeightGrid(*n));
+                }
+                if (x1 > x0) {
+                    f->x = x0 - 24, f->y = y0 - kTitleH - 24, f->w = x1 - x0 + 48, f->h = y1 - y0 + kTitleH + 48;
+                    r.docChanged = true;
+                }
+            }
+            if (ImGui::MenuItem("Delete Frame", "Del")) {
+                g.removeFrame(menuFrame_);
+                selectedFrame_ = 0;
+                r.docChanged = true;
+            }
+        }
+        ImGui::EndPopup();
+    }
+    if (ImGui::BeginPopup("FrameRename")) {
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        ImGui::SetNextItemWidth(220);
+        bool done = ImGui::InputText("##label", frameLabel_, sizeof(frameLabel_), ImGuiInputTextFlags_EnterReturnsTrue);
+        if (Frame* f = g.findFrame(menuFrame_); f && f->label != frameLabel_) {
+            f->label = frameLabel_;
+            r.docChanged = true;
+        }
+        if (done) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+}
+
+bool NodeEditor::frameSelection(Graph& g) {
+    if (selection_.empty()) {
+        ImVec2 gp = toGrid(ImGui::GetIO().MousePos);
+        selectedFrame_ = g.addFrame(std::round(gp.x), std::round(gp.y), 360, 240)->id;
+        return true;
+    }
+    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+    for (int id : selection_)
+        if (const Node* n = g.find(id)) {
+            x0 = std::min(x0, n->x), y0 = std::min(y0, n->y);
+            x1 = std::max(x1, n->x + kNodeW), y1 = std::max(y1, n->y + nodeHeightGrid(*n));
+        }
+    Frame* f = g.addFrame(x0 - 24, y0 - kTitleH - 24, x1 - x0 + 48, y1 - y0 + kTitleH + 48);
+    selectedFrame_ = f->id;
+    return true;
+}
+
+// ---------------------------------------------------------------- groups
+
+int NodeEditor::selectedGroup(const Graph& g) const {
+    if (selection_.size() != 1) return 0;
+    return dynamic_cast<GroupNode*>(g.find(*selection_.begin())) ? *selection_.begin() : 0;
+}
+
+bool NodeEditor::groupSelection(Graph& g) {
+    if (selection_.empty()) return false;
+    int gid = groupNodes(g, selection_);
+    if (!gid) return false;
+    select(gid);
+    return true;
+}
+
+bool NodeEditor::ungroupSelection(Graph& g) {
+    std::set<int> restored;
+    bool any = false;
+    for (int id : std::set<int>(selection_)) {
+        if (!dynamic_cast<GroupNode*>(g.find(id))) continue;
+        for (int n : ungroupNode(g, id)) restored.insert(n);
+        any = true;
+    }
+    if (any) selection_ = restored;
+    return any;
 }

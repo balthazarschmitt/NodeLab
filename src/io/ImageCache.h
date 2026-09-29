@@ -17,7 +17,8 @@ public:
 
 private:
     struct Entry {
-        ImagePtr full, proxy;
+        ImagePtr proxy;                     // always kept once loaded
+        std::weak_ptr<const Image> full;    // kept only while in use
         std::string error;
     };
     std::mutex mutex_;

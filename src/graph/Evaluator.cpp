@@ -4,6 +4,7 @@
 #include <functional>
 
 #include "io/ImageCache.h"
+#include "nodes/group/GroupNodes.h"
 #include "nodes/io/IONodes.h"
 
 size_t Evaluator::ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unordered_map<int, size_t>& pass) {
@@ -76,6 +77,28 @@ ImagePtr Evaluator::evaluateDisplay(const Graph& g, int nodeId, EvalContext& ctx
     return toImage(v, ctx.defaultW, ctx.defaultH);
 }
 
+std::vector<Value> Evaluator::gatherInputs(const Graph& g, int nodeId, EvalContext& ctx) {
+    Node* n = g.find(nodeId);
+    if (!n) return {};
+    const NodeInfo& info = n->info();
+    std::vector<Value> inputs(info.inputs.size());
+    for (size_t i = 0; i < info.inputs.size(); ++i) {
+        if (const Link* l = g.inputLink(nodeId, int(i))) inputs[i] = evaluateOutput(g, l->fromNode, l->fromPin, ctx);
+        const int fp = info.inputs[i].fallbackParam;
+        if (inputs[i].empty() && fp >= 0) inputs[i] = Value(n->paramF(fp));
+    }
+    return inputs;
+}
+
+ImagePtr Evaluator::evaluateDisplayPath(const Graph& g, const NodePath& path, EvalContext& ctx) {
+    if (path.empty()) return nullptr;
+    if (path.size() == 1) return evaluateDisplay(g, path[0], ctx);
+    auto* group = dynamic_cast<GroupNode*>(g.find(path[0]));
+    if (!group) return nullptr;
+    std::vector<Value> inputs = gatherInputs(g, path[0], ctx);
+    return group->previewInner(ctx, inputs, NodePath(path.begin() + 1, path.end()));
+}
+
 void Evaluator::prune(const Graph& g) {
     std::erase_if(cache_, [&](const auto& kv) { return g.find(kv.first) == nullptr; });
 }
@@ -108,12 +131,12 @@ AsyncEvaluator::~AsyncEvaluator() {
     thread_.join();
 }
 
-void AsyncEvaluator::submit(nlohmann::json graphJson, int targetNode) {
+void AsyncEvaluator::submit(nlohmann::json graphJson, std::vector<NodePath> targets) {
     {
         std::lock_guard lock(mutex_);
         // Latest job wins: it replaces any queued (not yet started) job. The running job is left
         // to finish so continuous slider drags still produce steady intermediate results.
-        pending_ = Job{std::move(graphJson), targetNode, nextGen_++};
+        pending_ = Job{std::move(graphJson), std::move(targets), nextGen_++};
     }
     cv_.notify_all();
 }
@@ -140,6 +163,8 @@ void AsyncEvaluator::run() {
 
         Result res;
         res.generation = job.generation;
+        res.images.resize(job.targets.size());
+        res.errors.resize(job.targets.size());
         bool cancelled = false;
         auto t0 = std::chrono::steady_clock::now();
         try {
@@ -150,12 +175,20 @@ void AsyncEvaluator::run() {
             ctx.cache = &cache_;
             ctx.cancel = &cancel_;
             initContextSize(g, ctx);
-            res.image = evaluator_.evaluateDisplay(g, job.target, ctx);
+            for (size_t t = 0; t < job.targets.size(); ++t) {
+                try {
+                    res.images[t] = evaluator_.evaluateDisplayPath(g, job.targets[t], ctx);
+                } catch (const EvalCancelled&) {
+                    throw;
+                } catch (const std::exception& e) {
+                    res.errors[t] = e.what();
+                }
+            }
             evaluator_.prune(g);
         } catch (const EvalCancelled&) {
             cancelled = true;
         } catch (const std::exception& e) {
-            res.error = e.what();
+            for (auto& err : res.errors) err = e.what();
         }
         res.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 

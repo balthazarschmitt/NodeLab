@@ -5,6 +5,7 @@
 #include <imgui.h>
 
 #include "io/Paths.h"
+#include "nodes/group/GroupNodes.h"
 #include "ui/FileDialog.h"
 #include "ui/ParamWidgets.h"
 
@@ -91,8 +92,84 @@ bool editParam(Node& node, int i, float width, bool compact) {
     return changed;
 }
 
-bool drawInspector(Graph& g, int selectedNode) {
+bool drawGroupInterface(GroupNode& group, Graph& outer) {
+    bool changed = false;
+    char name[128];
+    std::snprintf(name, sizeof(name), "%s", group.name.c_str());
+    ImGui::SetNextItemWidth(240);
+    if (ImGui::InputText("Group name", name, sizeof(name))) {
+        group.name = name;
+        group.syncInner();
+        changed = true;
+    }
+    static const char* types[] = {"Image", "Channel", "Number"};
+    for (int side = 0; side < 2; ++side) {
+        const bool output = side == 1;
+        auto& pins = output ? group.outs : group.ins;
+        ImGui::SeparatorText(output ? "Outputs" : "Inputs");
+        ImGui::PushID(side);
+        for (int i = 0; i < int(pins.size()); ++i) {
+            ImGui::PushID(i);
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%s", pins[i].name.c_str());
+            ImGui::SetNextItemWidth(150);
+            if (ImGui::InputText("##name", buf, sizeof(buf))) {
+                pins[i].name = buf;
+                group.syncInner();
+                changed = true;
+            }
+            ImGui::SameLine();
+            int t = int(pins[i].type);
+            ImGui::SetNextItemWidth(100);
+            if (ImGui::Combo("##type", &t, types, 3)) {
+                group.setPinType(outer, output, i, PinType(t));
+                changed = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::ArrowButton("##up", ImGuiDir_Up)) {
+                group.movePin(outer, output, i, -1);
+                changed = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::ArrowButton("##down", ImGuiDir_Down)) {
+                group.movePin(outer, output, i, +1);
+                changed = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Remove")) {
+                group.removePin(outer, output, i);
+                changed = true;
+                ImGui::PopID();
+                break;
+            }
+            ImGui::PopID();
+        }
+        if (ImGui::SmallButton(output ? "Add Output" : "Add Input")) {
+            group.addPin(outer, output, {output ? "Result" : "Value", PinType::Image});
+            changed = true;
+        }
+        ImGui::PopID();
+    }
+    return changed;
+}
+
+bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerParent) {
     Node* n = g.find(selectedNode);
+    if (n) {
+        if (auto* grp = dynamic_cast<GroupNode*>(n)) {
+            ImGui::Text("Group: %s", grp->name.c_str());
+            ImGui::TextDisabled("Tab or double-click to edit its contents, Ctrl+Alt+G to ungroup.");
+            ImGui::Separator();
+            return drawGroupInterface(*grp, g);
+        }
+        const bool io = dynamic_cast<GroupInputNode*>(n) || dynamic_cast<GroupOutputNode*>(n);
+        if (io && owner && ownerParent) {
+            ImGui::Text("%s", n->info().displayName.c_str());
+            ImGui::TextDisabled("Edit the group's pins here. Tab to leave the group.");
+            ImGui::Separator();
+            return drawGroupInterface(*owner, *ownerParent);
+        }
+    }
     if (!n) {
         ImGui::TextDisabled("Select a node to edit its settings.");
         ImGui::TextDisabled("Right-click the canvas to add nodes. Ctrl+click a node to preview it.");

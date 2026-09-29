@@ -1,21 +1,21 @@
 # build\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\interact.txt
-# View is fixed at zoom 1, pan 0 by the project; canvas origin is at (469, 52).
+# View is fixed at zoom 1, pan 0 by the project; canvas origin is at (439, 72) in the docked default layout.
 settle
 
 # 1) Drag the free Invert node over the Input->Output wire: wire highlights; drag away: highlight goes;
 #    drop on it: node is spliced in.
-move 765 325
+move 735 345
 wait 2
 down 0
 wait 2
-move 790 200
-move 815 85
+move 760 220
+move 785 105
 wait 3
 shot build/smoke/t1_hover.png
-move 815 300
+move 785 320
 wait 3
 shot build/smoke/t2_away.png
-move 815 85
+move 785 105
 wait 3
 up 0
 settle
@@ -33,7 +33,7 @@ ctrl off
 settle
 
 # 3) Drag a wire from Invert's output into empty space -> add menu -> Saturation gets connected.
-drag 919 116 850 480
+drag 889 136 820 500
 wait 3
 text sat
 wait 2
@@ -42,20 +42,20 @@ settle
 shot build/smoke/t5_wire_menu.png
 
 # 4) Select Saturation, duplicate with Ctrl+D, Ctrl+click the copy to preview it.
-click 850 480
+click 820 500
 ctrl on
 key d
 ctrl off
 wait 3
 ctrl on
-click 880 510
+click 850 530
 ctrl off
 settle
 shot build/smoke/t6_dup_preview.png
 
 # 5) Pan by dragging empty space, then zoom out.
-drag 600 480 520 420
-move 800 300
+drag 570 500 490 440
+move 770 320
 wheel -3
 wait 3
 shot build/smoke/t7_pan_zoom.png

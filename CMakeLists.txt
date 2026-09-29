@@ -31,7 +31,7 @@ FetchContent_Declare(glfw
 
 FetchContent_Declare(imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG v1.91.8
+    GIT_TAG v1.91.8-docking
     GIT_SHALLOW TRUE
     SOURCE_SUBDIR _none)
 
@@ -90,7 +90,8 @@ add_library(nodelab_core STATIC
     src/nodes/color/ColorNodes.cpp
     src/nodes/math/MathNodes.cpp
     src/nodes/converter/ConverterNodes.cpp
-    src/nodes/converter/Expression.cpp)
+    src/nodes/converter/Expression.cpp
+    src/nodes/group/GroupNodes.cpp)
 target_include_directories(nodelab_core PUBLIC src)
 target_link_libraries(nodelab_core PUBLIC nlohmann_json::nlohmann_json stb tinyexpr)
 if(WIN32)
@@ -128,7 +129,7 @@ if(NODELAB_BUILD_TESTS)
     FetchContent_MakeAvailable(doctest)
 
     enable_testing()
-    add_executable(nodelab_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp)
+    add_executable(nodelab_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp tests/test_groups.cpp)
     target_include_directories(nodelab_tests PRIVATE ${doctest_SOURCE_DIR})
     target_link_libraries(nodelab_tests PRIVATE nodelab_core)
     if(MINGW)

@@ -19,8 +19,15 @@ struct EvalCancelled : std::runtime_error {
 
 // Pull-based graph evaluator with a per-node output cache. A node is recomputed only when
 // its signature (type + params + upstream signatures + resolution mode) changes.
+using NodePath = std::vector<int>;  // group ids from the root, then the node id
+
 class Evaluator {
 public:
+    // Like evaluateDisplay, but the node may sit inside (nested) groups.
+    ImagePtr evaluateDisplayPath(const Graph& g, const NodePath& path, EvalContext& ctx);
+    // Values arriving at a node's inputs (fallback params applied), evaluating upstream as needed.
+    std::vector<Value> gatherInputs(const Graph& g, int nodeId, EvalContext& ctx);
+
     // Value a node should show in a preview: for sink nodes (no outputs, e.g. Output) the value
     // arriving at input 0, otherwise output pin `pin`. Converted to an image.
     ImagePtr evaluateDisplay(const Graph& g, int nodeId, EvalContext& ctx, int pin = 0);
@@ -50,8 +57,8 @@ void initContextSize(const Graph& g, EvalContext& ctx);
 class AsyncEvaluator {
 public:
     struct Result {
-        ImagePtr image;
-        std::string error;
+        std::vector<ImagePtr> images;    // one per submitted target
+        std::vector<std::string> errors;  // one per submitted target (empty = ok)
         double ms = 0;
         uint64_t generation = 0;
     };
@@ -61,7 +68,8 @@ public:
     AsyncEvaluator(const AsyncEvaluator&) = delete;
     AsyncEvaluator& operator=(const AsyncEvaluator&) = delete;
 
-    void submit(nlohmann::json graphJson, int targetNode);
+    // Evaluates several display targets in one pass (they share the node cache).
+    void submit(nlohmann::json graphJson, std::vector<NodePath> targets);
     // Returns a result once per completed job.
     std::optional<Result> poll();
     bool busy() const { return busy_.load(); }
@@ -69,7 +77,7 @@ public:
 private:
     struct Job {
         nlohmann::json graph;
-        int target = 0;
+        std::vector<NodePath> targets;
         uint64_t generation = 0;
     };
     void run();

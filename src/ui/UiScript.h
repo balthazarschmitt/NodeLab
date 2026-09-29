@@ -13,7 +13,7 @@
 //   text STRING            type characters
 //   wheel N                mouse wheel steps (positive = up / zoom in)
 //   key NAME               press+release: enter, escape, delete, backspace, tab, a-z
-//   ctrl on|off            hold/release Ctrl
+//   ctrl|alt|shift on|off  hold/release a modifier
 //   shot PATH              save the rendered frame as PNG
 //   quit
 // Lines starting with '#' are comments.

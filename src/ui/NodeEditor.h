@@ -23,6 +23,8 @@ public:
         bool evalChanged = false;     // graph topology or params changed -> re-evaluate
         bool docChanged = false;      // anything that should mark the project modified
         bool previewChanged = false;  // Ctrl+click toggled the preview node
+        int enterGroup = 0;           // Tab / double-click on a group node: open it
+        bool exitGroup = false;       // Tab with no group selected: go up one level
     };
 
     // selected: the single selected node (0 if none or several). preview: node shown on the right.
@@ -30,7 +32,7 @@ public:
 
     // The graph was replaced (new/open/undo): drop selection and in-flight interactions.
     void onGraphReplaced(bool frame);  // also clears the active value field
-    void frameAll() { fitPending_ = true; }
+    void frameAll() { fitFrames_ = 1; }
     void select(int nodeId);
 
     // Places a node so its title bar sits at a screen position (uses the current view).
@@ -41,6 +43,11 @@ public:
     bool interacting() const { return mode_ != Mode::None || editing_.node != 0 || activeNode_ != 0; }
 
     bool duplicateSelection(Graph& g);
+    bool groupSelection(Graph& g);    // Ctrl+G
+    bool ungroupSelection(Graph& g);  // Ctrl+Alt+G
+    bool frameSelection(Graph& g);    // Ctrl+J: frame around the selection (or an empty frame)
+    int selectedGroup(const Graph& g) const;  // the single selected group node, or 0
+    int selectedFrame() const { return selectedFrame_; }
     bool deleteSelection(Graph& g, int& preview);
     bool hasSelection() const { return !selection_.empty() || selectedLink_ != 0; }
 
@@ -48,7 +55,7 @@ public:
     void setViewState(const nlohmann::json& j);
 
 private:
-    enum class Mode { None, Pan, BoxSelect, PressNode, DragNodes, DragLink };
+    enum class Mode { None, Pan, BoxSelect, PressNode, DragNodes, DragLink, DragFrame, ResizeFrame };
 
     struct PinRef {
         int node = 0, pin = 0;
@@ -67,7 +74,7 @@ private:
     Layout layoutFor(const Node& n) const;
     ImVec2 toScreen(ImVec2 grid) const;
     ImVec2 toGrid(ImVec2 screen) const;
-    void syncOrder(const Graph& g);
+    void syncOrder(Graph& g);
 
     int hitNode(const Graph& g, ImVec2 p) const;
     PinRef hitPin(const Graph& g, ImVec2 p) const;
@@ -75,6 +82,10 @@ private:
     void linkEnds(const Graph& g, const Link& l, ImVec2& a, ImVec2& b) const;
 
     void drawGrid(ImDrawList* dl) const;
+    void drawFrames(ImDrawList* dl, const Graph& g) const;
+    int hitFrameTitle(const Graph& g, ImVec2 p) const;
+    int hitFrameCorner(const Graph& g, ImVec2 p) const;
+    void drawFrameMenu(Graph& g, Result& r);
     void drawLinks(ImDrawList* dl, const Graph& g) const;
     bool drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result& r);
     bool drawValueBox(Node& n, int param, const ImRect& box, ImDrawList* dl, const char* label);
@@ -89,7 +100,7 @@ private:
     ImVec2 origin_{}, size_{};
     ImVec2 pan_{40, 40};
     float zoom_ = 1.0f;
-    bool fitPending_ = true;
+    int fitFrames_ = 3;  // frames left to re-fit (docked windows settle their size over a few frames)
 
     // selection / ordering
     std::set<int> selection_;
@@ -119,6 +130,13 @@ private:
     // its node, otherwise ImGui drops the active item mid-drag.
     int activeNode_ = 0, activeParam_ = -1;
     int enumNode_ = 0, enumParam_ = -1;  // node/param whose dropdown popup is open
+
+    // frames
+    int selectedFrame_ = 0;
+    float frameStart_[4] = {};               // x, y, w, h at drag start
+    std::map<int, ImVec2> frameNodes_;       // nodes carried along while dragging a frame
+    int menuFrame_ = 0;
+    char frameLabel_[128] = {};
 
     // menus
     ImVec2 menuPos_{};
