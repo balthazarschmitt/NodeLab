@@ -29,7 +29,7 @@ public:
     Result draw(Graph& g, int& selected, int& preview);
 
     // The graph was replaced (new/open/undo): drop selection and in-flight interactions.
-    void onGraphReplaced(bool frame);
+    void onGraphReplaced(bool frame);  // also clears the active value field
     void frameAll() { fitPending_ = true; }
     void select(int nodeId);
 
@@ -38,7 +38,7 @@ public:
     ImVec2 canvasCenter() const { return ImVec2(origin_.x + size_.x * 0.5f, origin_.y + size_.y * 0.4f); }
 
     // True while the user is mid-gesture (dragging, editing a value), so undo snapshots wait.
-    bool interacting() const { return mode_ != Mode::None || editing_.node != 0; }
+    bool interacting() const { return mode_ != Mode::None || editing_.node != 0 || activeNode_ != 0; }
 
     bool duplicateSelection(Graph& g);
     bool deleteSelection(Graph& g, int& preview);
@@ -114,6 +114,9 @@ private:
         int frames = 0;       // frames since editing started
         bool wasActive = false;
     } editing_;
+    // Value field currently being dragged. It must keep being submitted even when the mouse leaves
+    // its node, otherwise ImGui drops the active item mid-drag.
+    int activeNode_ = 0, activeParam_ = -1;
 
     // menus
     ImVec2 menuPos_{};

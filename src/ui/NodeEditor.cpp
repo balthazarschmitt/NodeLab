@@ -177,6 +177,8 @@ void NodeEditor::onGraphReplaced(bool frame) {
     order_.clear();
     mode_ = Mode::None;
     editing_ = {};
+    activeNode_ = 0;
+    activeParam_ = -1;
     insertLink_ = 0;
     hoverPin_ = {};
     if (frame) fitPending_ = true;
@@ -296,7 +298,12 @@ bool NodeEditor::drawValueBox(Node& n, int param, const ImRect& box, ImDrawList*
     static bool dragged = false;  // only one value box can be active at a time
     ImGui::InvisibleButton("##val", box.GetSize());
     if (ImGui::IsItemHovered() || ImGui::IsItemActive()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-    if (ImGui::IsItemActivated()) dragged = false;
+    if (ImGui::IsItemActivated()) {
+        dragged = false;
+        activeNode_ = n.id;
+        activeParam_ = param;
+    }
+    if (ImGui::IsItemDeactivated()) activeNode_ = 0, activeParam_ = -1;
     if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f)) {
         const ImGuiIO& io = ImGui::GetIO();
         float speed = (d.max - d.min) / std::max(20.0f, box.GetWidth());
@@ -400,7 +407,8 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
         const char* name = info.inputs[i].name.c_str();
         if (!linked && box.GetWidth() > 0) {
             // Unconnected input with a value: show it as an editable field (label inside).
-            const bool mine = editing_.node == n.id && editing_.param == fp;
+            const bool mine = (editing_.node == n.id && editing_.param == fp) ||
+                              (activeNode_ == n.id && activeParam_ == fp);
             if (interactive && (ownsMouse || mine)) changed |= drawValueBox(n, fp, box, dl, name);
             else drawValueField(dl, box, name, n.paramF(fp), info.params[fp], fs, z, false);
         } else if (showText) {

@@ -1,0 +1,18 @@
+# build\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\slider_drag.txt
+# Drag Invert's Factor field far outside the node (and the canvas); it must keep tracking.
+settle
+move 840 404
+wait 2
+down 0
+wait 2
+move 800 420
+move 700 480
+move 600 520
+move 420 560
+move 300 600
+wait 3
+shot build/smoke/s1_dragging.png
+up 0
+settle
+shot build/smoke/s2_released.png
+quit
