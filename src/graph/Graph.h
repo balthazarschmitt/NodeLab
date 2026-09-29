@@ -41,6 +41,10 @@ public:
     // Returns the new link id, or 0 if rejected (reason in *why when given).
     int connect(int fromNode, int fromPin, int toNode, int toPin, std::string* why = nullptr);
     void removeLink(int linkId);
+    void removeLinksOf(int nodeId);
+    // Reconnects the node's inputs straight to whatever its outputs fed (Blender's dissolve /
+    // Ctrl+X). The node's own links are removed; the node itself stays.
+    void bridgeNode(int nodeId);
     // Drops links whose nodes or pin indices no longer exist. Returns how many were removed.
     int pruneInvalidLinks();
     const Link* inputLink(int nodeId, int pin) const;

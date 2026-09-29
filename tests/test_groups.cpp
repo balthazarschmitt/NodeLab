@@ -117,3 +117,40 @@ TEST_CASE("frames round-trip") {
     CHECK(g2.frames()[0].w == doctest::Approx(300.0f));
     CHECK(g2.frames()[0].color[0] == doctest::Approx(0.5f));
 }
+
+TEST_CASE("bridge (delete with reconnect) and mute") {
+    Chain c;  // src -> invert -> saturation -> output, split R -> saturation.Amount
+    auto before = outputPixel(c.g);
+
+    SUBCASE("muting a node passes its image input through") {
+        c.g.find(c.inv)->muted = true;
+        auto muted = outputPixel(c.g);
+        c.g.find(c.inv)->muted = false;
+        c.g.bridgeNode(c.inv);  // equivalent graph: src straight into saturation
+        c.g.removeNode(c.inv);
+        auto bridged = outputPixel(c.g);
+        for (int k = 0; k < 3; ++k) CHECK(muted[k] == doctest::Approx(bridged[k]));
+        CHECK(muted[0] != doctest::Approx(before[0]));
+    }
+    SUBCASE("deleting consecutive nodes keeps the chain connected") {
+        c.g.bridgeNode(c.inv);
+        c.g.removeNode(c.inv);
+        c.g.bridgeNode(c.sat);
+        c.g.removeNode(c.sat);
+        const Link* l = c.g.inputLink(c.out, 0);
+        REQUIRE(l);
+        CHECK(l->fromNode == c.src);
+    }
+    SUBCASE("flags survive save/load") {
+        Node* n = c.g.find(c.inv);
+        n->muted = true;
+        n->collapsed = true;
+        n->label = "Negative";
+        Graph g2;
+        g2.fromJson(c.g.toJson());
+        Node* m = g2.find(c.inv);
+        CHECK(m->muted);
+        CHECK(m->collapsed);
+        CHECK(m->label == "Negative");
+    }
+}

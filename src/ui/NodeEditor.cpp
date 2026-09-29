@@ -78,6 +78,10 @@ bool isReroute(const Node& n) { return n.info().type == "util.reroute"; }
 
 float nodeHeightGrid(const Node& n) {
     if (isReroute(n)) return kRerouteSize;
+    if (n.collapsed) {
+        int pins = int(std::max(n.info().inputs.size(), n.info().outputs.size()));
+        return std::max(kTitleH + 6.0f, kTitleH * 0.5f + pins * 8.0f + 8.0f);
+    }
     const NodeInfo& info = n.info();
     int rows = int(info.inputs.size() + info.outputs.size());
     for (int i = 0; i < int(info.params.size()); ++i) rows += paramRows(info, i);
@@ -170,6 +174,16 @@ NodeEditor::Layout NodeEditor::layoutFor(const Node& n) const {
     }
     L.max = ImVec2(L.min.x + kNodeW * z, L.min.y + nodeHeightGrid(n) * z);
     L.titleH = kTitleH * z;
+    if (n.collapsed) {
+        // Pins stacked along the sides of the title bar.
+        for (size_t i = 0; i < info.outputs.size(); ++i) L.outPins.emplace_back(L.max.x, L.min.y + (kTitleH * 0.5f + i * 8.0f) * z);
+        for (size_t i = 0; i < info.inputs.size(); ++i) {
+            L.inPins.emplace_back(L.min.x, L.min.y + (kTitleH * 0.5f + i * 8.0f) * z);
+            L.valueBoxes.push_back(ImRect());
+        }
+        L.paramBoxes.resize(info.params.size());
+        return L;
+    }
     float y = L.min.y + (kTitleH + kPad) * z;
     const float row = kRowH * z;
     for (size_t i = 0; i < info.outputs.size(); ++i, y += row) L.outPins.emplace_back(L.max.x, y + row * 0.5f);
@@ -597,10 +611,19 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
     dl->AddRectFilled(ImVec2(L.min.x + 3, L.min.y + 4), ImVec2(L.max.x + 3, L.max.y + 4), IM_COL32(0, 0, 0, 70), round);
     dl->AddRectFilled(L.min, L.max, IM_COL32(40, 40, 46, 245), round);
     ImU32 titleCol = n.id == preview ? IM_COL32(196, 122, 38, 255) : categoryColor(info.category);
-    dl->AddRectFilled(L.min, ImVec2(L.max.x, L.min.y + L.titleH), titleCol, round, ImDrawFlags_RoundCornersTop);
-    if (showText)
-        dl->AddText(ImGui::GetFont(), fs, ImVec2(L.min.x + 8 * z, L.min.y + (L.titleH - fs) * 0.5f),
-                    IM_COL32(245, 245, 250, 255), info.displayName.c_str(), nullptr, 0.0f, &clip);
+    if (n.muted) titleCol = IM_COL32(92, 58, 58, 255);
+    dl->AddRectFilled(L.min, ImVec2(L.max.x, L.min.y + L.titleH), titleCol, round,
+                      n.collapsed ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersTop);
+    if (showText) {
+        std::string title = n.label.empty() ? info.displayName : n.label;
+        if (n.muted) title += "  (muted)";
+        dl->AddText(ImGui::GetFont(), fs, ImVec2(L.min.x + (n.collapsed ? 14 : 8) * z, L.min.y + (L.titleH - fs) * 0.5f),
+                    n.muted ? IM_COL32(200, 170, 170, 255) : IM_COL32(245, 245, 250, 255), title.c_str(), nullptr, 0.0f, &clip);
+    }
+    if (n.muted && !n.collapsed && !L.inPins.empty() && !L.outPins.empty()) {
+        // Red pass-through line like Blender's muted nodes.
+        dl->AddLine(L.inPins[0], L.outPins[0], IM_COL32(200, 70, 70, 200), std::max(1.5f, 2.0f * z));
+    }
     dl->AddRect(L.min, L.max, selected ? IM_COL32(240, 196, 100, 255) : IM_COL32(18, 18, 22, 255), round, 0,
                 selected ? 2.0f : 1.0f);
 
@@ -619,6 +642,12 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
         }
     };
     const ImU32 labelCol = IM_COL32(212, 212, 218, 255);
+    if (n.collapsed) {
+        for (int i = 0; i < int(info.outputs.size()); ++i) drawPin(L.outPins[i], info.outputs[i].type, false);
+        for (int i = 0; i < int(info.inputs.size()); ++i) drawPin(L.inPins[i], info.inputs[i].type, false);
+        ImGui::PopID();
+        return false;
+    }
 
     for (int i = 0; i < int(info.outputs.size()); ++i) {
         ImVec2 p = L.outPins[i];
@@ -629,6 +658,8 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
         }
         bool hov = hoverPin_.node == n.id && hoverPin_.output && hoverPin_.pin == i;
         drawPin(p, info.outputs[i].type, hov);
+        if (n.id == preview && i == previewPin_ && info.outputs.size() > 1)
+            dl->AddCircle(p, std::max(6.0f, 9.0f * z), IM_COL32(236, 150, 50, 255), 0, 2.0f);
     }
 
     for (int i = 0; i < int(info.params.size()); ++i) {
@@ -731,7 +762,7 @@ void NodeEditor::finishLinkDrag(Graph& g, Result& r) {
     hoverPin_ = {};
 }
 
-bool NodeEditor::deleteSelection(Graph& g, int& preview) {
+bool NodeEditor::deleteSelection(Graph& g, int& preview, bool reconnect) {
     bool any = false;
     if (selectedLink_) {
         g.removeLink(selectedLink_);
@@ -739,6 +770,9 @@ bool NodeEditor::deleteSelection(Graph& g, int& preview) {
         any = true;
     }
     for (int id : selection_) {
+        // Deleting a node in the middle of a chain joins its neighbours (one node at a time, so
+        // deleting several consecutive nodes still leaves the chain connected).
+        if (reconnect) g.bridgeNode(id);
         g.removeNode(id);
         if (preview == id) preview = 0;
         any = true;
@@ -764,9 +798,10 @@ bool NodeEditor::duplicateSelection(Graph& g) {
 
 // ---------------------------------------------------------------- main entry
 
-NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview) {
+NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& previewPin) {
     Result r;
     ImGuiIO& io = ImGui::GetIO();
+    previewPin_ = previewPin;
     origin_ = ImGui::GetCursorScreenPos();
     size_ = ImGui::GetContentRegionAvail();
     size_.x = std::max(size_.x, 1.0f);
@@ -820,6 +855,10 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview) {
             dl->AddBezierCubic(a, c1, c2, b, pinColor(t), std::max(1.5f, 2.5f * zoom_));
         }
     }
+    if ((mode_ == Mode::Knife || mode_ == Mode::RerouteCut) && knife_.size() > 1) {
+        ImU32 col = mode_ == Mode::Knife ? IM_COL32(230, 80, 80, 230) : IM_COL32(120, 200, 120, 230);
+        dl->AddPolyline(knife_.data(), int(knife_.size()), col, 0, 2.0f);
+    }
     if (mode_ == Mode::BoxSelect) {
         ImRect box(ImMin(pressPos_, mouse), ImMax(pressPos_, mouse));
         dl->AddRectFilled(box.Min, box.Max, IM_COL32(100, 140, 220, 40));
@@ -832,8 +871,31 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview) {
     }
     dl->PopClipRect();
 
+    // ---- grab (G / Shift+D): selection follows the mouse until a click
+    if (mode_ == Mode::Grab) {
+        ImVec2 delta((mouse.x - pressPos_.x) / zoom_, (mouse.y - pressPos_.y) / zoom_);
+        for (auto& [id, start] : dragStart_)
+            if (Node* n = g.find(id)) {
+                n->x = std::round(start.x + delta.x);
+                n->y = std::round(start.y + delta.y);
+            }
+        r.docChanged = true;
+        updateInsertCandidate(g);
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+            finishDragNodes(g, r);
+            mode_ = Mode::None;
+        } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            for (auto& [id, start] : dragStart_)
+                if (Node* n = g.find(id)) n->x = start.x, n->y = start.y;
+            insertLink_ = 0;
+            mode_ = Mode::None;
+        }
+    }
+
     // ---- press
-    if (bgActivated && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    if (mode_ == Mode::Grab) {
+        // handled above
+    } else if (bgActivated && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         pressPos_ = mouse;
         editing_ = {};
         const PinRef pin = hitPin(g, mouse);
@@ -859,8 +921,20 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview) {
             if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && dynamic_cast<GroupNode*>(g.find(nid))) {
                 r.enterGroup = nid;
                 mode_ = Mode::None;
+            } else if (io.KeyCtrl && io.KeyShift) {
+                // Cycle through the node's outputs in the preview (Blender's Ctrl+Shift+click).
+                const int nOut = std::max<int>(1, int(g.find(nid)->info().outputs.size()));
+                if (preview == nid) {
+                    previewPin = (previewPin + 1) % nOut;
+                } else {
+                    preview = nid;
+                    previewPin = 0;
+                }
+                r.previewChanged = true;
+                mode_ = Mode::None;
             } else if (io.KeyCtrl) {
                 preview = (preview == nid) ? 0 : nid;
+                previewPin = 0;
                 r.previewChanged = true;
                 mode_ = Mode::None;
             } else {
@@ -911,6 +985,9 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview) {
     } else if (bgActivated && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
         pressPos_ = mouse;
         mode_ = Mode::Pan;
+    } else if (bgHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mode_ == Mode::None && (io.KeyCtrl || io.KeyShift)) {
+        knife_ = {mouse};
+        mode_ = io.KeyCtrl ? Mode::Knife : Mode::RerouteCut;
     } else if (bgHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mode_ == Mode::None) {
         menuPos_ = mouse;
         search_[0] = '\0';
@@ -961,6 +1038,11 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview) {
                 mode_ = Mode::None;
             } else if (ImLengthSqr(mouse - pressPos_) > 9.0f) {
                 mode_ = Mode::DragNodes;
+                if (io.KeyAlt) {
+                    // Alt+drag pulls the nodes out of their chain and closes the gap.
+                    for (int id : selection_) g.bridgeNode(id);
+                    r.evalChanged = r.docChanged = true;
+                }
             }
             break;
         case Mode::DragNodes: {
@@ -973,21 +1055,56 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview) {
             r.docChanged = true;
             updateInsertCandidate(g);
             if (!leftDown) {
-                if (insertLink_) {
-                    // Splice the dragged node into the wire it was dropped on.
-                    Link l = *std::find_if(g.links().begin(), g.links().end(),
-                                           [&](const Link& k) { return k.id == insertLink_; });
-                    int id = *selection_.begin();
-                    g.removeLink(l.id);
-                    g.connect(l.fromNode, l.fromPin, id, insertIn_);
-                    g.connect(id, insertOut_, l.toNode, l.toPin);
-                    r.evalChanged = true;
-                }
-                insertLink_ = 0;
+                finishDragNodes(g, r);
                 mode_ = Mode::None;
             }
             break;
         }
+        case Mode::Knife:
+        case Mode::RerouteCut: {
+            if (ImLengthSqr(mouse - knife_.back()) > 16.0f) knife_.push_back(mouse);
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+                // Every wire crossing the stroke is cut, or gets a reroute dot at the crossing.
+                auto cross = [](ImVec2 a, ImVec2 b, ImVec2 c, ImVec2 d, ImVec2& hit) {
+                    float den = (b.x - a.x) * (d.y - c.y) - (b.y - a.y) * (d.x - c.x);
+                    if (std::fabs(den) < 1e-6f) return false;
+                    float t = ((c.x - a.x) * (d.y - c.y) - (c.y - a.y) * (d.x - c.x)) / den;
+                    float u = ((c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x)) / den;
+                    if (t < 0 || t > 1 || u < 0 || u > 1) return false;
+                    hit = ImVec2(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+                    return true;
+                };
+                std::vector<std::pair<Link, ImVec2>> hits;
+                for (const Link& l : g.links()) {
+                    ImVec2 a, b, c1, c2, prev, hit;
+                    linkEnds(g, l, a, b);
+                    bezierPoints(a, b, zoom_, c1, c2);
+                    bool found = false;
+                    prev = a;
+                    for (int s = 1; s <= 24 && !found; ++s) {
+                        ImVec2 p = ImBezierCubicCalc(a, c1, c2, b, s / 24.0f);
+                        for (size_t k = 1; k < knife_.size() && !found; ++k) found = cross(prev, p, knife_[k - 1], knife_[k], hit);
+                        prev = p;
+                    }
+                    if (found) hits.push_back({l, hit});
+                }
+                for (auto& [l, hit] : hits) {
+                    g.removeLink(l.id);
+                    if (mode_ == Mode::RerouteCut) {
+                        ImVec2 gp = toGrid(hit);
+                        if (Node* rr = g.addNode("util.reroute", std::round(gp.x - 10), std::round(gp.y - 10))) {
+                            g.connect(l.fromNode, l.fromPin, rr->id, 0);
+                            g.connect(rr->id, 0, l.toNode, l.toPin);
+                        }
+                    }
+                }
+                if (!hits.empty()) r.evalChanged = r.docChanged = true;
+                knife_.clear();
+                mode_ = Mode::None;
+            }
+            break;
+        }
+        case Mode::Grab: break;
         case Mode::DragLink:
             hoverPin_ = hitPin(g, mouse);
             if (!leftDown) {
@@ -1031,14 +1148,34 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview) {
 
     // ---- keyboard
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !io.WantTextInput) {
-        if (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace)) {
+        const bool noMods = !io.KeyCtrl && !io.KeyShift && !io.KeyAlt;
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace) ||
+            (ImGui::IsKeyPressed(ImGuiKey_X) && noMods)) {
             if (selectedFrame_) {
                 g.removeFrame(selectedFrame_);  // the frame only; its nodes stay
                 selectedFrame_ = 0;
                 r.docChanged = true;
-            } else if (deleteSelection(g, preview)) {
+            } else if (deleteSelection(g, preview, !io.KeyAlt)) {  // Alt: delete without reconnecting
                 r.evalChanged = r.docChanged = true;
             }
+        }
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_C)) copySelection(g);
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_V) && paste(g)) r.evalChanged = r.docChanged = true;
+        if (ImGui::IsKeyPressed(ImGuiKey_M) && noMods && toggleMute(g)) r.evalChanged = r.docChanged = true;
+        if (ImGui::IsKeyPressed(ImGuiKey_H) && noMods && toggleCollapse(g)) r.docChanged = true;
+        if (ImGui::IsKeyPressed(ImGuiKey_G) && noMods && !selection_.empty()) beginGrab(g);
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Shift | ImGuiKey_D) && duplicateSelection(g)) {
+            beginGrab(g);
+            r.evalChanged = r.docChanged = true;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_F) && noMods && makeLinks(g)) r.evalChanged = r.docChanged = true;
+        if (ImGui::IsKeyPressed(ImGuiKey_L) && !io.KeyCtrl && !io.KeyAlt) selectLinked(g, io.KeyShift);
+        if (ImGui::IsKeyPressed(ImGuiKey_Home)) fitFrames_ = 1;
+        if ((ImGui::IsKeyPressed(ImGuiKey_Period) || ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal)) && noMods) frameSelected(g);
+        if (ImGui::IsKeyPressed(ImGuiKey_F2) && selection_.size() == 1) {
+            renameNode_ = *selection_.begin();
+            std::snprintf(renameBuf_, sizeof(renameBuf_), "%s", g.find(renameNode_)->label.c_str());
+            ImGui::OpenPopup("NodeRename");
         }
         if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_G) && groupSelection(g)) r.evalChanged = r.docChanged = true;
         if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Alt | ImGuiKey_G) && ungroupSelection(g))
@@ -1051,12 +1188,12 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview) {
         if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_D) && duplicateSelection(g)) r.evalChanged = r.docChanged = true;
         if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_A))
             for (const auto& [id, n] : g.nodes()) selection_.insert(id);
-        if (ImGui::IsKeyPressed(ImGuiKey_F) && !io.KeyCtrl) fitFrames_ = 1;
     }
 
     drawAddMenu(g, r);
     drawNodeMenu(g, preview, r);
     drawFrameMenu(g, r);
+    drawRenamePopup(g, r);
 
     // Node widgets moved the layout cursor around; leave it at a valid spot covering the canvas.
     ImGui::SetCursorScreenPos(origin_);
@@ -1175,11 +1312,23 @@ void NodeEditor::drawAddMenu(Graph& g, Result& r) {
 
 void NodeEditor::drawNodeMenu(Graph& g, int& preview, Result& r) {
     if (!ImGui::BeginPopup("NodeMenu")) return;
+    bool openRename = false;
     if (ImGui::MenuItem("Duplicate", "Ctrl+D") && duplicateSelection(g)) r.evalChanged = r.docChanged = true;
     if (ImGui::MenuItem(preview == menuNode_ ? "Stop Previewing" : "Preview", "Ctrl+Click")) {
         preview = (preview == menuNode_) ? 0 : menuNode_;
         r.previewChanged = true;
     }
+    ImGui::Separator();
+    if (ImGui::MenuItem("Copy", "Ctrl+C")) copySelection(g);
+    Node* mn = g.find(menuNode_);
+    if (ImGui::MenuItem("Mute", "M", mn && mn->muted) && toggleMute(g)) r.evalChanged = r.docChanged = true;
+    if (ImGui::MenuItem("Collapse", "H", mn && mn->collapsed) && toggleCollapse(g)) r.docChanged = true;
+    if (ImGui::MenuItem("Rename...", "F2") && mn) {
+        renameNode_ = menuNode_;
+        std::snprintf(renameBuf_, sizeof(renameBuf_), "%s", mn->label.c_str());
+        openRename = true;
+    }
+    if (ImGui::MenuItem("Make Links", "F", false, selection_.size() > 1) && makeLinks(g)) r.evalChanged = r.docChanged = true;
     ImGui::Separator();
     if (ImGui::MenuItem("Group", "Ctrl+G") && groupSelection(g)) r.evalChanged = r.docChanged = true;
     const bool isGroup = dynamic_cast<GroupNode*>(g.find(menuNode_)) != nullptr;
@@ -1187,8 +1336,10 @@ void NodeEditor::drawNodeMenu(Graph& g, int& preview, Result& r) {
     if (ImGui::MenuItem("Edit Group", "Tab", false, isGroup)) r.enterGroup = menuNode_;
     if (ImGui::MenuItem("Frame Selection", "Ctrl+J") && frameSelection(g)) r.docChanged = true;
     ImGui::Separator();
-    if (ImGui::MenuItem("Delete", "Del") && deleteSelection(g, preview)) r.evalChanged = r.docChanged = true;
+    if (ImGui::MenuItem("Delete (reconnect)", "Del / X") && deleteSelection(g, preview, true)) r.evalChanged = r.docChanged = true;
+    if (ImGui::MenuItem("Delete", "Alt+Del") && deleteSelection(g, preview, false)) r.evalChanged = r.docChanged = true;
     ImGui::EndPopup();
+    if (openRename) ImGui::OpenPopup("NodeRename");
 }
 
 // ---------------------------------------------------------------- frames
@@ -1335,4 +1486,176 @@ bool NodeEditor::ungroupSelection(Graph& g) {
     }
     if (any) selection_ = restored;
     return any;
+}
+
+// ---------------------------------------------------------------- Blender-style conveniences
+
+void NodeEditor::beginGrab(Graph& g) {
+    dragStart_.clear();
+    for (int id : selection_)
+        if (Node* n = g.find(id)) dragStart_[id] = ImVec2(n->x, n->y);
+    pressPos_ = ImGui::GetIO().MousePos;
+    mode_ = Mode::Grab;
+}
+
+void NodeEditor::finishDragNodes(Graph& g, Result& r) {
+    if (insertLink_) {
+        // Splice the dragged node into the wire it was dropped on.
+        Link l = *std::find_if(g.links().begin(), g.links().end(), [&](const Link& k) { return k.id == insertLink_; });
+        const int id = *selection_.begin();
+        g.removeLink(l.id);
+        g.connect(l.fromNode, l.fromPin, id, insertIn_);
+        g.connect(id, insertOut_, l.toNode, l.toPin);
+        r.evalChanged = r.docChanged = true;
+
+        // Auto-offset: if the spliced node overlaps what comes after it, push the downstream
+        // nodes right to make room (Blender does the same).
+        Node* n = g.find(id);
+        Node* next = g.find(l.toNode);
+        const float gap = 40.0f;
+        if (n && next && next->x < n->x + kNodeW + gap) {
+            const float shift = n->x + kNodeW + gap - next->x;
+            std::set<int> down{l.toNode};
+            std::vector<int> stack{l.toNode};
+            while (!stack.empty()) {
+                int cur = stack.back();
+                stack.pop_back();
+                for (const Link& k : g.links())
+                    if (k.fromNode == cur && k.toNode != id && down.insert(k.toNode).second) stack.push_back(k.toNode);
+            }
+            for (int d : down)
+                if (Node* dn = g.find(d)) dn->x += shift;
+        }
+    }
+    insertLink_ = 0;
+}
+
+void NodeEditor::copySelection(const Graph& g) {
+    if (selection_.empty()) return;
+    nlohmann::json all = g.toJson();
+    nlohmann::json clip = {{"nodelabClipboard", 1}, {"nodes", nlohmann::json::array()}, {"links", nlohmann::json::array()}};
+    for (const auto& n : all["nodes"])
+        if (selection_.count(n["id"].get<int>())) clip["nodes"].push_back(n);
+    for (const auto& l : all["links"])
+        if (selection_.count(l["from"][0].get<int>()) && selection_.count(l["to"][0].get<int>())) clip["links"].push_back(l);
+    ImGui::SetClipboardText(clip.dump().c_str());
+}
+
+bool NodeEditor::paste(Graph& g) {
+    const char* text = ImGui::GetClipboardText();
+    if (!text) return false;
+    nlohmann::json clip = nlohmann::json::parse(text, nullptr, false);
+    if (clip.is_discarded() || !clip.contains("nodelabClipboard")) return false;
+    // Rebuild in a scratch graph, then clone into this one around the mouse.
+    Graph tmp;
+    try {
+        tmp.fromJson({{"nextId", 1}, {"nodes", clip["nodes"]}, {"links", clip["links"]}});
+    } catch (const std::exception&) {
+        return false;
+    }
+    if (tmp.nodes().empty()) return false;
+    float x0 = 1e9f, y0 = 1e9f;
+    for (const auto& [id, n] : tmp.nodes()) x0 = std::min(x0, n->x), y0 = std::min(y0, n->y);
+    ImVec2 at = toGrid(ImGui::GetIO().MousePos);
+    std::map<int, int> remap;
+    for (const auto& [id, n] : tmp.nodes())
+        if (Node* c = g.cloneNode(*n, std::round(n->x - x0 + at.x), std::round(n->y - y0 + at.y))) remap[id] = c->id;
+    for (const Link& l : tmp.links())
+        if (remap.count(l.fromNode) && remap.count(l.toNode)) g.connect(remap[l.fromNode], l.fromPin, remap[l.toNode], l.toPin);
+    selection_.clear();
+    for (auto& [a, b] : remap) selection_.insert(b);
+    selectedLink_ = 0;
+    return true;
+}
+
+bool NodeEditor::toggleMute(Graph& g) {
+    bool any = false, allMuted = true;
+    for (int id : selection_)
+        if (Node* n = g.find(id); n && n->info().outputs.size() && !n->muted) allMuted = false;
+    for (int id : selection_)
+        if (Node* n = g.find(id); n && !n->info().outputs.empty()) {
+            n->muted = !allMuted;
+            any = true;
+        }
+    return any;
+}
+
+bool NodeEditor::toggleCollapse(Graph& g) {
+    bool any = false, allCollapsed = true;
+    for (int id : selection_)
+        if (Node* n = g.find(id); n && !n->collapsed) allCollapsed = false;
+    for (int id : selection_)
+        if (Node* n = g.find(id); n && !isReroute(*n)) {
+            n->collapsed = !allCollapsed;
+            any = true;
+        }
+    return any;
+}
+
+bool NodeEditor::makeLinks(Graph& g) {
+    // Left-to-right, connect each node's first output to the next node's best free input.
+    std::vector<Node*> nodes;
+    for (int id : selection_)
+        if (Node* n = g.find(id)) nodes.push_back(n);
+    std::sort(nodes.begin(), nodes.end(), [](Node* a, Node* b) { return a->x < b->x; });
+    bool any = false;
+    for (size_t i = 0; i + 1 < nodes.size(); ++i) {
+        const Node* a = nodes[i];
+        const Node* b = nodes[i + 1];
+        for (int o = 0; o < int(a->info().outputs.size()); ++o) {
+            int in = pickPin(g, *b, true, a->info().outputs[o].type);
+            if (in >= 0 && !g.inputLink(b->id, in) && g.connect(a->id, o, b->id, in)) {
+                any = true;
+                break;
+            }
+        }
+    }
+    return any;
+}
+
+void NodeEditor::selectLinked(const Graph& g, bool downstream) {
+    std::vector<int> stack(selection_.begin(), selection_.end());
+    while (!stack.empty()) {
+        int cur = stack.back();
+        stack.pop_back();
+        for (const Link& l : g.links()) {
+            int next = downstream ? (l.fromNode == cur ? l.toNode : 0) : (l.toNode == cur ? l.fromNode : 0);
+            if (next && selection_.insert(next).second) stack.push_back(next);
+        }
+    }
+}
+
+void NodeEditor::frameSelected(const Graph& g) {
+    if (selection_.empty()) {
+        fitFrames_ = 1;
+        return;
+    }
+    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+    for (int id : selection_)
+        if (const Node* n = g.find(id)) {
+            x0 = std::min(x0, n->x), y0 = std::min(y0, n->y);
+            x1 = std::max(x1, n->x + kNodeW), y1 = std::max(y1, n->y + nodeHeightGrid(*n));
+        }
+    zoom_ = std::clamp(std::min((size_.x - 80) / (x1 - x0), (size_.y - 80) / (y1 - y0)), kMinZoom, 1.5f);
+    pan_ = ImVec2(size_.x * 0.5f - (x0 + x1) * 0.5f * zoom_, size_.y * 0.5f - (y0 + y1) * 0.5f * zoom_);
+}
+
+void NodeEditor::drawRenamePopup(Graph& g, Result& r) {
+    if (!ImGui::BeginPopup("NodeRename")) return;
+    Node* n = g.find(renameNode_);
+    if (!n) {
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+    ImGui::TextDisabled("Label for %s (empty = default)", n->info().displayName.c_str());
+    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(240);
+    bool done = ImGui::InputText("##label", renameBuf_, sizeof(renameBuf_), ImGuiInputTextFlags_EnterReturnsTrue);
+    if (n->label != renameBuf_) {
+        n->label = renameBuf_;
+        r.docChanged = true;
+    }
+    if (done) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
 }

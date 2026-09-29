@@ -33,6 +33,9 @@ Node* Graph::cloneNode(const Node& src, float x, float y) {
     if (n) {
         n->params = std::move(params);
         if (!extra.is_null()) n->loadExtra(extra);
+        n->muted = src.muted;
+        n->collapsed = src.collapsed;
+        n->label = src.label;
     }
     return n;
 }
@@ -111,6 +114,36 @@ int Graph::pruneInvalidLinks() {
     return int(before - links_.size());
 }
 
+void Graph::removeLinksOf(int nodeId) {
+    std::erase_if(links_, [nodeId](const Link& l) { return l.fromNode == nodeId || l.toNode == nodeId; });
+}
+
+void Graph::bridgeNode(int nodeId) {
+    Node* n = find(nodeId);
+    if (!n) return;
+    const NodeInfo& info = n->info();
+    std::vector<Link> outgoing, incoming;
+    for (const Link& l : links_) {
+        if (l.fromNode == nodeId) outgoing.push_back(l);
+        if (l.toNode == nodeId) incoming.push_back(l);
+    }
+    removeLinksOf(nodeId);
+    for (const Link& out : outgoing) {
+        // Source for this output: an incoming wire on an input of the same type, else any.
+        const PinType t = info.outputs[out.fromPin].type;
+        const Link* src = nullptr;
+        for (int pass = 0; pass < 2 && !src; ++pass)
+            for (const Link& in : incoming) {
+                const PinType it = info.inputs[in.toPin].type;
+                if (pass == 0 ? it == t : true) {
+                    src = &in;
+                    break;
+                }
+            }
+        if (src) connect(src->fromNode, src->fromPin, out.toNode, out.toPin);
+    }
+}
+
 void Graph::removeLink(int linkId) {
     std::erase_if(links_, [linkId](const Link& l) { return l.id == linkId; });
 }
@@ -176,6 +209,9 @@ nlohmann::json Graph::toJson(const fs::path* baseDir) const {
         nlohmann::json extra;
         n->saveExtra(extra);
         if (!extra.is_null()) o["extra"] = extra;
+        if (n->muted) o["muted"] = true;
+        if (n->collapsed) o["collapsed"] = true;
+        if (!n->label.empty()) o["label"] = n->label;
         jn.push_back(o);
     }
     auto& jl = j["links"] = nlohmann::json::array();
@@ -215,6 +251,9 @@ void Graph::fromJson(const nlohmann::json& j, const fs::path* baseDir) {
             }
         }
         if (auto ex = o.find("extra"); ex != o.end()) node->loadExtra(*ex);
+        node->muted = o.value("muted", false);
+        node->collapsed = o.value("collapsed", false);
+        node->label = o.value("label", std::string());
         maxId = std::max(maxId, node->id);
         nodes_[node->id] = std::move(node);
     }

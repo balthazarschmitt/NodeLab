@@ -24,6 +24,7 @@ size_t Evaluator::ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unor
     key += std::to_string(ctx.defaultW) + "x" + std::to_string(ctx.defaultH) + "@" + std::to_string(ctx.scale) + "|";
     key += nlohmann::json(n->params).dump();
     key += n->signatureExtra();
+    if (n->muted) key += "|muted";
 
     std::vector<Value> inputs(info.inputs.size());
     for (size_t i = 0; i < info.inputs.size(); ++i) {
@@ -48,7 +49,24 @@ size_t Evaluator::ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unor
     if (e.sig != sig) {
         if (ctx.cancel && ctx.cancel->load()) throw EvalCancelled();
         std::vector<Value> outs(info.outputs.size());
-        n->evaluate(ctx, inputs, outs);
+        if (n->muted) {
+            // Bypass: each output takes the first connected input of the same type (else any
+            // convertible one), like Blender's mute.
+            for (size_t o = 0; o < outs.size(); ++o) {
+                const PinType t = info.outputs[o].type;
+                for (int pass = 0; pass < 2 && outs[o].empty(); ++pass)
+                    for (size_t i = 0; i < inputs.size(); ++i) {
+                        if (!g.inputLink(nodeId, int(i)) || inputs[i].empty()) continue;
+                        bool ok = pass == 0 ? info.inputs[i].type == t : canConvert(info.inputs[i].type, t);
+                        if (ok) {
+                            outs[o] = inputs[i];
+                            break;
+                        }
+                    }
+            }
+        } else {
+            n->evaluate(ctx, inputs, outs);
+        }
         ++recomputeCount;
         e.sig = sig;
         e.outs = std::move(outs);
@@ -92,13 +110,13 @@ std::vector<Value> Evaluator::gatherInputs(const Graph& g, int nodeId, EvalConte
     return inputs;
 }
 
-ImagePtr Evaluator::evaluateDisplayPath(const Graph& g, const NodePath& path, EvalContext& ctx) {
+ImagePtr Evaluator::evaluateDisplayPath(const Graph& g, const NodePath& path, EvalContext& ctx, int pin) {
     if (path.empty()) return nullptr;
-    if (path.size() == 1) return evaluateDisplay(g, path[0], ctx);
+    if (path.size() == 1) return evaluateDisplay(g, path[0], ctx, pin);
     auto* group = dynamic_cast<GroupNode*>(g.find(path[0]));
     if (!group) return nullptr;
     std::vector<Value> inputs = gatherInputs(g, path[0], ctx);
-    return group->previewInner(ctx, inputs, NodePath(path.begin() + 1, path.end()));
+    return group->previewInner(ctx, inputs, NodePath(path.begin() + 1, path.end()), pin);
 }
 
 void Evaluator::prune(const Graph& g) {
@@ -135,12 +153,13 @@ AsyncEvaluator::~AsyncEvaluator() {
     thread_.join();
 }
 
-void AsyncEvaluator::submit(nlohmann::json graphJson, std::vector<NodePath> targets) {
+void AsyncEvaluator::submit(nlohmann::json graphJson, std::vector<NodePath> targets, std::vector<int> pins) {
+    pins.resize(targets.size(), 0);
     {
         std::lock_guard lock(mutex_);
         // Latest job wins: it replaces any queued (not yet started) job. The running job is left
         // to finish so continuous slider drags still produce steady intermediate results.
-        pending_ = Job{std::move(graphJson), std::move(targets), nextGen_++};
+        pending_ = Job{std::move(graphJson), std::move(targets), std::move(pins), nextGen_++};
     }
     cv_.notify_all();
 }
@@ -181,7 +200,7 @@ void AsyncEvaluator::run() {
             initContextSize(g, ctx);
             for (size_t t = 0; t < job.targets.size(); ++t) {
                 try {
-                    res.images[t] = evaluator_.evaluateDisplayPath(g, job.targets[t], ctx);
+                    res.images[t] = evaluator_.evaluateDisplayPath(g, job.targets[t], ctx, job.pins[t]);
                 } catch (const EvalCancelled&) {
                     throw;
                 } catch (const std::exception& e) {

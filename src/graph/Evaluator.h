@@ -24,7 +24,7 @@ using NodePath = std::vector<int>;  // group ids from the root, then the node id
 class Evaluator {
 public:
     // Like evaluateDisplay, but the node may sit inside (nested) groups.
-    ImagePtr evaluateDisplayPath(const Graph& g, const NodePath& path, EvalContext& ctx);
+    ImagePtr evaluateDisplayPath(const Graph& g, const NodePath& path, EvalContext& ctx, int pin = 0);
     // Values arriving at a node's inputs (fallback params applied), evaluating upstream as needed.
     std::vector<Value> gatherInputs(const Graph& g, int nodeId, EvalContext& ctx);
 
@@ -69,7 +69,8 @@ public:
     AsyncEvaluator& operator=(const AsyncEvaluator&) = delete;
 
     // Evaluates several display targets in one pass (they share the node cache).
-    void submit(nlohmann::json graphJson, std::vector<NodePath> targets);
+    // pins[i]: which output of targets[i] to show (defaults to 0).
+    void submit(nlohmann::json graphJson, std::vector<NodePath> targets, std::vector<int> pins = {});
     // Returns a result once per completed job.
     std::optional<Result> poll();
     bool busy() const { return busy_.load(); }
@@ -78,6 +79,7 @@ private:
     struct Job {
         nlohmann::json graph;
         std::vector<NodePath> targets;
+        std::vector<int> pins;
         uint64_t generation = 0;
     };
     void run();

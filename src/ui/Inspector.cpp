@@ -199,7 +199,7 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
     if (!n) {
         ImGui::TextDisabled("Select a node to edit its settings.");
         ImGui::TextDisabled("Right-click the canvas to add nodes. Ctrl+click a node to preview it.");
-        ImGui::TextDisabled("Drag empty space to pan, wheel to zoom, Shift+drag to box-select, F to frame all.");
+        ImGui::TextDisabled("Drag empty space to pan, wheel to zoom, Shift+drag to box-select, Home to frame all. Help menu lists all shortcuts.");
         return false;
     }
     const NodeInfo& info = n->info();

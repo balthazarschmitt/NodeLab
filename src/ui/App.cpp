@@ -217,8 +217,13 @@ void App::drawFrame() {
     // Kick evaluation after the UI had a chance to change the graph this frame.
     if (evalDirty_) {
         submittedTargets_.clear();
-        for (auto& v : viewers_) submittedTargets_.push_back(v->id == 0 || v->pin.empty() ? resultTarget() : v->pin);
-        eval_->submit(graph_.toJson(), submittedTargets_);
+        std::vector<int> pins;
+        for (auto& v : viewers_) {
+            const bool followsPreview = v->id == 0 || v->pin.empty();
+            submittedTargets_.push_back(followsPreview ? resultTarget() : v->pin);
+            pins.push_back(followsPreview && pathValid(previewPath_) ? previewPin_ : 0);
+        }
+        eval_->submit(graph_.toJson(), submittedTargets_, pins);
         evalDirty_ = false;
     }
     updateTextures();
@@ -296,7 +301,7 @@ void App::drawEditorWindow() {
             std::equal(groupPath_.begin(), groupPath_.end(), previewPath_.begin()))
             preview = previewPath_.back();
         const int previewBefore = preview;
-        NodeEditor::Result r = editor_.draw(g, selected_, preview);
+        NodeEditor::Result r = editor_.draw(g, selected_, preview, previewPin_);
         if (preview != previewBefore || r.previewChanged) {
             previewPath_.clear();
             if (preview) {
@@ -410,8 +415,15 @@ void App::drawMainMenu() {
         if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, editor_.hasSelection()) && editor_.duplicateSelection(g))
             markChanged(true);
         int preview = 0;
-        if (ImGui::MenuItem("Delete", "Del", false, editor_.hasSelection()) && editor_.deleteSelection(g, preview))
+        if (ImGui::MenuItem("Copy", "Ctrl+C", false, editor_.hasSelection())) editor_.copySelection(g);
+        if (ImGui::MenuItem("Paste", "Ctrl+V") && editor_.paste(g)) markChanged(true);
+        if (ImGui::MenuItem("Delete (reconnect)", "Del / X", false, editor_.hasSelection()) && editor_.deleteSelection(g, preview, true))
             markChanged(true);
+        if (ImGui::MenuItem("Delete", "Alt+Del", false, editor_.hasSelection()) && editor_.deleteSelection(g, preview, false))
+            markChanged(true);
+        if (ImGui::MenuItem("Mute", "M", false, editor_.hasSelection()) && editor_.toggleMute(g)) markChanged(true);
+        if (ImGui::MenuItem("Collapse", "H", false, editor_.hasSelection()) && editor_.toggleCollapse(g)) markChanged(false);
+        if (ImGui::MenuItem("Make Links", "F", false, editor_.hasSelection()) && editor_.makeLinks(g)) markChanged(true);
         ImGui::Separator();
         if (ImGui::MenuItem("Group Selected", "Ctrl+G", false, editor_.hasSelection()) && editor_.groupSelection(g))
             markChanged(true);
@@ -441,7 +453,7 @@ void App::drawMainMenu() {
         ImGui::Separator();
         if (ImGui::MenuItem("Reset Layout")) resetLayout_ = true;
         ImGui::Separator();
-        if (ImGui::MenuItem("Frame All Nodes", "F")) editor_.frameAll();
+        if (ImGui::MenuItem("Frame All Nodes", "Home")) editor_.frameAll();
         if (ImGui::MenuItem("Reset Image Zoom", "double-click image")) view_.reset();
         if (ImGui::MenuItem("Clear Node Preview", nullptr, false, !previewPath_.empty())) {
             previewPath_.clear();
@@ -453,8 +465,11 @@ void App::drawMainMenu() {
         ImGui::TextDisabled("NodeLab 0.2 - node-based image manipulation");
         ImGui::Separator();
         ImGui::TextUnformatted("Right-click canvas: add node          Drag pin to empty space: add connected node");
-        ImGui::TextUnformatted("Drag empty space: pan   Wheel: zoom   Shift+drag: box select   F: frame all");
-        ImGui::TextUnformatted("Ctrl+click node: preview   Ctrl+D: duplicate   Del: delete");
+        ImGui::TextUnformatted("Drag empty space: pan   Wheel: zoom   Shift+drag: box select   Home / . : frame all / selected");
+        ImGui::TextUnformatted("Ctrl+click node: preview (Ctrl+Shift+click: next output)   Del / X: delete and reconnect");
+        ImGui::TextUnformatted("Ctrl+C / Ctrl+V   Ctrl+D / Shift+D: duplicate (and move)   G: move   H: collapse   M: mute");
+        ImGui::TextUnformatted("F: make links   L / Shift+L: select upstream / downstream   F2: rename   Alt+drag: pull out");
+        ImGui::TextUnformatted("Ctrl+right-drag: cut wires   Shift+right-drag: add reroutes");
         ImGui::TextUnformatted("Ctrl+G: group   Ctrl+Alt+G: ungroup   Tab: enter / exit group   Ctrl+J: frame");
         ImGui::TextUnformatted("Panels: drag a tab to dock it anywhere or pull it out into its own window");
         ImGui::Separator();

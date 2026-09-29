@@ -44,12 +44,22 @@ Try `examples/demo.nlproj`: the red channel drives saturation, so only red thing
 | Add a node | Right-click the canvas and start typing to search (Up/Down + Enter), or browse the categories |
 | Connect | Drag from a pin to another pin (or onto a node body) |
 | Add a connected node | Drag a wire into empty space, pick a node |
-| Splice into a wire | Drag an unconnected node onto a wire and release (drag off to cancel) |
+| Splice into a wire | Drag an unconnected node onto a wire and release (drag off to cancel); downstream nodes shift to make room |
 | Disconnect | Drag a wire off its input pin |
-| Pan / zoom graph | Drag empty space (or middle-drag) / mouse wheel; F frames everything |
+| Pan / zoom graph | Drag empty space (or middle-drag) / mouse wheel |
 | Select | Click, Shift+click to add, Shift+drag a box, Ctrl+A all |
 | Duplicate / delete | Ctrl+D / Delete (also on the node's right-click menu) |
 | Undo / redo | Ctrl+Z / Ctrl+Y |
+| Delete | Delete / X reconnects the wires around the node; Alt+Delete deletes without reconnecting |
+| Copy / paste | Ctrl+C / Ctrl+V (pastes at the mouse, keeps wires between copied nodes) |
+| Move / duplicate-and-move | G / Shift+D, then click to place (right-click or Esc cancels) |
+| Pull a node out of a chain | Alt+drag it |
+| Mute / collapse / rename | M / H / F2 |
+| Make links | F connects the selected nodes left to right |
+| Select linked | L upstream, Shift+L downstream |
+| Cut wires / add reroutes | Ctrl+right-drag / Shift+right-drag across wires |
+| Preview another output | Ctrl+Shift+click a node cycles through its outputs |
+| Frame all / selected | Home / . |
 | Edit a value | Drag the field sideways (Shift = fine), or click it to type |
 | Preview any node | Ctrl+click it (again to clear) |
 | Group / ungroup | Ctrl+G / Ctrl+Alt+G; Tab (or double-click) enters a group, Tab leaves |

@@ -102,6 +102,7 @@ private:
 
     int selected_ = 0;       // selected node in the current graph
     NodePath previewPath_;   // Ctrl+click preview; empty = Output node
+    int previewPin_ = 0;     // which output of the preview node (Ctrl+Shift+click cycles)
     std::string projectPath_;
     bool modified_ = false;
     bool evalDirty_ = true;

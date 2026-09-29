@@ -14,9 +14,14 @@
 //
 // Mouse:  left-drag empty = pan, Shift+left-drag empty = box select, middle-drag = pan,
 //         wheel = zoom, drag pin = wire (drop on empty space = add-node menu that connects),
-//         drag a node onto a wire = insert it (committed on release), Ctrl+click node = preview,
-//         Shift+click node = add/remove from selection, right-click = context / add menu.
-// Keys:   Delete, Ctrl+D duplicate, Ctrl+A select all, F frame all.
+//         drag a node onto a wire = insert it (committed on release), Alt+drag = pull a node out
+//         of its chain, Ctrl+click node = preview (Ctrl+Shift+click cycles its outputs),
+//         Shift+click node = add/remove from selection, right-click = context / add menu,
+//         Ctrl+right-drag = cut wires, Shift+right-drag = add reroutes on wires.
+// Keys:   Delete / X (reconnects around the node; Alt+Delete doesn't), Ctrl+C / Ctrl+V,
+//         Ctrl+D duplicate, Shift+D duplicate and move, G move, H collapse, M mute, F make links,
+//         L / Shift+L select upstream / downstream, F2 rename, Ctrl+A select all,
+//         Home frame all, . frame selected.
 class NodeEditor {
 public:
     struct Result {
@@ -28,7 +33,8 @@ public:
     };
 
     // selected: the single selected node (0 if none or several). preview: node shown on the right.
-    Result draw(Graph& g, int& selected, int& preview);
+    // previewPin: which output of the preview node is shown (Ctrl+Shift+click cycles it).
+    Result draw(Graph& g, int& selected, int& preview, int& previewPin);
 
     // The graph was replaced (new/open/undo): drop selection and in-flight interactions.
     void onGraphReplaced(bool frame);  // also clears the active value field
@@ -48,14 +54,20 @@ public:
     bool frameSelection(Graph& g);    // Ctrl+J: frame around the selection (or an empty frame)
     int selectedGroup(const Graph& g) const;  // the single selected group node, or 0
     int selectedFrame() const { return selectedFrame_; }
-    bool deleteSelection(Graph& g, int& preview);
+    bool deleteSelection(Graph& g, int& preview, bool reconnect = true);
+    void copySelection(const Graph& g);
+    bool paste(Graph& g);
+    bool toggleMute(Graph& g);
+    bool toggleCollapse(Graph& g);
+    bool makeLinks(Graph& g);
+    void beginGrab(Graph& g);
     bool hasSelection() const { return !selection_.empty() || selectedLink_ != 0; }
 
     nlohmann::json viewState() const;
     void setViewState(const nlohmann::json& j);
 
 private:
-    enum class Mode { None, Pan, BoxSelect, PressNode, DragNodes, DragLink, DragFrame, ResizeFrame };
+    enum class Mode { None, Pan, BoxSelect, PressNode, DragNodes, DragLink, DragFrame, ResizeFrame, Grab, Knife, RerouteCut };
 
     struct PinRef {
         int node = 0, pin = 0;
@@ -95,6 +107,10 @@ private:
     void doFrame(const Graph& g);
     void drawAddMenu(Graph& g, Result& r);
     void drawNodeMenu(Graph& g, int& preview, Result& r);
+    void drawRenamePopup(Graph& g, Result& r);
+    void finishDragNodes(Graph& g, Result& r);  // splice + auto-offset
+    void selectLinked(const Graph& g, bool downstream);
+    void frameSelected(const Graph& g);
 
     // view
     ImVec2 origin_{}, size_{};
@@ -130,6 +146,11 @@ private:
     // its node, otherwise ImGui drops the active item mid-drag.
     int activeNode_ = 0, activeParam_ = -1;
     int enumNode_ = 0, enumParam_ = -1;  // node/param whose dropdown popup is open
+
+    int previewPin_ = 0;
+    std::vector<ImVec2> knife_;  // screen points of a cut / reroute gesture
+    int renameNode_ = 0;
+    char renameBuf_[128] = {};
 
     // frames
     int selectedFrame_ = 0;

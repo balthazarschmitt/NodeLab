@@ -1,0 +1,37 @@
+# build-test\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\qol.txt
+settle
+# splice Invert into the wire (Output shifts right if it overlaps: auto-offset)
+drag 739 345 789 115
+settle
+key m
+settle
+shot build/smoke/k1_muted.png
+key m
+key h
+wait 3
+shot build/smoke/k2_collapsed.png
+key h
+key x
+settle
+shot build/smoke/k3_deleted_reconnected.png
+ctrl on
+key z
+ctrl off
+settle
+# knife: Ctrl+right-drag across the Image Input -> Invert wire
+ctrl on
+drag 674 90 674 200 1
+ctrl off
+settle
+shot build/smoke/k4_cut.png
+ctrl on
+key z
+ctrl off
+settle
+# reroute: Shift+right-drag across the Invert -> Output wire
+shift on
+drag 910 90 910 200 1
+shift off
+settle
+shot build/smoke/k5_reroute.png
+quit
