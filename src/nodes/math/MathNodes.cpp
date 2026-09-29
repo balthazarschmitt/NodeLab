@@ -21,13 +21,13 @@ public:
         auto img = std::make_shared<Image>(w, h);
         parallelFor(h, [&](int y) {
             ImageSampler sa{a.get(), w, h}, sb{b.get(), w, h};
-            ChannelSampler sf{fac.get(), w, h};
+            ChannelSampler sf = paramSampler(*this, 2, fac, w, h);
             for (int x = 0; x < w; ++x) {
                 const float* pa = sa(x, y);
                 const float* pb = sb(x, y);
                 float f = sf(x, y);
                 float* d = img->pixel(size_t(y) * w + x);
-                for (int k = 0; k < 4; ++k) d[k] = pa[k] + (pb[k] - pa[k]) * f;
+                for (int k = 0; k < 4; ++k) d[k] = clamp01(pa[k] + (pb[k] - pa[k]) * f);
             }
         });
         out[0] = Value(ImagePtr(img));

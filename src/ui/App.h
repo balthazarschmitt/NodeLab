@@ -43,6 +43,12 @@ private:
     void handleDrops();
 
     void markChanged(bool eval);
+    void resetHistory();
+    bool commitHistory();
+    bool canUndo() const;
+    void undo();
+    void redo();
+    void restoreSnapshot(const nlohmann::json& j);
     void updateTitle();
     int leftImageNode() const;
     int previewTarget() const;
@@ -73,6 +79,10 @@ private:
     double evalMs_ = 0;
 
     float leftFrac_ = 0.28f, rightFrac_ = 0.28f, editorFrac_ = 0.66f;
+
+    std::vector<nlohmann::json> undo_, redo_;
+    nlohmann::json committed_;  // graph as of the last snapshot
+    bool historyDirty_ = false;
 
     Pending pending_ = Pending::None;
     bool openUnsavedModal_ = false;

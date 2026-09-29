@@ -19,6 +19,8 @@ class Graph {
 public:
     Node* addNode(const std::string& type, float x = 0, float y = 0);
     void removeNode(int id);
+    // New node of the same type and params, offset by (dx, dy). Links are not copied.
+    Node* duplicateNode(int id, float dx, float dy);
     Node* find(int id) const;
 
     // Validates types and cycles; replaces any existing link into (toNode, toPin).

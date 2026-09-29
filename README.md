@@ -42,9 +42,15 @@ Try `examples/demo.nlproj`: the red channel drives saturation, so only red thing
 | Action | How |
 |---|---|
 | Add a node | Right-click the canvas (type to search) |
-| Connect | Drag from an output pin to an input pin |
+| Connect | Drag from a pin to another pin (or onto a node body) |
+| Add a connected node | Drag a wire into empty space, pick a node |
+| Splice into a wire | Drag an unconnected node onto a wire and release (drag off to cancel) |
 | Disconnect | Drag a wire off its input pin |
-| Delete | Select, then press Delete |
+| Pan / zoom graph | Drag empty space (or middle-drag) / mouse wheel; F frames everything |
+| Select | Click, Shift+click to add, Shift+drag a box, Ctrl+A all |
+| Duplicate / delete | Ctrl+D / Delete (also on the node's right-click menu) |
+| Undo / redo | Ctrl+Z / Ctrl+Y |
+| Edit a value | Drag the field sideways (Shift = fine), or click it to type |
 | Preview any node | Ctrl+click it (again to clear) |
 | Zoom / pan images | Mouse wheel / drag; double-click resets. Both panes stay in sync |
 | Import image | File > Import Image, or drop a file on the window |

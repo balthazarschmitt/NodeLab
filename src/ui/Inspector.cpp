@@ -17,16 +17,16 @@ bool editParam(Node& node, int i, float width, bool compact) {
         case ParamKind::Float: {
             float v = node.paramF(i);
             if (compact) {
-                changed = ImGui::DragFloat(label.c_str(), &v, (d.max - d.min) / 300.0f, 0, 0, "%.3f");
+                changed = ImGui::DragFloat(label.c_str(), &v, (d.max - d.min) / 300.0f, d.min, d.max, "%.3f", ImGuiSliderFlags_AlwaysClamp);
             } else {
-                changed = ImGui::SliderFloat(label.c_str(), &v, d.min, d.max, "%.3f");
+                changed = ImGui::SliderFloat(label.c_str(), &v, d.min, d.max, "%.3f", ImGuiSliderFlags_AlwaysClamp);
             }
             if (changed) node.params[i] = v;
             break;
         }
         case ParamKind::Int: {
             int v = node.paramI(i);
-            changed = ImGui::SliderInt(label.c_str(), &v, int(d.min), int(d.max));
+            changed = ImGui::SliderInt(label.c_str(), &v, int(d.min), int(d.max), "%d", ImGuiSliderFlags_AlwaysClamp);
             if (changed) node.params[i] = v;
             break;
         }
@@ -74,6 +74,7 @@ bool drawInspector(Graph& g, int selectedNode) {
     if (!n) {
         ImGui::TextDisabled("Select a node to edit its settings.");
         ImGui::TextDisabled("Right-click the canvas to add nodes. Ctrl+click a node to preview it.");
+        ImGui::TextDisabled("Drag empty space to pan, wheel to zoom, Shift+drag to box-select, F to frame all.");
         return false;
     }
     const NodeInfo& info = n->info();

@@ -30,13 +30,6 @@ FetchContent_Declare(imgui
     GIT_SHALLOW TRUE
     SOURCE_SUBDIR _none)
 
-FetchContent_Declare(imnodes
-    GIT_REPOSITORY https://github.com/Nelarius/imnodes.git
-    GIT_TAG master
-    GIT_SHALLOW TRUE
-    GIT_SUBMODULES ""
-    SOURCE_SUBDIR _none)
-
 FetchContent_Declare(json
     URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz)
 
@@ -47,7 +40,7 @@ FetchContent_Declare(stb
     SOURCE_SUBDIR _none)
 
 # SOURCE_SUBDIR _none: download only, don't add_subdirectory (no usable CMake in those repos).
-FetchContent_MakeAvailable(glfw json imgui imnodes stb)
+FetchContent_MakeAvailable(glfw json imgui stb)
 
 find_package(OpenGL REQUIRED)
 
@@ -58,12 +51,10 @@ add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/imgui_demo.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
-    ${imnodes_SOURCE_DIR}/imnodes.cpp)
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
 target_include_directories(imgui PUBLIC
     ${imgui_SOURCE_DIR}
-    ${imgui_SOURCE_DIR}/backends
-    ${imnodes_SOURCE_DIR})
+    ${imgui_SOURCE_DIR}/backends)
 target_compile_definitions(imgui PUBLIC IMGUI_DEFINE_MATH_OPERATORS)
 target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
 

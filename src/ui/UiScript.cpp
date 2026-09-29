@@ -34,6 +34,10 @@ bool UiScript::load(const std::string& path, std::string& err) {
             float x, y;
             in >> x >> y;
             push("move", x, y);
+        } else if (op == "wheel") {
+            float v = 1;
+            in >> v;
+            push("wheel", v);
         } else if (op == "down" || op == "up") {
             float bt = 0;
             in >> bt;
@@ -77,6 +81,7 @@ static ImGuiKey keyFromName(const std::string& n) {
     if (n == "delete") return ImGuiKey_Delete;
     if (n == "backspace") return ImGuiKey_Backspace;
     if (n == "tab") return ImGuiKey_Tab;
+    if (n.size() == 1 && n[0] >= 'a' && n[0] <= 'z') return ImGuiKey(ImGuiKey_A + (n[0] - 'a'));
     return ImGuiKey_None;
 }
 
@@ -102,6 +107,8 @@ std::string UiScript::step(bool evalIdle, bool& quit) {
         io.AddMousePosEvent(s.a, s.b);
     } else if (s.op == "down" || s.op == "up") {
         io.AddMouseButtonEvent(int(s.a), s.op == "down");
+    } else if (s.op == "wheel") {
+        io.AddMouseWheelEvent(0.0f, s.a);
     } else if (s.op == "text") {
         io.AddInputCharactersUTF8(s.s.c_str());
     } else if (s.op == "key" || s.op == "keyup") {

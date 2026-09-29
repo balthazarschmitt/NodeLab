@@ -9,7 +9,6 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
-#include <imnodes.h>
 
 #include "io/ImageIO.h"
 #include "io/Paths.h"
@@ -77,7 +76,6 @@ int App::run(const RunOptions& opt) {
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImNodes::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
@@ -91,8 +89,6 @@ int App::run(const RunOptions& opt) {
     style.WindowRounding = 0.0f;
     style.FrameRounding = 3.0f;
     style.ScaleAllSizes(dpi);
-    ImNodes::StyleColorsDark();
-    ImNodes::GetStyle().Flags |= ImNodesStyleFlags_GridLines;
 
     const char* uiFont = "C:/Windows/Fonts/segoeui.ttf";
     if (fs::exists(uiFont)) io.Fonts->AddFontFromFileTTF(uiFont, 17.0f * dpi);
@@ -143,7 +139,6 @@ int App::run(const RunOptions& opt) {
     rightTex_.reset();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
-    ImNodes::DestroyContext();
     ImGui::DestroyContext();
     glfwDestroyWindow(window_);
     glfwTerminate();
@@ -180,6 +175,69 @@ void App::drawFrame() {
     }
     updateTextures();
     updateTitle();
+
+    // Snapshot for undo once the current gesture (drag, slider, text entry) has finished, so one
+    // drag becomes one undo step.
+    if (historyDirty_ && !ImGui::IsAnyItemActive() && !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+        !editor_.interacting()) {
+        commitHistory();
+        historyDirty_ = false;
+    }
+}
+
+// ---------------------------------------------------------------- undo / redo (whole-graph snapshots)
+
+void App::resetHistory() {
+    undo_.clear();
+    redo_.clear();
+    committed_ = graph_.toJson();
+    historyDirty_ = false;
+}
+
+bool App::commitHistory() {
+    nlohmann::json cur = graph_.toJson();
+    if (cur == committed_) return false;
+    undo_.push_back(std::move(committed_));
+    if (undo_.size() > 200) undo_.erase(undo_.begin());
+    committed_ = std::move(cur);
+    redo_.clear();
+    return true;
+}
+
+bool App::canUndo() const { return !undo_.empty() || historyDirty_; }
+
+void App::restoreSnapshot(const nlohmann::json& j) {
+    try {
+        graph_.fromJson(j);
+    } catch (const std::exception& e) {
+        status_ = std::string("Undo failed: ") + e.what();
+        return;
+    }
+    editor_.onGraphReplaced(false);
+    if (!graph_.find(preview_)) preview_ = 0;
+    selected_ = 0;
+    modified_ = true;
+    evalDirty_ = true;
+    historyDirty_ = false;
+}
+
+void App::undo() {
+    commitHistory();  // include any not-yet-snapshotted change so it is what gets undone
+    if (undo_.empty()) return;
+    redo_.push_back(std::move(committed_));
+    committed_ = std::move(undo_.back());
+    undo_.pop_back();
+    restoreSnapshot(committed_);
+    status_ = "Undo";
+}
+
+void App::redo() {
+    if (redo_.empty()) return;
+    undo_.push_back(std::move(committed_));
+    committed_ = std::move(redo_.back());
+    redo_.pop_back();
+    restoreSnapshot(committed_);
+    status_ = "Redo";
 }
 
 // ---------------------------------------------------------------- layout
@@ -240,7 +298,10 @@ void App::drawPanes() {
         NodeEditor::Result r = editor_.draw(graph_, selected_, preview_);
         ImGui::EndChild();
         if (r.evalChanged || r.previewChanged) evalDirty_ = true;
-        if (r.docChanged) modified_ = true;
+        if (r.docChanged) {
+            modified_ = true;
+            historyDirty_ = true;
+        }
 
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() - gapY);
         splitter("##split_m", false, split, midW, editorFrac_, contentH, 0.25f, 0.9f);
@@ -262,7 +323,10 @@ void App::drawPanes() {
         std::string label = "Result";
         if (Node* n = graph_.find(preview_)) label = "Preview: " + n->info().displayName + "  (Ctrl+click to clear)";
         ImGui::TextUnformatted(label.c_str());
-        drawImageView("##rightview", rightTex_, view_, evalError_.empty() ? "No output yet" : evalError_.c_str());
+        const char* emptyMsg = !evalError_.empty() ? evalError_.c_str()
+                             : graph_.find(preview_) ? "This node has no output yet - connect its inputs"
+                                                     : "No output yet - connect something to the Output node";
+        drawImageView("##rightview", rightTex_, view_, emptyMsg);
     }
     ImGui::EndChild();
 
@@ -294,7 +358,18 @@ void App::drawMenuBar() {
         if (ImGui::MenuItem("Exit")) requestAction(Pending::Quit);
         ImGui::EndMenu();
     }
+    if (ImGui::BeginMenu("Edit")) {
+        if (ImGui::MenuItem("Undo", "Ctrl+Z", false, canUndo())) undo();
+        if (ImGui::MenuItem("Redo", "Ctrl+Y", false, !redo_.empty())) redo();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, editor_.hasSelection()) && editor_.duplicateSelection(graph_))
+            markChanged(true);
+        if (ImGui::MenuItem("Delete", "Del", false, editor_.hasSelection()) && editor_.deleteSelection(graph_, preview_))
+            markChanged(true);
+        ImGui::EndMenu();
+    }
     if (ImGui::BeginMenu("View")) {
+        if (ImGui::MenuItem("Frame All Nodes", "F")) editor_.frameAll();
         if (ImGui::MenuItem("Reset Zoom", "double-click image")) view_.reset();
         if (ImGui::MenuItem("Clear Node Preview", nullptr, false, preview_ != 0)) {
             preview_ = 0;
@@ -326,6 +401,10 @@ void App::handleShortcuts() {
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_I))
         if (auto p = openFileDialog("Import image", kImageFilter)) importImage(*p);
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_E)) exportResult();
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) undo();
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y) ||
+        ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z))
+        redo();
 }
 
 void App::handleDrops() {
@@ -400,8 +479,9 @@ void App::newProject() {
     Node* in = graph_.addNode(ImageInputNode::staticInfo().type, 40, 80);
     Node* out = graph_.addNode(OutputNode::staticInfo().type, 460, 80);
     graph_.connect(in->id, 0, out->id, 0);
-    editor_.resetPlacement();
+    editor_.onGraphReplaced(true);
     editor_.select(in->id);
+    resetHistory();
     projectPath_.clear();
     preview_ = selected_ = 0;
     view_.reset();
@@ -420,10 +500,11 @@ bool App::openProject(const std::string& path) {
         return false;
     }
     graph_ = std::move(g);
-    editor_.resetPlacement();
+    editor_.onGraphReplaced(true);
     projectPath_ = path;
     selected_ = 0;
     applyUiState(ui);
+    resetHistory();
     modified_ = false;
     evalDirty_ = true;
     evalError_.clear();
@@ -464,7 +545,7 @@ void App::importImage(const std::string& path) {
         }
     if (!target) {
         target = graph_.addNode(ImageInputNode::staticInfo().type);
-        editor_.placeAtScreen(target->id, editor_.canvasCenter());
+        editor_.placeAtScreen(*target, editor_.canvasCenter());
     }
     target->params[0] = path;
     editor_.select(target->id);
@@ -502,6 +583,7 @@ void App::exportResult() {
 
 void App::markChanged(bool eval) {
     modified_ = true;
+    historyDirty_ = true;
     if (eval) evalDirty_ = true;
 }
 
@@ -560,7 +642,8 @@ bool App::saveFramebuffer(const std::string& path) {
 nlohmann::json App::uiState() const {
     return {{"view", {view_.zoom, view_.panX, view_.panY}},
             {"panes", {leftFrac_, rightFrac_, editorFrac_}},
-            {"preview", preview_}};
+            {"preview", preview_},
+            {"graphView", editor_.viewState()}};
 }
 
 void App::applyUiState(const nlohmann::json& j) {
@@ -576,6 +659,7 @@ void App::applyUiState(const nlohmann::json& j) {
             rightFrac_ = std::clamp((*p)[1].get<float>(), 0.1f, 0.45f);
             editorFrac_ = std::clamp((*p)[2].get<float>(), 0.25f, 0.9f);
         }
+        if (auto gv = j.find("graphView"); gv != j.end()) editor_.setViewState(*gv);
         preview_ = j.value("preview", 0);
         if (!graph_.find(preview_)) preview_ = 0;
     } catch (const std::exception&) {

@@ -32,17 +32,36 @@ inline ChannelPtr channelOr(const Value& v, float def) {
 }
 
 // Samples a channel whose resolution may differ from the output (nearest neighbour).
+// Values are clamped to [lo, hi]; parameter-driving channels use the parameter's declared range.
 struct ChannelSampler {
     const Channel* c;
     int outW, outH;
+    float lo = -1e30f, hi = 1e30f;
     float operator()(int x, int y) const {
-        if (c->constant) return c->value;
-        if (c->w == outW && c->h == outH) return c->data[size_t(y) * outW + x];
-        int sx = std::min(c->w - 1, x * c->w / std::max(1, outW));
-        int sy = std::min(c->h - 1, y * c->h / std::max(1, outH));
-        return c->data[size_t(sy) * c->w + sx];
+        float v;
+        if (c->constant) {
+            v = c->value;
+        } else if (c->w == outW && c->h == outH) {
+            v = c->data[size_t(y) * outW + x];
+        } else {
+            int sx = std::min(c->w - 1, x * c->w / std::max(1, outW));
+            int sy = std::min(c->h - 1, y * c->h / std::max(1, outH));
+            v = c->data[size_t(sy) * c->w + sx];
+        }
+        return std::clamp(v, lo, hi);
     }
 };
+
+// Sampler for input pin `pin` of `node`, clamped to the range of the param backing that pin.
+inline ChannelSampler paramSampler(const Node& node, int pin, const ChannelPtr& c, int w, int h) {
+    ChannelSampler s{c.get(), w, h};
+    int fp = node.info().inputs[pin].fallbackParam;
+    if (fp >= 0) {
+        s.lo = node.info().params[fp].min;
+        s.hi = node.info().params[fp].max;
+    }
+    return s;
+}
 
 // Same idea for images: returns a pointer to the RGBA of the nearest source pixel.
 struct ImageSampler {

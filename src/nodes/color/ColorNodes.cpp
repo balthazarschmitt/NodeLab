@@ -2,6 +2,9 @@
 
 using namespace nodeutil;
 
+// Color adjustment nodes produce displayable color, so their outputs are clamped to 0..1, and
+// channels driving a parameter are clamped to that parameter's range.
+
 namespace {
 
 class SplitRGBNode : public Node {
@@ -40,7 +43,8 @@ public:
         for (int k = 0; k < 4; ++k) c[k] = channelOr(in[k], k == 3 ? 1.0f : 0.0f);
         auto img = std::make_shared<Image>(w, h);
         parallelFor(h, [&](int y) {
-            ChannelSampler s[4] = {{c[0].get(), w, h}, {c[1].get(), w, h}, {c[2].get(), w, h}, {c[3].get(), w, h}};
+            ChannelSampler s[4] = {paramSampler(*this, 0, c[0], w, h), paramSampler(*this, 1, c[1], w, h),
+                                   paramSampler(*this, 2, c[2], w, h), paramSampler(*this, 3, c[3], w, h)};
             for (int x = 0; x < w; ++x) {
                 float* d = img->pixel(size_t(y) * w + x);
                 for (int k = 0; k < 4; ++k) d[k] = s[k](x, y);
@@ -63,16 +67,16 @@ public:
         const int w = src->w, h = src->h;
         auto img = std::make_shared<Image>(w, h);
         parallelFor(h, [&](int y) {
-            ChannelSampler sb{br.get(), w, h}, sc{co.get(), w, h};
+            ChannelSampler sb = paramSampler(*this, 1, br, w, h), sc = paramSampler(*this, 2, co, w, h);
             for (int x = 0; x < w; ++x) {
                 size_t i = size_t(y) * w + x;
                 const float* s = src->pixel(i);
                 float* d = img->pixel(i);
                 // Contrast in -1..1 maps to a slope of 0..inf around mid-gray.
-                float c = std::clamp(sc(x, y), -0.999f, 0.999f);
+                float c = std::min(sc(x, y), 0.999f);
                 float slope = (1.0f + c) / (1.0f - c);
                 float b = sb(x, y);
-                for (int k = 0; k < 3; ++k) d[k] = (s[k] - 0.5f) * slope + 0.5f + b;
+                for (int k = 0; k < 3; ++k) d[k] = clamp01((s[k] - 0.5f) * slope + 0.5f + b);
                 d[3] = s[3];
             }
         });
@@ -93,14 +97,14 @@ public:
         const int w = src->w, h = src->h;
         auto img = std::make_shared<Image>(w, h);
         parallelFor(h, [&](int y) {
-            ChannelSampler sa{amt.get(), w, h};
+            ChannelSampler sa = paramSampler(*this, 1, amt, w, h);
             for (int x = 0; x < w; ++x) {
                 size_t i = size_t(y) * w + x;
                 const float* s = src->pixel(i);
                 float* d = img->pixel(i);
                 float a = sa(x, y);
                 float l = luminance(s[0], s[1], s[2]);
-                for (int k = 0; k < 3; ++k) d[k] = l + (s[k] - l) * a;
+                for (int k = 0; k < 3; ++k) d[k] = clamp01(l + (s[k] - l) * a);
                 d[3] = s[3];
             }
         });
@@ -121,13 +125,16 @@ public:
         const int w = src->w, h = src->h;
         auto img = std::make_shared<Image>(w, h);
         parallelFor(h, [&](int y) {
-            ChannelSampler sf{fac.get(), w, h};
+            ChannelSampler sf = paramSampler(*this, 1, fac, w, h);
             for (int x = 0; x < w; ++x) {
                 size_t i = size_t(y) * w + x;
                 const float* s = src->pixel(i);
                 float* d = img->pixel(i);
                 float f = sf(x, y);
-                for (int k = 0; k < 3; ++k) d[k] = s[k] + ((1.0f - s[k]) - s[k]) * f;
+                for (int k = 0; k < 3; ++k) {
+                    float v = clamp01(s[k]);
+                    d[k] = v + ((1.0f - v) - v) * f;
+                }
                 d[3] = s[3];
             }
         });

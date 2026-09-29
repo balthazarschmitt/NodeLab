@@ -19,6 +19,14 @@ Node* Graph::addNode(const std::string& type, float x, float y) {
     return raw;
 }
 
+Node* Graph::duplicateNode(int id, float dx, float dy) {
+    Node* src = find(id);
+    if (!src) return nullptr;
+    Node* n = addNode(src->info().type, src->x + dx, src->y + dy);
+    if (n) n->params = src->params;
+    return n;
+}
+
 void Graph::removeNode(int id) {
     nodes_.erase(id);
     std::erase_if(links_, [id](const Link& l) { return l.fromNode == id || l.toNode == id; });
