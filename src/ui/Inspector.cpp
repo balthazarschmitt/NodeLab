@@ -1,0 +1,108 @@
+#include "ui/Inspector.h"
+
+#include <imgui.h>
+
+#include "io/Paths.h"
+#include "ui/FileDialog.h"
+
+static const char* kImageFilter = "Images|*.png;*.jpg;*.jpeg;*.bmp;*.tga|All files|*.*";
+
+bool editParam(Node& node, int i, float width, bool compact) {
+    const ParamDesc& d = node.info().params[i];
+    std::string label = compact ? "##" + d.name : d.name;
+    bool changed = false;
+    ImGui::PushID(i);
+    ImGui::SetNextItemWidth(width);
+    switch (d.kind) {
+        case ParamKind::Float: {
+            float v = node.paramF(i);
+            if (compact) {
+                changed = ImGui::DragFloat(label.c_str(), &v, (d.max - d.min) / 300.0f, 0, 0, "%.3f");
+            } else {
+                changed = ImGui::SliderFloat(label.c_str(), &v, d.min, d.max, "%.3f");
+            }
+            if (changed) node.params[i] = v;
+            break;
+        }
+        case ParamKind::Int: {
+            int v = node.paramI(i);
+            changed = ImGui::SliderInt(label.c_str(), &v, int(d.min), int(d.max));
+            if (changed) node.params[i] = v;
+            break;
+        }
+        case ParamKind::Bool: {
+            bool v = node.paramB(i);
+            changed = ImGui::Checkbox(label.c_str(), &v);
+            if (changed) node.params[i] = v;
+            break;
+        }
+        case ParamKind::Enum: {
+            int v = node.paramI(i);
+            const char* preview = (v >= 0 && v < int(d.options.size())) ? d.options[v].c_str() : "?";
+            if (ImGui::BeginCombo(label.c_str(), preview)) {
+                for (int k = 0; k < int(d.options.size()); ++k) {
+                    if (ImGui::Selectable(d.options[k].c_str(), k == v)) {
+                        node.params[i] = k;
+                        changed = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            break;
+        }
+        case ParamKind::Path: {
+            std::string path = node.paramS(i);
+            std::string name = path.empty() ? "(none)" : pathToU8(u8ToPath(path).filename());
+            if (ImGui::Button("Browse...")) {
+                if (auto p = openFileDialog("Choose image", kImageFilter)) {
+                    node.params[i] = *p;
+                    changed = true;
+                }
+            }
+            ImGui::SameLine();
+            ImGui::TextUnformatted(name.c_str());
+            if (!path.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", path.c_str());
+            break;
+        }
+    }
+    ImGui::PopID();
+    return changed;
+}
+
+bool drawInspector(Graph& g, int selectedNode) {
+    Node* n = g.find(selectedNode);
+    if (!n) {
+        ImGui::TextDisabled("Select a node to edit its settings.");
+        ImGui::TextDisabled("Right-click the canvas to add nodes. Ctrl+click a node to preview it.");
+        return false;
+    }
+    const NodeInfo& info = n->info();
+    ImGui::Text("%s", info.displayName.c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%s)", info.category.c_str());
+    ImGui::Separator();
+
+    if (info.params.empty()) {
+        ImGui::TextDisabled("No settings.");
+        return false;
+    }
+
+    bool changed = false;
+    const float width = ImGui::GetContentRegionAvail().x * 0.6f;
+    for (int i = 0; i < int(info.params.size()); ++i) {
+        // A param that backs a connected input is overridden by the wire.
+        bool driven = false;
+        for (int p = 0; p < int(info.inputs.size()); ++p)
+            if (info.inputs[p].fallbackParam == i && g.inputLink(n->id, p)) driven = true;
+        if (driven) {
+            ImGui::BeginDisabled();
+            editParam(*n, i, width, false);
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextDisabled("(wired)");
+        } else {
+            changed |= editParam(*n, i, width, false);
+        }
+    }
+    return changed;
+}

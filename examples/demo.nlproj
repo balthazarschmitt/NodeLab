@@ -1,0 +1,8 @@
+{"app":"NodeLab","version":1,"graph":{"nextId":20,
+ "nodes":[{"id":1,"type":"io.image_input","pos":[0,40],"params":{"File":"scene.png"}},
+          {"id":2,"type":"color.split_rgb","pos":[230,160],"params":{}},
+          {"id":3,"type":"color.saturation","pos":[420,20],"params":{"Amount":1.0}},
+          {"id":4,"type":"color.brightness_contrast","pos":[420,200],"params":{"Brightness":0.05,"Contrast":0.3}},
+          {"id":5,"type":"io.output","pos":[650,200],"params":{}}],
+ "links":[{"id":10,"from":[1,0],"to":[2,0]},{"id":11,"from":[1,0],"to":[3,0]},{"id":12,"from":[2,0],"to":[3,1]},
+          {"id":13,"from":[3,0],"to":[4,0]},{"id":14,"from":[4,0],"to":[5,0]}]},"ui":{}}
