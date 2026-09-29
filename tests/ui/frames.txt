@@ -1,0 +1,40 @@
+# build\NodeLab.exe tests\ui\frames.nlproj --script tests\ui\frames.txt
+settle
+# right-click the Image Input node (inside "Source") -> Move to Frame > Target
+click 540 90 1
+wait 5
+move 620 469
+wait 20
+move 900 469
+wait 5
+move 900 500
+wait 5
+click 900 500
+settle
+shot build/smoke/f2_moved.png
+# select the Output node, right-click the Target frame title -> frame menu
+click 1000 104
+wait 5
+click 1000 385 1
+wait 5
+shot build/smoke/f3_framemenu.png
+click 1125 534
+settle
+wait 5
+move 800 300
+wait 3
+wheel -3
+wait 5
+shot build/smoke/f4_moved_here.png
+# Alt+P: pull the (still selected) Output node back out of the frame
+alt on
+key p
+alt off
+settle
+shot build/smoke/f5_removed.png
+ctrl on
+key z
+ctrl off
+settle
+shot build/smoke/f6_undo.png
+quit

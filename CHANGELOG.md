@@ -5,6 +5,9 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 ## Unreleased
 
+- Move nodes between frames: node right-click → Move to Frame, frame right-click → Move Selected
+  Nodes Here, Alt+P removes from frame.
+
 ## 0.3.0 (2026-09-29)
 
 - **Blender node set:**

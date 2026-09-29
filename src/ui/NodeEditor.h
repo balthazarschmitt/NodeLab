@@ -21,7 +21,7 @@
 // Keys:   Delete / X (reconnects around the node; Alt+Delete doesn't), Ctrl+C / Ctrl+V,
 //         Ctrl+D duplicate, Shift+D duplicate and move, G move, H collapse, M mute, F make links,
 //         L / Shift+L select upstream / downstream, F2 rename, Ctrl+A select all,
-//         Home frame all, . frame selected.
+//         Home frame all, . frame selected, Alt+P remove from frame.
 class NodeEditor {
 public:
     struct Result {
@@ -52,6 +52,10 @@ public:
     bool groupSelection(Graph& g);    // Ctrl+G
     bool ungroupSelection(Graph& g);  // Ctrl+Alt+G
     bool frameSelection(Graph& g);    // Ctrl+J: frame around the selection (or an empty frame)
+    // Moves the selected nodes into frame `frameId` (growing it to fit), or out of their frames when
+    // 0 (Alt+P). Membership is geometric (a node belongs to the smallest frame holding its centre).
+    bool moveSelectionToFrame(Graph& g, int frameId);
+    int frameOf(const Graph& g, const Node& n) const;
     int selectedGroup(const Graph& g) const;  // the single selected group node, or 0
     int selectedFrame() const { return selectedFrame_; }
     bool deleteSelection(Graph& g, int& preview, bool reconnect = true);

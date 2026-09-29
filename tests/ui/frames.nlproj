@@ -1,0 +1,92 @@
+{
+  "app": "NodeLab",
+  "version": 1,
+  "graph": {
+    "nextId": 10,
+    "nodes": [
+      {
+        "id": 1,
+        "type": "io.image_input",
+        "pos": [
+          20,
+          20
+        ],
+        "params": {
+          "File": "../../examples/scene.png"
+        }
+      },
+      {
+        "id": 2,
+        "type": "io.output",
+        "pos": [
+          480,
+          20
+        ],
+        "params": {}
+      },
+      {
+        "id": 3,
+        "type": "color.invert",
+        "pos": [
+          200,
+          260
+        ],
+        "params": {
+          "Factor": 1.0
+        }
+      }
+    ],
+    "links": [
+      {
+        "id": 4,
+        "from": [
+          1,
+          0
+        ],
+        "to": [
+          2,
+          0
+        ]
+      }
+    ],
+    "frames": [
+      {
+        "id": 1,
+        "label": "Source",
+        "rect": [
+          0,
+          -10,
+          240,
+          200
+        ],
+        "color": [
+          0.45,
+          0.22,
+          0.22
+        ]
+      },
+      {
+        "id": 2,
+        "label": "Target",
+        "rect": [
+          440,
+          300,
+          260,
+          160
+        ],
+        "color": [
+          0.22,
+          0.4,
+          0.24
+        ]
+      }
+    ]
+  },
+  "ui": {
+    "graphView": [
+      0,
+      0,
+      1
+    ]
+  }
+}

@@ -71,6 +71,7 @@ Try `examples/demo.nlproj`: the red channel drives saturation, so only red thing
 | Group / ungroup | Ctrl+G / Ctrl+Alt+G; Tab (or double-click) enters a group, Tab leaves |
 | Group pins | Select the group (or its Group Input/Output inside) and edit in the Inspector |
 | Frame | Ctrl+J around the selection; drag its title to move it with its nodes, corner to resize, double-click to rename, right-click for color |
+| Move nodes between frames | right-click a node → Move to Frame, or select nodes and right-click a frame title → Move Selected Nodes Here; Alt+P removes from frame |
 | Panels | Drag a panel's tab to dock it elsewhere, or out of the window; View > Reset Layout |
 | Extra viewers | View > New Viewer, then "Pin Selected" to watch any node |
 | Zoom / pan images | Mouse wheel / drag; double-click resets. Both panes stay in sync |

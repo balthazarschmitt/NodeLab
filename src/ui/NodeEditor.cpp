@@ -1181,6 +1181,7 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
         if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Alt | ImGuiKey_G) && ungroupSelection(g))
             r.evalChanged = r.docChanged = true;
         if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_J) && frameSelection(g)) r.docChanged = true;
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Alt | ImGuiKey_P) && moveSelectionToFrame(g, 0)) r.docChanged = true;
         if (ImGui::IsKeyPressed(ImGuiKey_Tab) && !io.KeyCtrl) {
             if (int gid = selectedGroup(g)) r.enterGroup = gid;
             else r.exitGroup = true;
@@ -1335,6 +1336,19 @@ void NodeEditor::drawNodeMenu(Graph& g, int& preview, Result& r) {
     if (ImGui::MenuItem("Ungroup", "Ctrl+Alt+G", false, isGroup) && ungroupSelection(g)) r.evalChanged = r.docChanged = true;
     if (ImGui::MenuItem("Edit Group", "Tab", false, isGroup)) r.enterGroup = menuNode_;
     if (ImGui::MenuItem("Frame Selection", "Ctrl+J") && frameSelection(g)) r.docChanged = true;
+    if (ImGui::BeginMenu("Move to Frame", !g.frames().empty() || (mn && frameOf(g, *mn)))) {
+        const int current = mn ? frameOf(g, *mn) : 0;
+        for (const Frame& f : g.frames()) {
+            ImGui::PushID(f.id);
+            if (ImGui::MenuItem(f.label.c_str(), nullptr, f.id == current) && moveSelectionToFrame(g, f.id))
+                r.docChanged = true;
+            ImGui::PopID();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Remove from Frame", "Alt+P", false, current != 0) && moveSelectionToFrame(g, 0))
+            r.docChanged = true;
+        ImGui::EndMenu();
+    }
     ImGui::Separator();
     if (ImGui::MenuItem("Delete (reconnect)", "Del / X") && deleteSelection(g, preview, true)) r.evalChanged = r.docChanged = true;
     if (ImGui::MenuItem("Delete", "Alt+Del") && deleteSelection(g, preview, false)) r.evalChanged = r.docChanged = true;
@@ -1410,6 +1424,9 @@ void NodeEditor::drawFrameMenu(Graph& g, Result& r) {
             }
             if (ImGui::ColorEdit3("Color", f->color, ImGuiColorEditFlags_NoInputs)) r.docChanged = true;
             ImGui::Separator();
+            if (ImGui::MenuItem("Move Selected Nodes Here", nullptr, false, !selection_.empty()) &&
+                moveSelectionToFrame(g, menuFrame_))
+                r.docChanged = true;
             if (ImGui::MenuItem("Fit to Contents")) {
                 float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
                 for (const auto& [id, n] : g.nodes()) {
@@ -1458,6 +1475,61 @@ bool NodeEditor::frameSelection(Graph& g) {
         }
     Frame* f = g.addFrame(x0 - 24, y0 - kTitleH - 24, x1 - x0 + 48, y1 - y0 + kTitleH + 48);
     selectedFrame_ = f->id;
+    return true;
+}
+
+namespace {
+float nodeWidthGrid(const Node& n) { return isReroute(n) ? kRerouteSize : kNodeW; }
+bool frameHolds(const Frame& f, const Node& n) {
+    float cx = n.x + nodeWidthGrid(n) * 0.5f, cy = n.y + nodeHeightGrid(n) * 0.5f;
+    return cx > f.x && cx < f.x + f.w && cy > f.y && cy < f.y + f.h;
+}
+}  // namespace
+
+int NodeEditor::frameOf(const Graph& g, const Node& n) const {
+    int best = 0;
+    float bestArea = 0;
+    for (const Frame& f : g.frames())
+        if (frameHolds(f, n) && (!best || f.w * f.h < bestArea)) best = f.id, bestArea = f.w * f.h;
+    return best;
+}
+
+bool NodeEditor::moveSelectionToFrame(Graph& g, int frameId) {
+    std::vector<Node*> moving;
+    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+    for (int id : selection_)
+        if (Node* n = g.find(id); n && (frameId ? frameOf(g, *n) != frameId : frameOf(g, *n) != 0)) {
+            moving.push_back(n);
+            x0 = std::min(x0, n->x), y0 = std::min(y0, n->y);
+            x1 = std::max(x1, n->x + nodeWidthGrid(*n)), y1 = std::max(y1, n->y + nodeHeightGrid(*n));
+        }
+    if (moving.empty()) return false;
+    constexpr float kMargin = 24.0f, kGap = 40.0f;
+
+    // Target spot for the selection's top-left corner, keeping the nodes' layout relative to each other.
+    float tx, ty;
+    if (frameId) {
+        Frame* f = g.findFrame(frameId);
+        if (!f) return false;
+        // Next to whatever the frame already holds, or at its top-left when it's empty.
+        float mx1 = -1e9f, my0 = 1e9f;
+        for (const auto& [id, n] : g.nodes())
+            if (!selection_.count(id) && frameOf(g, *n) == frameId)
+                mx1 = std::max(mx1, n->x + nodeWidthGrid(*n)), my0 = std::min(my0, n->y);
+        if (mx1 > -1e9f) tx = mx1 + kGap, ty = my0;
+        else tx = f->x + kMargin, ty = f->y + kTitleH + kMargin;
+        // Grow the frame so the nodes' centres (and bodies) end up inside it.
+        f->w = std::max(f->w, tx + (x1 - x0) + kMargin - f->x);
+        f->h = std::max(f->h, ty + (y1 - y0) + kMargin - f->y);
+    } else {
+        // Out of the frame, just to the right of the outermost frame the nodes were in.
+        float fx1 = -1e9f;
+        for (const Frame& f : g.frames())
+            for (Node* n : moving)
+                if (frameHolds(f, *n)) fx1 = std::max(fx1, f.x + f.w);
+        tx = fx1 + kGap, ty = y0;
+    }
+    for (Node* n : moving) n->x = std::round(n->x - x0 + tx), n->y = std::round(n->y - y0 + ty);
     return true;
 }
 

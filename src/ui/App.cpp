@@ -434,6 +434,7 @@ void App::drawMainMenu() {
         if (ImGui::MenuItem("Exit Group", "Tab", false, !groupPath_.empty())) exitGroup();
         ImGui::Separator();
         if (ImGui::MenuItem("Frame Selected", "Ctrl+J") && editor_.frameSelection(g)) markChanged(false);
+        if (ImGui::MenuItem("Remove from Frame", "Alt+P") && editor_.moveSelectionToFrame(g, 0)) markChanged(false);
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("View")) {
@@ -471,7 +472,7 @@ void App::drawMainMenu() {
         ImGui::TextUnformatted("Ctrl+C / Ctrl+V   Ctrl+D / Shift+D: duplicate (and move)   G: move   H: collapse   M: mute");
         ImGui::TextUnformatted("F: make links   L / Shift+L: select upstream / downstream   F2: rename   Alt+drag: pull out");
         ImGui::TextUnformatted("Ctrl+right-drag: cut wires   Shift+right-drag: add reroutes");
-        ImGui::TextUnformatted("Ctrl+G: group   Ctrl+Alt+G: ungroup   Tab: enter / exit group   Ctrl+J: frame");
+        ImGui::TextUnformatted("Ctrl+G: group   Ctrl+Alt+G: ungroup   Tab: enter / exit group   Ctrl+J: frame   Alt+P: remove from frame");
         ImGui::TextUnformatted("Panels: drag a tab to dock it anywhere or pull it out into its own window");
         ImGui::Separator();
         ImGui::TextUnformatted("Wires: amber = Image, gray = Channel, blue = Number");
