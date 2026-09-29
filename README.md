@@ -47,7 +47,7 @@ Try `examples/demo.nlproj`: the red channel drives saturation, so only red thing
 
 | Action | How |
 |---|---|
-| Add a node | Right-click the canvas and start typing to search (Up/Down + Enter), or browse the categories |
+| Add a node | Right-click the canvas (or Shift+A) and start typing to search (Up/Down + Enter), or browse the categories |
 | Connect | Drag from a pin to another pin (or onto a node body) |
 | Add a connected node | Drag a wire into empty space, pick a node |
 | Splice into a wire | Drag an unconnected node onto a wire and release (drag off to cancel); downstream nodes shift to make room |
@@ -73,7 +73,9 @@ Try `examples/demo.nlproj`: the red channel drives saturation, so only red thing
 | Frame | Ctrl+J around the selection; drag its title to move it with its nodes, corner to resize, double-click to rename, right-click for color |
 | Move nodes between frames | right-click a node → Move to Frame, or select nodes and right-click a frame title → Move Selected Nodes Here; Alt+P removes from frame |
 | Panels | Drag a panel's tab to dock it elsewhere, or out of the window; View > Reset Layout |
-| Extra viewers | View > New Viewer, then "Pin Selected" to watch any node |
+| Extra viewers | Right-click a node → Open in New Viewer (or View > New Viewer) to watch an intermediate result; the viewer's drop-down switches node, "Sync view" pans with the other panes |
+| Eyedropper | "Pick" next to a colour setting (or Pick from Image in the node's colour popup), then click a pixel or drag a rectangle on any image panel for the area's average; right-click / Esc cancels |
+| Guide | Help > Guide or F1 (opens at the selected node's entry); also the Inspector's Guide button |
 | Zoom / pan images | Mouse wheel / drag; double-click resets. Both panes stay in sync |
 | Import image | File > Import Image, or drop a file on the window |
 

@@ -3,13 +3,13 @@ settle
 # right-click the Image Input node (inside "Source") -> Move to Frame > Target
 click 540 90 1
 wait 5
-move 620 469
+move 620 531
 wait 20
-move 900 469
+move 900 531
 wait 5
-move 900 500
+move 900 562
 wait 5
-click 900 500
+click 900 562
 settle
 shot build/smoke/f2_moved.png
 # select the Output node, right-click the Target frame title -> frame menu

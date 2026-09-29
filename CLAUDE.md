@@ -52,6 +52,10 @@ build\nodelab_tests.exe
 - **Unit tests:** `nodelab_tests.exe` (doctest), in `tests/test_*.cpp`.
   - `test_nodes2.cpp` runs every registered node with image and channel inputs on every pin.
   - New nodes are covered automatically, but add behaviour checks for anything non-trivial.
+  - `test_guide.cpp` fails if a node has no `**Display Name**` entry in GUIDE.md. Document new
+    nodes there (and in the README node table). GUIDE.md is compiled into the exe
+    (`cmake/EmbedText.cmake`) and shown by Help > Guide.
+- **Node list:** `NodeLab.exe --list-nodes` prints every node with its pins and params.
 - **Headless render:** `NodeLab.exe --render project.nlproj out.png` renders at full resolution and
   also writes File Output nodes.
 - **Screenshot of the UI:** `NodeLab.exe project.nlproj --screenshot shot.png`.
@@ -73,7 +77,8 @@ src/graph     Node (params, flags), Graph (links, frames, JSON), Evaluator (+Asy
 src/nodes     one file per family: io, color, math (Mix), converter (+Expression), filter, transform,
               matte, texture, utility, group; ImageOps (sampling, box blur, distance transform)
 src/io        image load/save (stb), ImageCache (proxy only; full-res decoded on demand), project files
-src/ui        App (docking, viewers, undo, groups nav), NodeEditor (custom canvas), Inspector,
+src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (custom canvas), Inspector,
+              GuideWindow (renders the embedded GUIDE.md), Eyedropper (pick state),
               ParamWidgets (curve/ramp editors), ImageView, FileDialog (Win32), UiScript
 ```
 
@@ -82,6 +87,7 @@ src/ui        App (docking, viewers, undo, groups nav), NodeEditor (custom canva
 - **Adding a node:**
   1. Write a class with `NODELAB_NODE({type, name, category, inputs, outputs, params})` and `evaluate()`.
   2. Register it in the family's `register*Nodes()`.
+  3. Add a `**Display Name**` entry to GUIDE.md (enforced by `test_guide.cpp`).
 
   The `type` string is saved in projects, so never rename one.
 - **Wires:** Image (RGBA float), Channel (float plane; `constant` = sizeless), or Number.

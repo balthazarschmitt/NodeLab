@@ -35,7 +35,9 @@ private:
         NodePath pin;  // empty = follow the preview / Output node
         GLTexture tex;
         ViewState view;
+        bool sync = false;  // share zoom/pan with Original and Result
         std::string error;
+        ImagePtr shown;     // the image in tex, for the eyedropper
     };
 
     // project lifecycle
@@ -67,6 +69,8 @@ private:
     void exitGroup();
     void setGroupPath(std::vector<int> path);
     std::string pathLabel(const NodePath& p);
+    void openViewer(NodePath pin);
+    void finishPick(const PickRequest& pick);  // applies an eyedropper pick to its Color param
 
     void markChanged(bool eval);
     void resetHistory();

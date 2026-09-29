@@ -89,6 +89,14 @@ add_custom_target(nodelab_version
     BYPRODUCTS ${NODELAB_VERSION_CPP}
     COMMENT "Stamping version ${PROJECT_VERSION}")
 
+# GUIDE.md is compiled in so Help > Guide works without files next to the exe.
+set(NODELAB_GUIDE_CPP ${CMAKE_BINARY_DIR}/generated/Guide.cpp)
+add_custom_command(OUTPUT ${NODELAB_GUIDE_CPP}
+    COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_SOURCE_DIR}/GUIDE.md -DOUT=${NODELAB_GUIDE_CPP} -DNAME=kGuideMarkdown
+        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
+    DEPENDS ${CMAKE_SOURCE_DIR}/GUIDE.md ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
+    COMMENT "Embedding GUIDE.md")
+
 # Windows can't overwrite a running exe but can rename it; move the old one aside before linking
 # so a single build/ folder works while NodeLab is open.
 function(nodelab_allow_relink target)
@@ -99,6 +107,7 @@ endfunction()
 # ---------------------------------------------------------------- core library (no GUI)
 add_library(nodelab_core STATIC
     ${NODELAB_VERSION_CPP}
+    ${NODELAB_GUIDE_CPP}
     src/core/Value.cpp
     src/core/Curve.cpp
     src/core/Ramp.cpp
@@ -134,6 +143,7 @@ add_executable(NodeLab
     src/ui/ImageView.cpp
     src/ui/NodeEditor.cpp
     src/ui/Inspector.cpp
+    src/ui/GuideWindow.cpp
     src/ui/FileDialog.cpp
     src/ui/UiScript.cpp
     src/ui/ParamWidgets.cpp)
@@ -164,7 +174,7 @@ if(NODELAB_BUILD_TESTS)
     FetchContent_MakeAvailable(doctest)
 
     enable_testing()
-    add_executable(nodelab_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp tests/test_groups.cpp tests/test_nodes2.cpp tests/test_version.cpp)
+    add_executable(nodelab_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp tests/test_groups.cpp tests/test_nodes2.cpp tests/test_version.cpp tests/test_guide.cpp)
     target_include_directories(nodelab_tests PRIVATE ${doctest_SOURCE_DIR})
     target_link_libraries(nodelab_tests PRIVATE nodelab_core)
     nodelab_allow_relink(nodelab_tests)

@@ -55,6 +55,24 @@ static int renderHeadless(const std::string& project, const std::string& outPath
 
 // The Release exe is a GUI app (-mwindows) with no console; when started from a terminal for a
 // command-line mode, reattach to that terminal so printf output shows up.
+// NodeLab.exe --list-nodes : every registered node with its pins and params (for keeping GUIDE.md
+// in sync). Hidden internal nodes are skipped.
+static void listNodes() {
+    const NodeRegistry& reg = NodeRegistry::instance();
+    for (const std::string& type : reg.types()) {
+        const NodeInfo* inf = reg.find(type);
+        if (!inf || inf->hidden) continue;
+        std::printf("%s | %s | %s\n", inf->category.c_str(), inf->displayName.c_str(), type.c_str());
+        for (const PinDesc& p : inf->inputs) std::printf("  in  %s (%s)\n", p.name.c_str(), pinTypeName(p.type));
+        for (const PinDesc& p : inf->outputs) std::printf("  out %s (%s)\n", p.name.c_str(), pinTypeName(p.type));
+        for (const ParamDesc& p : inf->params) {
+            std::string opts;
+            for (const std::string& o : p.options) opts += (opts.empty() ? "" : ", ") + o;
+            std::printf("  param %s = %s [%g..%g] %s\n", p.name.c_str(), p.def.dump().c_str(), p.min, p.max, opts.c_str());
+        }
+    }
+}
+
 static void attachParentConsole() {
 #ifdef _WIN32
     // Output already redirected to a pipe or file: leave it there.
@@ -74,6 +92,11 @@ int main(int argc, char** argv) {
         return 0;
     }
     registerAllNodes();
+    if (argc >= 2 && std::string(argv[1]) == "--list-nodes") {
+        attachParentConsole();
+        listNodes();
+        return 0;
+    }
     // Note: argv is in the ANSI code page on Windows; fine for ASCII paths in headless mode.
     if (argc >= 4 && std::string(argv[1]) == "--render") {
         attachParentConsole();

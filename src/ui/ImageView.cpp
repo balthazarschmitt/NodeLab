@@ -1,6 +1,7 @@
 #include "ui/ImageView.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 #include <vector>
 
@@ -49,7 +50,99 @@ void GLTexture::upload(const Image& img) {
     h_ = img.h;
 }
 
-void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const char* emptyText) {
+void averageColor(const Image& img, int x0, int y0, int x1, int y1, float rgb[3]) {
+    if (x0 > x1) std::swap(x0, x1);
+    if (y0 > y1) std::swap(y0, y1);
+    x0 = std::clamp(x0, 0, img.w - 1);
+    x1 = std::clamp(x1, 0, img.w - 1);
+    y0 = std::clamp(y0, 0, img.h - 1);
+    y1 = std::clamp(y1, 0, img.h - 1);
+    double sum[3] = {0, 0, 0};
+    for (int y = y0; y <= y1; ++y)
+        for (int x = x0; x <= x1; ++x) {
+            const float* p = img.pixel(size_t(y) * img.w + x);
+            for (int k = 0; k < 3; ++k) sum[k] += p[k];
+        }
+    const double n = double(x1 - x0 + 1) * (y1 - y0 + 1);
+    for (int k = 0; k < 3; ++k) rgb[k] = float(sum[k] / n);
+}
+
+namespace {
+// One eyedropper drag at a time, across all image views.
+ImGuiID gPickDragId = 0;
+int gPickX0 = 0, gPickY0 = 0;
+
+void drawPicker(PickRequest& pick, ImGuiID id, ImVec2 imgMin, float scale, const GLTexture& tex, ImDrawList* dl) {
+    const Image& img = *pick.image;
+    const ImGuiIO& io = ImGui::GetIO();
+    // Screen <-> image pixels. The image may differ from the texture size if a new result is
+    // arriving, so map through the texture's size.
+    const float sx = float(img.w) / tex.width(), sy = float(img.h) / tex.height();
+    auto toPixel = [&](ImVec2 p, int& x, int& y) {
+        x = std::clamp(int(std::floor((p.x - imgMin.x) / scale * sx)), 0, img.w - 1);
+        y = std::clamp(int(std::floor((p.y - imgMin.y) / scale * sy)), 0, img.h - 1);
+    };
+    auto toScreen = [&](float x, float y) { return ImVec2(imgMin.x + x / sx * scale, imgMin.y + y / sy * scale); };
+
+    const bool hovered = ImGui::IsItemHovered();
+    int mx, my;
+    toPixel(io.MousePos, mx, my);
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+        pick.cancelled = true;
+        gPickDragId = 0;
+        return;
+    }
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        gPickDragId = id;
+        gPickX0 = mx;
+        gPickY0 = my;
+    }
+    const bool dragging = gPickDragId == id;
+    if (!hovered && !dragging) return;
+
+    int x0 = mx, y0 = my, x1 = mx, y1 = my;
+    if (dragging) {
+        x0 = std::min(gPickX0, mx);
+        y0 = std::min(gPickY0, my);
+        x1 = std::max(gPickX0, mx);
+        y1 = std::max(gPickY0, my);
+    }
+    float rgb[3];
+    averageColor(img, x0, y0, x1, y1, rgb);
+
+    // Outline the sampled pixels: the rectangle being dragged, or the pixel under the cursor
+    // (at least a few screen pixels big so it shows when zoomed out).
+    ImVec2 a = toScreen(float(x0), float(y0)), b = toScreen(float(x1 + 1), float(y1 + 1));
+    if (b.x - a.x < 5) a.x -= 2, b.x += 2;
+    if (b.y - a.y < 5) a.y -= 2, b.y += 2;
+    dl->AddRect(ImVec2(a.x - 1, a.y - 1), ImVec2(b.x + 1, b.y + 1), IM_COL32(0, 0, 0, 200));
+    dl->AddRect(a, b, IM_COL32(255, 255, 255, 230));
+
+    // Swatch and values next to the cursor.
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.3f  %.3f  %.3f", rgb[0], rgb[1], rgb[2]);
+    const float sw = 26.0f;
+    const ImVec2 ts = ImGui::CalcTextSize(buf);
+    ImVec2 p(io.MousePos.x + 18, io.MousePos.y + 18);
+    const ImVec2 clipMax = dl->GetClipRectMax();
+    if (p.x + sw + ts.x + 16 > clipMax.x) p.x = io.MousePos.x - 18 - sw - ts.x - 16;
+    if (p.y + sw + 6 > clipMax.y) p.y = io.MousePos.y - 18 - sw - 6;
+    dl->AddRectFilled(p, ImVec2(p.x + sw + ts.x + 16, p.y + sw + 6), IM_COL32(20, 20, 24, 230), 4);
+    const auto c8 = [](float v) { return int(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
+    dl->AddRectFilled(ImVec2(p.x + 3, p.y + 3), ImVec2(p.x + 3 + sw, p.y + 3 + sw),
+                      IM_COL32(c8(rgb[0]), c8(rgb[1]), c8(rgb[2]), 255), 3);
+    dl->AddText(ImVec2(p.x + sw + 10, p.y + 3 + (sw - ts.y) * 0.5f), IM_COL32(230, 230, 235, 255), buf);
+    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+
+    if (dragging && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+        std::copy(rgb, rgb + 3, pick.rgb);
+        pick.done = true;
+        gPickDragId = 0;
+    }
+}
+}  // namespace
+
+void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const char* emptyText, PickRequest* pick) {
     ImVec2 origin = ImGui::GetCursorScreenPos();
     ImVec2 avail = ImGui::GetContentRegionAvail();
     avail.x = std::max(avail.x, 1.0f);
@@ -71,6 +164,7 @@ void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const 
     const ImVec2 center(origin.x + avail.x * 0.5f, origin.y + avail.y * 0.5f);
 
     ImGuiIO& io = ImGui::GetIO();
+    const bool picking = pick && pick->image && !pick->image->empty();
     if (ImGui::IsItemHovered()) {
         if (io.MouseWheel != 0.0f) {
             // Zoom around the cursor: keep the image point under the mouse fixed.
@@ -84,10 +178,10 @@ void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const 
             view.panX = (mx - ix * scaleNew) / view.zoom;
             view.panY = (my - iy * scaleNew) / view.zoom;
         }
-        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) view.reset();
+        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !picking) view.reset();
     }
     if (ImGui::IsItemActive() &&
-        (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f) || ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f))) {
+        ((ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f) && !picking) || ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f))) {
         view.panX += io.MouseDelta.x / view.zoom;
         view.panY += io.MouseDelta.y / view.zoom;
     }
@@ -97,5 +191,6 @@ void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const 
     const float cx = center.x + view.panX * view.zoom, cy = center.y + view.panY * view.zoom;
     dl->PushClipRect(origin, end, true);
     dl->AddImage((ImTextureID)(intptr_t)tex.id(), ImVec2(cx - hw, cy - hh), ImVec2(cx + hw, cy + hh));
+    if (picking) drawPicker(*pick, ImGui::GetItemID(), ImVec2(cx - hw, cy - hh), scale, tex, dl);
     dl->PopClipRect();
 }

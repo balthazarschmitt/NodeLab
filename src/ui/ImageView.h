@@ -31,6 +31,20 @@ struct ViewState {
     void reset() { *this = ViewState{}; }
 };
 
+// Eyedropper mode for drawImageView: left click picks a pixel, left drag averages a rectangle
+// (middle drag still pans), right-click cancels. A swatch next to the cursor shows the colour.
+struct PickRequest {
+    const Image* image = nullptr;  // the image the texture shows (same size), sampled for colours
+    bool done = false;             // out: a pick finished; rgb holds it
+    bool cancelled = false;        // out: right-click
+    float rgb[3] = {0, 0, 0};
+};
+
+// Average RGB of the pixels in the inclusive rectangle (clamped to the image).
+void averageColor(const Image& img, int x0, int y0, int x1, int y1, float rgb[3]);
+
 // Draws the texture fitted to the current region with zoom/pan interaction.
 // Wheel zooms around the cursor, left/middle drag pans, double-click resets.
-void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const char* emptyText);
+// With pick set (and pick->image non-null), left mouse picks colours instead of panning.
+void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const char* emptyText,
+                   PickRequest* pick = nullptr);

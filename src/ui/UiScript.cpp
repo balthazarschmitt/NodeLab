@@ -1,5 +1,8 @@
 #include "ui/UiScript.h"
 
+#include <cctype>
+#include <cstdlib>
+
 #include <fstream>
 #include <sstream>
 
@@ -84,6 +87,10 @@ static ImGuiKey keyFromName(const std::string& n) {
     if (n == "up") return ImGuiKey_UpArrow;
     if (n == "down") return ImGuiKey_DownArrow;
     if (n.size() == 1 && n[0] >= 'a' && n[0] <= 'z') return ImGuiKey(ImGuiKey_A + (n[0] - 'a'));
+    if (n.size() >= 2 && n[0] == 'f' && std::isdigit(static_cast<unsigned char>(n[1]))) {
+        const int k = std::atoi(n.c_str() + 1);
+        if (k >= 1 && k <= 12) return ImGuiKey(ImGuiKey_F1 + (k - 1));
+    }
     return ImGuiKey_None;
 }
 

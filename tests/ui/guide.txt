@@ -1,0 +1,14 @@
+# build\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\guide.txt
+settle
+# select the Invert node and press F1: the guide opens at its entry
+click 700 342
+wait 3
+key f1
+wait 10
+shot build/smoke/g1_invert.png
+# search filters the sections and highlights the words
+click 200 123
+text green screen
+wait 5
+shot build/smoke/g2_search.png
+quit

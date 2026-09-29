@@ -7,7 +7,9 @@
 
 #include "io/Paths.h"
 #include "nodes/group/GroupNodes.h"
+#include "ui/Eyedropper.h"
 #include "ui/FileDialog.h"
+#include "ui/GuideWindow.h"
 #include "ui/ParamWidgets.h"
 
 static const char* kImageFilter = "Images|*.png;*.jpg;*.jpeg;*.bmp;*.tga|All files|*.*";
@@ -94,6 +96,14 @@ bool editParam(Node& node, int i, float width, bool compact) {
                 node.params[i] = nlohmann::json::array({c[0], c[1], c[2]});
                 changed = true;
             }
+            ImGui::SameLine();
+            const bool picking = eyedropper().is(node.id, i);
+            if (picking) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            if (ImGui::SmallButton(picking ? "Picking..." : "Pick")) eyedropper().toggle(node.id, i);
+            if (picking) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Eyedropper: click a pixel in the Original, Result or a viewer,\n"
+                                  "or drag a rectangle to use its average colour. Right-click or Esc cancels.");
             break;
         }
         case ParamKind::SavePath: {
@@ -206,6 +216,9 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
     ImGui::Text("%s", info.displayName.c_str());
     ImGui::SameLine();
     ImGui::TextDisabled("(%s)", info.category.c_str());
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Guide")) openGuide(info.displayName);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("What this node does (F1)");
     if (info.type == "conv.expression" || info.type == "conv.image_expression") {
         ImGui::SameLine();
         ImGui::TextDisabled("(?)");

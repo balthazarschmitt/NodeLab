@@ -1,0 +1,38 @@
+# build\NodeLab.exe tests\ui\pick.nlproj --script tests\ui\pick.txt
+settle
+# select Difference Key, press its Pick button, hover the red square in the Original
+click 640 234
+wait 5
+click 990 662
+wait 3
+move 270 520
+wait 3
+shot build/smoke/p1_hover.png
+click 270 520
+wait 5
+settle
+shot build/smoke/p2_picked.png
+# pick again, dragging a rectangle over the sky (average)
+click 990 662
+wait 3
+move 60 340
+down 0
+wait 2
+move 120 360
+wait 2
+move 200 390
+wait 3
+shot build/smoke/p3_drag.png
+up 0
+wait 5
+settle
+shot build/smoke/p4_area.png
+# right-click Hue Shift -> Open in New Viewer: the intermediate result
+click 640 78 1
+wait 5
+click 738 166
+wait 5
+settle
+wait 5
+shot build/smoke/p5_viewer.png
+quit

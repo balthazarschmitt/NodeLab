@@ -131,4 +131,6 @@ public:
     bool muted = false;      // M: bypass, inputs pass straight through to matching outputs
     bool collapsed = false;  // H: drawn as a compact title bar
     std::string label;       // F2: custom title (empty = type name)
+
+    const std::string& title() const { return label.empty() ? info().displayName : label; }
 };

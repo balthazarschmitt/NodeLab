@@ -12,7 +12,9 @@
 #include "graph/NodeRegistry.h"
 #include "nodes/group/GroupNodes.h"
 #include "io/Paths.h"
+#include "ui/Eyedropper.h"
 #include "ui/FileDialog.h"
+#include "ui/GuideWindow.h"
 
 namespace {
 
@@ -558,6 +560,11 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
                     for (int k = 0; k < 3; ++k) c[k] = std::clamp(c[k], d.hardMin, d.hardMax);
                     n.params[i] = nlohmann::json::array({c[0], c[1], c[2]});
                     changed = true;
+                }
+                if (ImGui::Button(eyedropper().is(n.id, i) ? "Cancel Eyedropper" : "Pick from Image",
+                                  ImVec2(ImGui::GetContentRegionAvail().x, 0))) {
+                    eyedropper().toggle(n.id, i);
+                    ImGui::CloseCurrentPopup();
                 }
                 ImGui::EndPopup();
             }
@@ -1147,6 +1154,15 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
     }
 
     // ---- keyboard
+    // Blender's add menu, opened at the mouse like a right-click on empty canvas. Like Blender it
+    // goes to the editor under the mouse, so it also works before the canvas has been clicked.
+    if ((ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) || ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)) &&
+        !io.WantTextInput && mode_ == Mode::None && ImGui::IsKeyChordPressed(ImGuiMod_Shift | ImGuiKey_A)) {
+        menuPos_ = ImGui::GetMousePos();
+        search_[0] = 0;
+        menuConnect_ = {};
+        ImGui::OpenPopup("AddNode");
+    }
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !io.WantTextInput) {
         const bool noMods = !io.KeyCtrl && !io.KeyShift && !io.KeyAlt;
         if (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace) ||
@@ -1313,12 +1329,15 @@ void NodeEditor::drawAddMenu(Graph& g, Result& r) {
 
 void NodeEditor::drawNodeMenu(Graph& g, int& preview, Result& r) {
     if (!ImGui::BeginPopup("NodeMenu")) return;
+    const Node* mn0 = g.find(menuNode_);
     bool openRename = false;
     if (ImGui::MenuItem("Duplicate", "Ctrl+D") && duplicateSelection(g)) r.evalChanged = r.docChanged = true;
     if (ImGui::MenuItem(preview == menuNode_ ? "Stop Previewing" : "Preview", "Ctrl+Click")) {
         preview = (preview == menuNode_) ? 0 : menuNode_;
         r.previewChanged = true;
     }
+    if (ImGui::MenuItem("Open in New Viewer")) r.openViewer = menuNode_;
+    if (ImGui::MenuItem("Guide", "F1") && mn0) openGuide(mn0->info().displayName);
     ImGui::Separator();
     if (ImGui::MenuItem("Copy", "Ctrl+C")) copySelection(g);
     Node* mn = g.find(menuNode_);

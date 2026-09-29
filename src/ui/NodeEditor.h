@@ -21,7 +21,7 @@
 // Keys:   Delete / X (reconnects around the node; Alt+Delete doesn't), Ctrl+C / Ctrl+V,
 //         Ctrl+D duplicate, Shift+D duplicate and move, G move, H collapse, M mute, F make links,
 //         L / Shift+L select upstream / downstream, F2 rename, Ctrl+A select all,
-//         Home frame all, . frame selected, Alt+P remove from frame.
+//         Home frame all, . frame selected, Alt+P remove from frame, Shift+A add menu.
 class NodeEditor {
 public:
     struct Result {
@@ -30,6 +30,7 @@ public:
         bool previewChanged = false;  // Ctrl+click toggled the preview node
         int enterGroup = 0;           // Tab / double-click on a group node: open it
         bool exitGroup = false;       // Tab with no group selected: go up one level
+        int openViewer = 0;           // node menu "Open in New Viewer": pin this node in a new viewer
     };
 
     // selected: the single selected node (0 if none or several). preview: node shown on the right.

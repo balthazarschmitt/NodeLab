@@ -7,6 +7,15 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 - Move nodes between frames: node right-click → Move to Frame, frame right-click → Move Selected
   Nodes Here, Alt+P removes from frame.
+- **Guide:** GUIDE.md explains every node, colour space and data type, with recipes. It is built
+  into the app as Help > Guide (F1), with a contents tree and search; F1 and the Inspector's Guide
+  button open it at the selected node.
+- **Eyedropper** on every colour setting: click a pixel or drag a rectangle (area average) on the
+  Original, Result or a viewer.
+- **Intermediate results:** node right-click → Open in New Viewer; viewers get a node drop-down
+  and a Sync view option.
+- Shift+A opens the add-node menu at the mouse, as in Blender.
+- `--list-nodes` prints every node with its pins and settings.
 
 ## 0.3.0 (2026-09-29)
 
