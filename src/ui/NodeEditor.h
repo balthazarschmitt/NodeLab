@@ -143,6 +143,7 @@ private:
     PinRef menuConnect_;  // wire dragged into empty space: connect the chosen node to this pin
     int menuNode_ = 0;
     char search_[64] = {};
+    int searchSel_ = 0;  // highlighted search result (Up/Down, Enter)
 };
 
 ImU32 pinColor(PinType t);

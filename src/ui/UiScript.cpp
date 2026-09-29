@@ -81,6 +81,8 @@ static ImGuiKey keyFromName(const std::string& n) {
     if (n == "delete") return ImGuiKey_Delete;
     if (n == "backspace") return ImGuiKey_Backspace;
     if (n == "tab") return ImGuiKey_Tab;
+    if (n == "up") return ImGuiKey_UpArrow;
+    if (n == "down") return ImGuiKey_DownArrow;
     if (n.size() == 1 && n[0] >= 'a' && n[0] <= 'z') return ImGuiKey(ImGuiKey_A + (n[0] - 'a'));
     return ImGuiKey_None;
 }

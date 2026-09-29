@@ -26,10 +26,21 @@ ImagePtr ImageCache::get(const std::string& pathU8, bool proxy, std::string* err
         if (err) *err = e.error;
         return nullptr;
     }
+    e.fullW = full->w;
+    e.fullH = full->h;
     if (!e.proxy) e.proxy = downscaleToFit(full, kProxyEdge);
     if (proxy) return e.proxy;
     e.full = full;
     return full;
+}
+
+bool ImageCache::fullSize(const std::string& pathU8, int& w, int& h) {
+    std::lock_guard lock(mutex_);
+    auto it = entries_.find(pathU8);
+    if (it == entries_.end() || it->second.fullW <= 0) return false;
+    w = it->second.fullW;
+    h = it->second.fullH;
+    return true;
 }
 
 void ImageCache::clear() {

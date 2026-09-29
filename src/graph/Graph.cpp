@@ -168,7 +168,8 @@ nlohmann::json Graph::toJson(const fs::path* baseDir) const {
         const auto& descs = n->info().params;
         for (size_t i = 0; i < descs.size(); ++i) {
             nlohmann::json v = n->params[i];
-            if (descs[i].kind == ParamKind::Path && baseDir && v.is_string() && !v.get<std::string>().empty())
+            const bool isPath = descs[i].kind == ParamKind::Path || descs[i].kind == ParamKind::SavePath;
+            if (isPath && baseDir && v.is_string() && !v.get<std::string>().empty())
                 v = makeRelativeU8(v.get<std::string>(), *baseDir);
             jp[descs[i].name] = v;
         }
@@ -207,7 +208,8 @@ void Graph::fromJson(const nlohmann::json& j, const fs::path* baseDir) {
                 auto v = jp->find(descs[i].name);
                 if (v == jp->end()) continue;  // keep default for params added after the file was written
                 nlohmann::json val = *v;
-                if (descs[i].kind == ParamKind::Path && baseDir && val.is_string() && !val.get<std::string>().empty())
+                const bool isPath = descs[i].kind == ParamKind::Path || descs[i].kind == ParamKind::SavePath;
+                if (isPath && baseDir && val.is_string() && !val.get<std::string>().empty())
                     val = makeAbsoluteU8(val.get<std::string>(), *baseDir);
                 node->params[i] = val;
             }

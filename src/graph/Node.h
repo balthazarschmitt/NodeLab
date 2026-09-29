@@ -18,7 +18,7 @@ struct PinDesc {
     int fallbackParam = -1;
 };
 
-enum class ParamKind { Float, Int, Bool, Enum, Path, Text, Curve, Ramp };
+enum class ParamKind { Float, Int, Bool, Enum, Path, Text, Curve, Ramp, Color, SavePath };
 
 struct ParamDesc {
     std::string name;
@@ -48,6 +48,19 @@ struct ParamDesc {
     static ParamDesc Text(std::string n, std::string def) { return make(std::move(n), ParamKind::Text, 0, 0, 0, 0, std::move(def)); }
     // Tone curves: {"master":[[x,y],...], "r":[...], "g":[...], "b":[...]}.
     static ParamDesc Curve(std::string n);
+    // Curves with custom channels. keys: "key:Label" entries (add "@hue" for a hue-strip
+    // background); def: {"key": [[x,y],...], ...}.
+    static ParamDesc CurveKeys(std::string n, std::vector<std::string> keys, nlohmann::json def) {
+        ParamDesc d = make(std::move(n), ParamKind::Curve, 0, 0, 0, 0, std::move(def));
+        d.options = std::move(keys);
+        return d;
+    }
+    // RGB color stored as [r, g, b]; range is the allowed component range.
+    static ParamDesc Color(std::string n, float r, float g, float b, float mx = 1.0f) {
+        return make(std::move(n), ParamKind::Color, 0, mx, 0, mx, nlohmann::json::array({r, g, b}));
+    }
+    // File path chosen with a Save dialog (File Output node).
+    static ParamDesc SavePath(std::string n) { return make(std::move(n), ParamKind::SavePath, 0, 0, 0, 0, ""); }
     // Color ramp: {"interp": 0..3, "stops": [[pos, r, g, b, a], ...]}.
     static ParamDesc Ramp(std::string n);
 
@@ -78,6 +91,9 @@ struct NodeInfo {
 struct EvalContext {
     int defaultW = 512, defaultH = 512;  // size used when a node has no sized inputs
     bool proxy = true;                   // preview-resolution sources
+    // Preview pixels per full-resolution pixel. Sizes in params (blur radius, offsets) are in
+    // full-resolution pixels and multiplied by this, so previews match the exported image.
+    float scale = 1.0f;
     ImageCache* cache = nullptr;
     const std::atomic<bool>* cancel = nullptr;
 };
@@ -104,6 +120,10 @@ public:
     int paramI(int i) const { return params[i].is_number() ? params[i].get<int>() : 0; }
     bool paramB(int i) const { return params[i].is_boolean() ? params[i].get<bool>() : false; }
     std::string paramS(int i) const { return params[i].is_string() ? params[i].get<std::string>() : std::string(); }
+    void paramC(int i, float out[3]) const {
+        for (int k = 0; k < 3; ++k)
+            out[k] = params[i].is_array() && params[i].size() == 3 && params[i][k].is_number() ? params[i][k].get<float>() : 0.0f;
+    }
 
     int id = 0;
     float x = 0.0f, y = 0.0f;  // editor grid position

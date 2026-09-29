@@ -20,6 +20,8 @@ size_t Evaluator::ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unor
 
     std::string key = info.type;
     key += ctx.proxy ? "|p|" : "|f|";
+    // Working size and scale: generators (textures) and pixel-sized params depend on them.
+    key += std::to_string(ctx.defaultW) + "x" + std::to_string(ctx.defaultH) + "@" + std::to_string(ctx.scale) + "|";
     key += nlohmann::json(n->params).dump();
     key += n->signatureExtra();
 
@@ -110,6 +112,8 @@ void initContextSize(const Graph& g, EvalContext& ctx) {
         if (ImagePtr img = ctx.cache->get(n->paramS(0), ctx.proxy)) {
             ctx.defaultW = img->w;
             ctx.defaultH = img->h;
+            int fw, fh;
+            ctx.scale = ctx.proxy && ctx.cache->fullSize(n->paramS(0), fw, fh) && fw > 0 ? float(img->w) / fw : 1.0f;
             return;
         }
     }

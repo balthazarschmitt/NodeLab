@@ -1,0 +1,6 @@
+# build-test\NodeLab.exe examples\effects.nlproj --script tests\ui\huecorrect.txt
+settle
+click 700 257
+wait 4
+shot build/smoke/h1_huecorrect.png
+quit

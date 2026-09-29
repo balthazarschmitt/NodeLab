@@ -17,6 +17,7 @@
 #include "io/ProjectFile.h"
 #include "nodes/group/GroupNodes.h"
 #include "nodes/io/IONodes.h"
+#include "nodes/utility/UtilityNodes.h"
 #include "ui/FileDialog.h"
 #include "ui/Inspector.h"
 #include "ui/UiScript.h"
@@ -393,6 +394,10 @@ void App::drawMainMenu() {
         if (ImGui::MenuItem("Import Image...", "Ctrl+I"))
             if (auto p = openFileDialog("Import image", kImageFilter)) importImage(*p);
         if (ImGui::MenuItem("Export Result...", "Ctrl+E")) exportResult();
+        if (ImGui::MenuItem("Write File Outputs")) {
+            auto lines = writeFileOutputs(graph_, cache_);
+            status_ = lines.empty() ? "No File Output nodes" : lines.back() + (lines.size() > 1 ? " (+" + std::to_string(lines.size() - 1) + " more)" : "");
+        }
         ImGui::Separator();
         if (ImGui::MenuItem("Exit")) requestAction(Pending::Quit);
         ImGui::EndMenu();
@@ -752,8 +757,12 @@ void App::exportResult() {
         std::string err;
         if (!img) status_ = "Export failed: Output node has no input";
         else if (!saveImage(*p, *img, err)) status_ = "Export failed: " + err;
-        else status_ = "Exported " + pathToU8(u8ToPath(*p).filename()) + " (" + std::to_string(img->w) + " x " +
-                       std::to_string(img->h) + ")";
+        else {
+            status_ = "Exported " + pathToU8(u8ToPath(*p).filename()) + " (" + std::to_string(img->w) + " x " +
+                      std::to_string(img->h) + ")";
+            auto lines = writeFileOutputs(graph_, cache_);
+            if (!lines.empty()) status_ += ", File Outputs: " + std::to_string(lines.size());
+        }
     } catch (const std::exception& e) {
         status_ = std::string("Export failed: ") + e.what();
     }

@@ -91,7 +91,13 @@ add_library(nodelab_core STATIC
     src/nodes/math/MathNodes.cpp
     src/nodes/converter/ConverterNodes.cpp
     src/nodes/converter/Expression.cpp
-    src/nodes/group/GroupNodes.cpp)
+    src/nodes/group/GroupNodes.cpp
+    src/nodes/ImageOps.cpp
+    src/nodes/filter/FilterNodes.cpp
+    src/nodes/transform/TransformNodes.cpp
+    src/nodes/matte/MatteNodes.cpp
+    src/nodes/texture/TextureNodes.cpp
+    src/nodes/utility/UtilityNodes.cpp)
 target_include_directories(nodelab_core PUBLIC src)
 target_link_libraries(nodelab_core PUBLIC nlohmann_json::nlohmann_json stb tinyexpr)
 if(WIN32)
@@ -129,7 +135,7 @@ if(NODELAB_BUILD_TESTS)
     FetchContent_MakeAvailable(doctest)
 
     enable_testing()
-    add_executable(nodelab_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp tests/test_groups.cpp)
+    add_executable(nodelab_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp tests/test_groups.cpp tests/test_nodes2.cpp)
     target_include_directories(nodelab_tests PRIVATE ${doctest_SOURCE_DIR})
     target_link_libraries(nodelab_tests PRIVATE nodelab_core)
     if(MINGW)

@@ -41,6 +41,11 @@ ImU32 categoryColor(const std::string& cat) {
     if (cat == "Color") return IM_COL32(64, 88, 148, 255);
     if (cat == "Mix") return IM_COL32(104, 74, 136, 255);
     if (cat == "Converter") return IM_COL32(42, 108, 118, 255);
+    if (cat == "Filter") return IM_COL32(120, 70, 60, 255);
+    if (cat == "Transform") return IM_COL32(110, 96, 48, 255);
+    if (cat == "Matte") return IM_COL32(70, 70, 110, 255);
+    if (cat == "Texture") return IM_COL32(126, 76, 104, 255);
+    if (cat == "Utility") return IM_COL32(70, 76, 84, 255);
     if (cat == "Group") return IM_COL32(40, 120, 60, 255);
     return IM_COL32(80, 80, 92, 255);
 }
@@ -59,14 +64,20 @@ int paramRows(const NodeInfo& info, int i) {
         case ParamKind::Enum:
         case ParamKind::Bool:
         case ParamKind::Text:
-        case ParamKind::Ramp: return 1;
+        case ParamKind::Ramp:
+        case ParamKind::Color:
+        case ParamKind::SavePath: return 1;
         case ParamKind::Curve: return 4;
         case ParamKind::Int: return 0;
     }
     return 0;
 }
 
+constexpr float kRerouteSize = 20.0f;
+bool isReroute(const Node& n) { return n.info().type == "util.reroute"; }
+
 float nodeHeightGrid(const Node& n) {
+    if (isReroute(n)) return kRerouteSize;
     const NodeInfo& info = n.info();
     int rows = int(info.inputs.size() + info.outputs.size());
     for (int i = 0; i < int(info.params.size()); ++i) rows += paramRows(info, i);
@@ -147,6 +158,16 @@ NodeEditor::Layout NodeEditor::layoutFor(const Node& n) const {
     const float z = zoom_;
     Layout L;
     L.min = toScreen(ImVec2(n.x, n.y));
+    if (isReroute(n)) {
+        const float s = kRerouteSize * z;
+        L.max = ImVec2(L.min.x + s, L.min.y + s);
+        L.titleH = 0;
+        L.outPins.emplace_back(L.max.x - s * 0.25f, L.min.y + s * 0.5f);
+        L.inPins.emplace_back(L.min.x + s * 0.25f, L.min.y + s * 0.5f);
+        L.valueBoxes.push_back(ImRect());
+        L.paramBoxes.resize(info.params.size());
+        return L;
+    }
     L.max = ImVec2(L.min.x + kNodeW * z, L.min.y + nodeHeightGrid(n) * z);
     L.titleH = kTitleH * z;
     float y = L.min.y + (kTitleH + kPad) * z;
@@ -479,13 +500,23 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
         case ParamKind::Curve: {
             dl->AddRectFilled(box.Min, box.Max, IM_COL32(26, 26, 30, 255), 3 * z);
             dl->AddLine(ImVec2(box.Min.x, box.Max.y), ImVec2(box.Max.x, box.Min.y), IM_COL32(60, 60, 68, 255));
-            const char* keys[4] = {"r", "g", "b", "master"};
-            const ImU32 cols[4] = {IM_COL32(220, 80, 80, 200), IM_COL32(80, 200, 90, 200), IM_COL32(90, 130, 230, 200),
-                                   IM_COL32(235, 235, 240, 255)};
+            // Standard curves: r, g, b then master on top. Custom channels (hue curves, float curve)
+            // come from the param's key list.
+            std::vector<std::string> keys = {"r", "g", "b", "master"};
+            std::vector<ImU32> cols = {IM_COL32(220, 80, 80, 200), IM_COL32(80, 200, 90, 200), IM_COL32(90, 130, 230, 200),
+                                       IM_COL32(235, 235, 240, 255)};
+            bool standard = true;
+            if (!d.options.empty()) {
+                keys.clear();
+                cols.clear();
+                standard = false;
+                for (const auto& k : d.options)
+                    if (k[0] != '@') keys.push_back(k.substr(0, k.find(':'))), cols.push_back(IM_COL32(235, 235, 240, 220));
+            }
             const nlohmann::json& cj = n.params[i];
-            for (int c = 0; c < 4; ++c) {
+            for (int c = 0; c < int(keys.size()); ++c) {
                 CurvePoints pts = curveFromJson(cj.is_object() && cj.contains(keys[c]) ? cj[keys[c]] : nlohmann::json());
-                if (c < 3 && isIdentityCurve(pts)) continue;
+                if (standard && c < 3 && isIdentityCurve(pts)) continue;
                 ImVec2 prev;
                 for (int k = 0; k <= 32; ++k) {
                     float x = k / 32.0f, y = evalCurve(pts, x);
@@ -494,6 +525,42 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
                     prev = p;
                 }
             }
+            break;
+        }
+        case ParamKind::Color: {
+            float c[3];
+            n.paramC(i, c);
+            if (canInteract && button()) ImGui::OpenPopup("##color");
+            const float sw = box.GetHeight() * 1.6f;
+            ImRect swatch(ImVec2(box.Max.x - sw, box.Min.y), box.Max);
+            dl->AddRectFilled(box.Min, box.Max, hovered ? IM_COL32(34, 34, 40, 255) : IM_COL32(26, 26, 30, 255), 3 * z);
+            dl->AddRectFilled(swatch.Min, swatch.Max,
+                              ImGui::GetColorU32(ImVec4(std::min(c[0], 1.0f), std::min(c[1], 1.0f), std::min(c[2], 1.0f), 1.0f)), 3 * z);
+            text(box.Min.x + 6 * z, d.name.c_str(), textCol);
+            if (ImGui::BeginPopup("##color")) {
+                ImGuiColorEditFlags flags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoAlpha;
+                if (d.max > 1.0f) flags |= ImGuiColorEditFlags_HDR;  // lift/gain may go above 1
+                if (ImGui::ColorPicker3("##picker", c, flags)) {
+                    for (int k = 0; k < 3; ++k) c[k] = std::clamp(c[k], d.hardMin, d.hardMax);
+                    n.params[i] = nlohmann::json::array({c[0], c[1], c[2]});
+                    changed = true;
+                }
+                ImGui::EndPopup();
+            }
+            break;
+        }
+        case ParamKind::SavePath: {
+            std::string path = n.paramS(i);
+            std::string label = path.empty() ? "Save as..." : pathToU8(u8ToPath(path).filename());
+            if (canInteract && button()) {
+                if (auto p = saveFileDialog("File Output", "PNG image|*.png|JPEG image|*.jpg", "png")) {
+                    n.params[i] = *p;
+                    changed = true;
+                }
+            }
+            if (hovered && !path.empty()) ImGui::SetTooltip("%s", path.c_str());
+            dl->AddRectFilled(box.Min, box.Max, hovered ? IM_COL32(70, 74, 88, 255) : IM_COL32(54, 56, 66, 255), 3 * z);
+            text(box.Min.x + 6 * z, label.c_str(), textCol);
             break;
         }
         case ParamKind::Int: break;
@@ -506,6 +573,18 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
     const NodeInfo& info = n.info();
     const Layout L = layoutFor(n);
     const float z = zoom_;
+    if (isReroute(n)) {
+        // A dot: the wire's color (or amber when unconnected), outlined when selected.
+        ImVec2 c((L.min.x + L.max.x) * 0.5f, (L.min.y + L.max.y) * 0.5f);
+        ImU32 col = pinColor(PinType::Image);
+        if (const Link* l = g.inputLink(n.id, 0))
+            if (const Node* from = g.find(l->fromNode)) col = pinColor(from->info().outputs[l->fromPin].type);
+        dl->AddCircleFilled(c, 6.0f * z + 1.0f, col);
+        dl->AddCircle(c, 6.0f * z + 1.0f, selection_.count(n.id) ? IM_COL32(240, 196, 100, 255) : IM_COL32(20, 20, 24, 255), 0,
+                      selection_.count(n.id) ? 2.0f : 1.0f);
+        (void)r;
+        return false;
+    }
     const float fs = ImGui::GetFontSize() * z;
     const bool showText = fs >= 5.0f;
     const bool interactive = z >= 0.45f;
@@ -1008,45 +1087,69 @@ void NodeEditor::drawAddMenu(Graph& g, Result& r) {
         });
     };
 
-    if (!src && ImGui::MenuItem("Frame", "Ctrl+J")) {
-        ImVec2 gp = toGrid(menuPos_);
-        g.addFrame(std::round(gp.x), std::round(gp.y), 360, 240);
-        r.docChanged = true;
-        ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
-        return;
-    }
     if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-    ImGui::SetNextItemWidth(220);
-    ImGui::InputTextWithHint("##search", "Search nodes...", search_, sizeof(search_));
+    ImGui::SetNextItemWidth(260);
+    // Typing goes straight here (focused when the menu opens); empty search shows categories.
+    if (ImGui::InputTextWithHint("##search", "Search nodes...", search_, sizeof(search_))) searchSel_ = 0;
 
     const auto& reg = NodeRegistry::instance();
     std::string chosen;
     if (search_[0]) {
-        std::string first;
-        for (const auto& type : reg.types()) {
-            const NodeInfo* inf = reg.find(type);
-            if (!compatible(*inf)) continue;
-            if (!containsNoCase(inf->displayName, search_) && !containsNoCase(inf->category, search_)) continue;
-            if (first.empty()) first = type;
-            if (ImGui::MenuItem(inf->displayName.c_str(), inf->category.c_str())) chosen = type;
+        // Name matches first, then category matches.
+        std::vector<std::string> results;
+        for (int pass = 0; pass < 2; ++pass)
+            for (const auto& type : reg.types()) {
+                const NodeInfo* inf = reg.find(type);
+                if (inf->hidden || !compatible(*inf)) continue;
+                bool nameHit = containsNoCase(inf->displayName, search_);
+                if (pass == 0 ? nameHit : (!nameHit && containsNoCase(inf->category, search_))) results.push_back(type);
+            }
+        const int n = int(results.size());
+        bool moved = false;
+        if (n > 0) {
+            if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) searchSel_ = (searchSel_ + 1) % n, moved = true;
+            if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) searchSel_ = (searchSel_ + n - 1) % n, moved = true;
         }
-        if (chosen.empty() && ImGui::IsKeyPressed(ImGuiKey_Enter)) chosen = first;  // Enter picks the first match
+        searchSel_ = n ? std::clamp(searchSel_, 0, n - 1) : 0;
+        if (n == 0) ImGui::TextDisabled("No matching nodes");
+        const float rowH = ImGui::GetTextLineHeightWithSpacing();
+        ImGui::BeginChild("##results", ImVec2(300, std::min(n, 14) * rowH + 6), ImGuiChildFlags_None);
+        for (int i = 0; i < n; ++i) {
+            const NodeInfo* inf = reg.find(results[i]);
+            ImGui::PushID(i);
+            if (ImGui::Selectable(inf->displayName.c_str(), i == searchSel_)) chosen = results[i];
+            if (i == searchSel_ && moved) ImGui::SetScrollHereY();
+            ImGui::SameLine(190);
+            ImGui::TextDisabled("%s", inf->category.c_str());
+            ImGui::PopID();
+        }
+        ImGui::EndChild();
+        if (chosen.empty() && n > 0 && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))
+            chosen = results[searchSel_];
     } else {
         std::vector<std::string> cats;
         for (const auto& type : reg.types()) {
             const NodeInfo* inf = reg.find(type);
-            if (compatible(*inf) && std::find(cats.begin(), cats.end(), inf->category) == cats.end())
+            if (!inf->hidden && compatible(*inf) && std::find(cats.begin(), cats.end(), inf->category) == cats.end())
                 cats.push_back(inf->category);
         }
         for (const auto& c : cats) {
             if (ImGui::BeginMenu(c.c_str())) {
                 for (const auto& type : reg.types()) {
                     const NodeInfo* inf = reg.find(type);
-                    if (inf->category == c && compatible(*inf) && ImGui::MenuItem(inf->displayName.c_str()))
+                    if (inf->category == c && !inf->hidden && compatible(*inf) && ImGui::MenuItem(inf->displayName.c_str()))
                         chosen = type;
                 }
                 ImGui::EndMenu();
+            }
+        }
+        if (!src) {
+            ImGui::Separator();
+            if (ImGui::MenuItem("Frame", "Ctrl+J")) {
+                ImVec2 gp = toGrid(menuPos_);
+                g.addFrame(std::round(gp.x), std::round(gp.y), 360, 240);
+                r.docChanged = true;
+                ImGui::CloseCurrentPopup();
             }
         }
     }

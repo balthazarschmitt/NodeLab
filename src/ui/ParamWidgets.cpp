@@ -11,26 +11,52 @@
 
 // ---------------------------------------------------------------- curves
 
-bool curveEditor(const char* id, nlohmann::json& curves) {
-    static const char* keys[4] = {"master", "r", "g", "b"};
-    static const char* labels[4] = {"Master", "R", "G", "B"};
-    static const ImU32 cols[4] = {IM_COL32(235, 235, 240, 255), IM_COL32(230, 90, 90, 255), IM_COL32(90, 210, 100, 255),
-                                  IM_COL32(100, 140, 240, 255)};
-    if (!curves.is_object()) curves = defaultCurves();
+bool curveEditor(const char* id, nlohmann::json& curves, const std::vector<std::string>& keySpec) {
+    std::vector<std::string> keyStore, labelStore;
+    bool hueStrip = false;
+    for (const auto& k : keySpec) {
+        if (k == "@hue") {
+            hueStrip = true;
+            continue;
+        }
+        auto colon = k.find(':');
+        keyStore.push_back(k.substr(0, colon));
+        labelStore.push_back(colon == std::string::npos ? k : k.substr(colon + 1));
+    }
+    if (keyStore.empty()) {
+        keyStore = {"master", "r", "g", "b"};
+        labelStore = {"Master", "R", "G", "B"};
+    }
+    const int nk = int(keyStore.size());
+    std::vector<const char*> keys, labels;
+    for (int c = 0; c < nk; ++c) keys.push_back(keyStore[c].c_str()), labels.push_back(labelStore[c].c_str());
+    static const ImU32 palette[4] = {IM_COL32(235, 235, 240, 255), IM_COL32(230, 90, 90, 255), IM_COL32(90, 210, 100, 255),
+                                     IM_COL32(100, 140, 240, 255)};
+    // Standard tone curves are colored per channel; custom channels (e.g. hue curves) use white.
+    std::vector<ImU32> cols(nk, palette[0]);
+    if (keySpec.empty())
+        for (int c = 0; c < 4; ++c) cols[c] = palette[c];
+    if (!curves.is_object()) curves = keySpec.empty() ? defaultCurves() : nlohmann::json::object();
 
     ImGui::PushID(id);
     ImGuiStorage* st = ImGui::GetStateStorage();
     const ImGuiID chanKey = ImGui::GetID("chan"), dragKey = ImGui::GetID("drag");
-    int chan = st->GetInt(chanKey, 0);
+    int chan = std::clamp(st->GetInt(chanKey, 0), 0, nk - 1);
     bool changed = false;
 
-    for (int c = 0; c < 4; ++c) {
+    for (int c = 0; c < nk; ++c) {
         if (c) ImGui::SameLine();
         if (ImGui::RadioButton(labels[c], chan == c)) st->SetInt(chanKey, chan = c);
     }
     ImGui::SameLine();
     if (ImGui::SmallButton("Reset")) {
-        curves[keys[chan]] = curveToJson(identityCurve());
+        if (hueStrip) {  // hue curves are neutral when flat at 0.5
+            nlohmann::json flat = nlohmann::json::array();
+            for (int i = 0; i <= 6; ++i) flat.push_back({i / 6.0f, 0.5f});
+            curves[keys[chan]] = flat;
+        } else {
+            curves[keys[chan]] = curveToJson(identityCurve());
+        }
         changed = true;
     }
 
@@ -86,13 +112,24 @@ bool curveEditor(const char* id, nlohmann::json& curves) {
 
     // draw
     dl->AddRectFilled(p0, p1, IM_COL32(24, 24, 28, 255));
+    if (hueStrip) {
+        // Hue along x (what each point of the curve affects), dimmed so the curve stays readable.
+        const int segs = 36;
+        for (int k = 0; k < segs; ++k) {
+            ImVec4 c0 = ImColor::HSV(float(k) / segs, 0.7f, 0.45f), c1 = ImColor::HSV(float(k + 1) / segs, 0.7f, 0.45f);
+            float x0 = p0.x + size * k / segs, x1 = p0.x + size * (k + 1) / segs;
+            dl->AddRectFilledMultiColor(ImVec2(x0, p1.y - 14), ImVec2(x1, p1.y), ImGui::GetColorU32(c0), ImGui::GetColorU32(c1),
+                                        ImGui::GetColorU32(c1), ImGui::GetColorU32(c0));
+        }
+        dl->AddLine(ImVec2(p0.x, p0.y + size * 0.5f), ImVec2(p1.x, p0.y + size * 0.5f), IM_COL32(90, 90, 100, 255));
+    }
     for (int k = 1; k < 4; ++k) {
         float t = k / 4.0f;
         dl->AddLine(ImVec2(p0.x + t * size, p0.y), ImVec2(p0.x + t * size, p1.y), IM_COL32(48, 48, 56, 255));
         dl->AddLine(ImVec2(p0.x, p0.y + t * size), ImVec2(p1.x, p0.y + t * size), IM_COL32(48, 48, 56, 255));
     }
-    dl->AddLine(ImVec2(p0.x, p1.y), ImVec2(p1.x, p0.y), IM_COL32(70, 70, 80, 255));
-    for (int c = 0; c < 4; ++c) {
+    if (!hueStrip) dl->AddLine(ImVec2(p0.x, p1.y), ImVec2(p1.x, p0.y), IM_COL32(70, 70, 80, 255));
+    for (int c = 0; c < nk; ++c) {
         if (c == chan) continue;
         CurvePoints other = curveFromJson(curves.contains(keys[c]) ? curves[keys[c]] : nlohmann::json());
         if (isIdentityCurve(other)) continue;

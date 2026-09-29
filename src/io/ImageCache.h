@@ -13,12 +13,15 @@ public:
 
     // Returns null on failure; err receives the reason.
     ImagePtr get(const std::string& pathU8, bool proxy, std::string* err = nullptr);
+    // Full-resolution size of a loaded image (false if it has not loaded).
+    bool fullSize(const std::string& pathU8, int& w, int& h);
     void clear();
 
 private:
     struct Entry {
         ImagePtr proxy;                     // always kept once loaded
         std::weak_ptr<const Image> full;    // kept only while in use
+        int fullW = 0, fullH = 0;
         std::string error;
     };
     std::mutex mutex_;

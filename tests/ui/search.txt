@@ -1,0 +1,15 @@
+# build-test\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\search.txt
+settle
+click 800 480 1
+wait 5
+shot build/smoke/q1_categories.png
+text bl
+wait 3
+key down
+wait 2
+shot build/smoke/q2_results.png
+key enter
+settle
+wait 3
+shot build/smoke/q3_added.png
+quit

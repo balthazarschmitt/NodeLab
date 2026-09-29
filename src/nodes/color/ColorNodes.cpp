@@ -354,6 +354,175 @@ public:
     }
 };
 
+
+// ---------------------------------------------------------------- more color spaces
+
+#define SPLIT3_NODE(Cls, type, title, n0, n1, n2, conv)                                                \
+    class Cls : public Node {                                                                          \
+    public:                                                                                            \
+        NODELAB_NODE({type, title, "Color", {{"Image", PinType::Image}},                               \
+                      {{n0, PinType::Channel}, {n1, PinType::Channel}, {n2, PinType::Channel}, {"A", PinType::Channel}}, \
+                      {}})                                                                             \
+        void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {  \
+            splitImage(in[0], out, 4, [](const float* p, float* o) {                                   \
+                conv(clamp01(p[0]), clamp01(p[1]), clamp01(p[2]), o[0], o[1], o[2]);                   \
+                o[3] = p[3];                                                                           \
+            });                                                                                        \
+        }                                                                                              \
+    };
+
+#define COMBINE3_NODE(Cls, type, title, n0, n1, n2, d0, lo1, hi1, d1, lo2, hi2, d2, conv)               \
+    class Cls : public Node {                                                                          \
+    public:                                                                                            \
+        NODELAB_NODE({type, title, "Color",                                                            \
+                      {{n0, PinType::Channel, 0}, {n1, PinType::Channel, 1}, {n2, PinType::Channel, 2}, {"A", PinType::Channel, 3}}, \
+                      {{"Image", PinType::Image}},                                                     \
+                      {ParamDesc::Float(n0, d0, 0.0f, 1.0f), ParamDesc::Float(n1, d1, lo1, hi1),       \
+                       ParamDesc::Float(n2, d2, lo2, hi2), ParamDesc::Float("A", 1.0f, 0.0f, 1.0f)}})  \
+        void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override { \
+            const float defs[4] = {d0, d1, d2, 1};                                                     \
+            combineImage(*this, ctx, in, out, defs, true, [](float a, float b, float c, float* d) {    \
+                conv(a, b, c, d[0], d[1], d[2]);                                                       \
+            });                                                                                        \
+        }                                                                                              \
+    };
+
+SPLIT3_NODE(SplitYCbCrNode, "color.split_ycbcr", "Split YCbCr", "Y", "Cb", "Cr", rgbToYCbCr)
+COMBINE3_NODE(CombineYCbCrNode, "color.combine_ycbcr", "Combine YCbCr", "Y", "Cb", "Cr", 0.5f, 0.0f, 1.0f, 0.5f, 0.0f, 1.0f, 0.5f, yCbCrToRgb)
+SPLIT3_NODE(SplitYUVNode, "color.split_yuv", "Split YUV", "Y", "U", "V", rgbToYuv)
+COMBINE3_NODE(CombineYUVNode, "color.combine_yuv", "Combine YUV", "Y", "U", "V", 0.5f, -0.5f, 0.5f, 0.0f, -0.7f, 0.7f, 0.0f, yuvToRgb)
+SPLIT3_NODE(SplitHSLNode, "color.split_hsl", "Split HSL", "H", "S", "L", rgbToHsl)
+COMBINE3_NODE(CombineHSLNode, "color.combine_hsl", "Combine HSL", "H", "S", "L", 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.5f, hslToRgb)
+
+// ---------------------------------------------------------------- grading
+
+nlohmann::json flatHueCurves() {
+    nlohmann::json flat = nlohmann::json::array();
+    for (int i = 0; i <= 6; ++i) flat.push_back({i / 6.0f, 0.5f});
+    return {{"h", flat}, {"s", flat}, {"v", flat}};
+}
+
+class HueCorrectNode : public Node {
+public:
+    NODELAB_NODE({"color.hue_correct", "Hue Correct", "Color",
+                  {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
+                  {{"Image", PinType::Image}},
+                  {ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f),
+                   ParamDesc::CurveKeys("Hue Curves", {"h:Hue", "s:Saturation", "v:Value", "@hue"}, flatHueCurves())}})
+    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+        ImagePtr src = toImage(in[0], 0, 0);
+        if (!src) return;
+        const nlohmann::json& cj = params[1];
+        auto lut = [&](const char* key) {
+            return curveLut(curveFromJson(cj.is_object() && cj.contains(key) ? cj[key] : nlohmann::json()));
+        };
+        const std::vector<float> lh = lut("h"), ls = lut("s"), lv = lut("v");
+        ChannelPtr fac = channelOr(in[1], 1.0f);
+        ChannelSampler sf = paramSampler(*this, 1, fac, src->w, src->h);
+        // Each curve is a function of the pixel's hue; 0.5 means "no change".
+        out[0] = Value(ImagePtr(mapImage(*src, [&](int x, int y, const float* s, float* d) {
+            float h, sat, v;
+            rgbToHsv(clamp01(s[0]), clamp01(s[1]), clamp01(s[2]), h, sat, v);
+            float nh = h + (lutLookup(lh, h) - 0.5f);
+            float ns = clamp01(sat * lutLookup(ls, h) * 2.0f);
+            float nv = clamp01(v * lutLookup(lv, h) * 2.0f);
+            float r, g, b;
+            hsvToRgb(nh, ns, nv, r, g, b);
+            float f = sf(x, y);
+            d[0] = s[0] + (r - s[0]) * f;
+            d[1] = s[1] + (g - s[1]) * f;
+            d[2] = s[2] + (b - s[2]) * f;
+            d[3] = s[3];
+        })));
+    }
+};
+
+class ColorBalanceNode : public Node {
+public:
+    NODELAB_NODE({"color.color_balance", "Color Balance", "Color",
+                  {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
+                  {{"Image", PinType::Image}},
+                  {ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f), ParamDesc::Enum("Mode", 0, {"Lift / Gamma / Gain", "Offset / Power / Slope"}),
+                   ParamDesc::Color("Lift", 1, 1, 1, 2), ParamDesc::Color("Gamma", 1, 1, 1, 2), ParamDesc::Color("Gain", 1, 1, 1, 2),
+                   ParamDesc::Color("Offset", 0, 0, 0, 1), ParamDesc::Color("Power", 1, 1, 1, 2), ParamDesc::Color("Slope", 1, 1, 1, 2)}})
+    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+        ImagePtr src = toImage(in[0], 0, 0);
+        if (!src) return;
+        const bool cdl = paramI(1) == 1;
+        float lift[3], gamma[3], gain[3], offset[3], power[3], slope[3];
+        paramC(2, lift), paramC(3, gamma), paramC(4, gain), paramC(5, offset), paramC(6, power), paramC(7, slope);
+        ChannelPtr fac = channelOr(in[1], 1.0f);
+        ChannelSampler sf = paramSampler(*this, 1, fac, src->w, src->h);
+        out[0] = Value(ImagePtr(mapImage(*src, [&](int x, int y, const float* s, float* d) {
+            float f = sf(x, y);
+            for (int k = 0; k < 3; ++k) {
+                float c = clamp01(s[k]), v;
+                if (cdl) {
+                    // ASC CDL: out = (in * slope + offset) ^ power
+                    v = std::pow(std::max(c * slope[k] + offset[k], 0.0f), power[k]);
+                } else {
+                    // Lift raises shadows, gain scales highlights, gamma bends midtones (1 = neutral).
+                    float lifted = (c - 1.0f) * (2.0f - lift[k]) + 1.0f;
+                    v = std::pow(std::max(lifted * gain[k], 0.0f), 1.0f / std::max(gamma[k], 1e-3f));
+                }
+                d[k] = clamp01(c + (v - c) * f);
+            }
+            d[3] = s[3];
+        })));
+    }
+};
+
+class ToneMapNode : public Node {
+public:
+    NODELAB_NODE({"color.tone_map", "Tone Map", "Color",
+                  {{"Image", PinType::Image}},
+                  {{"Image", PinType::Image}},
+                  {ParamDesc::Float("Exposure", 0.0f, -4.0f, 4.0f), ParamDesc::Float("White Point", 2.0f, 1.0f, 16.0f),
+                   ParamDesc::Enum("Operator", 0, {"Reinhard", "Filmic (ACES fit)"})}})
+    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+        ImagePtr src = toImage(in[0], 0, 0);
+        if (!src) return;
+        const float m = std::exp2(paramF(0)), wp = paramF(1);
+        const bool aces = paramI(2) == 1;
+        // Works on unclamped linear light, so it can compress results of Add / Exposure chains
+        // that went above 1 (turn off Clamp upstream).
+        out[0] = Value(ImagePtr(mapImage(*src, [&](int, int, const float* s, float* d) {
+            for (int k = 0; k < 3; ++k) {
+                float x = srgbToLinear(std::max(s[k], 0.0f)) * m, v;
+                if (aces) v = (x * (2.51f * x + 0.03f)) / (x * (2.43f * x + 0.59f) + 0.14f);
+                else v = x * (1.0f + x / (wp * wp)) / (1.0f + x);
+                d[k] = clamp01(linearToSrgb(clamp01(v)));
+            }
+            d[3] = s[3];
+        })));
+    }
+};
+
+class ConvertColorspaceNode : public Node {
+public:
+    NODELAB_NODE({"color.convert_colorspace", "Convert Colorspace", "Color",
+                  {{"Image", PinType::Image}},
+                  {{"Image", PinType::Image}},
+                  {ParamDesc::Enum("Conversion", 0, {"sRGB -> Linear", "Linear -> sRGB", "sRGB -> Gamma 2.2", "Gamma 2.2 -> sRGB"})}})
+    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+        ImagePtr src = toImage(in[0], 0, 0);
+        if (!src) return;
+        const int mode = paramI(0);
+        out[0] = Value(ImagePtr(mapImage(*src, [&](int, int, const float* s, float* d) {
+            for (int k = 0; k < 3; ++k) {
+                float c = std::max(s[k], 0.0f);
+                switch (mode) {
+                    case 1: d[k] = linearToSrgb(c); break;
+                    case 2: d[k] = std::pow(srgbToLinear(c), 1.0f / 2.2f); break;
+                    case 3: d[k] = linearToSrgb(std::pow(c, 2.2f)); break;
+                    default: d[k] = srgbToLinear(c); break;
+                }
+            }
+            d[3] = s[3];
+        })));
+    }
+};
+
 }  // namespace
 
 void registerColorNodes(NodeRegistry& r) {
@@ -372,4 +541,14 @@ void registerColorNodes(NodeRegistry& r) {
     r.add<SplitLabNode>();
     r.add<CombineLabNode>();
     r.add<LuminanceNode>();
+    r.add<HueCorrectNode>();
+    r.add<ColorBalanceNode>();
+    r.add<ToneMapNode>();
+    r.add<ConvertColorspaceNode>();
+    r.add<SplitYCbCrNode>();
+    r.add<CombineYCbCrNode>();
+    r.add<SplitYUVNode>();
+    r.add<CombineYUVNode>();
+    r.add<SplitHSLNode>();
+    r.add<CombineHSLNode>();
 }

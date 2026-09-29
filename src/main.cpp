@@ -7,6 +7,7 @@
 #include "io/ImageIO.h"
 #include "io/ProjectFile.h"
 #include "nodes/io/IONodes.h"
+#include "nodes/utility/UtilityNodes.h"
 #include "ui/App.h"
 
 // NodeLab.exe --render project.nlproj out.png  : evaluate at full resolution without a window.
@@ -39,6 +40,7 @@ static int renderHeadless(const std::string& project, const std::string& outPath
             std::fprintf(stderr, "save failed: %s\n", err.c_str());
             return 1;
         }
+        for (const auto& line : writeFileOutputs(g, cache)) std::printf("%s\n", line.c_str());
     } catch (const std::exception& e) {
         std::fprintf(stderr, "evaluation failed: %s\n", e.what());
         return 1;

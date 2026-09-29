@@ -1,5 +1,6 @@
 #include "ui/Inspector.h"
 
+#include <algorithm>
 #include <cstdio>
 
 #include <imgui.h>
@@ -81,8 +82,33 @@ bool editParam(Node& node, int i, float width, bool compact) {
         }
         case ParamKind::Curve:
             ImGui::TextUnformatted(d.name.c_str());
-            changed = curveEditor("##curves", node.params[i]);
+            changed = curveEditor("##curves", node.params[i], d.options);
             break;
+        case ParamKind::Color: {
+            float c[3];
+            node.paramC(i, c);
+            ImGuiColorEditFlags flags = ImGuiColorEditFlags_Float;
+            if (d.max > 1.0f) flags |= ImGuiColorEditFlags_HDR;
+            if (ImGui::ColorEdit3(label.c_str(), c, flags)) {
+                for (int k = 0; k < 3; ++k) c[k] = std::clamp(c[k], d.hardMin, d.hardMax);
+                node.params[i] = nlohmann::json::array({c[0], c[1], c[2]});
+                changed = true;
+            }
+            break;
+        }
+        case ParamKind::SavePath: {
+            std::string path = node.paramS(i);
+            if (ImGui::Button("Save as...")) {
+                if (auto p = saveFileDialog("File Output", "PNG image|*.png|JPEG image|*.jpg", "png")) {
+                    node.params[i] = *p;
+                    changed = true;
+                }
+            }
+            ImGui::SameLine();
+            ImGui::TextUnformatted(path.empty() ? "(not set)" : pathToU8(u8ToPath(path).filename()).c_str());
+            if (!path.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", path.c_str());
+            break;
+        }
         case ParamKind::Ramp:
             ImGui::TextUnformatted(d.name.c_str());
             changed = rampEditor("##ramp", node.params[i]);

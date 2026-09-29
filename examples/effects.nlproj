@@ -1,0 +1,21 @@
+{"app":"NodeLab","version":1,"graph":{"nextId":40,
+ "nodes":[
+  {"id":1,"type":"io.image_input","pos":[0,160],"params":{"File":"scene.png"}},
+  {"id":2,"type":"filter.kuwahara","pos":[240,40],"params":{"Size":4}},
+  {"id":3,"type":"color.hue_correct","pos":[480,40],"params":{"Factor":1.0,"Hue Curves":{
+      "h":[[0,0.5],[0.2,0.5],[0.33,0.17],[0.46,0.5],[1,0.5]],
+      "s":[[0,0.5],[0.33,0.75],[1,0.5]],
+      "v":[[0,0.5],[0.33,0.62],[1,0.5]]}}},
+  {"id":4,"type":"filter.glare","pos":[720,40],"params":{"Type":0,"Threshold":0.55,"Size":90,"Strength":0.9,"Streaks":4,"Angle":30,"Fade":0.9}},
+  {"id":5,"type":"xform.lens_distortion","pos":[960,40],"params":{"Distortion":0.12,"Dispersion":0.06,"Fit":true}},
+  {"id":6,"type":"util.split","pos":[1200,160],"params":{"Position":0.5,"Orientation":0,"Show Line":true}},
+  {"id":7,"type":"io.output","pos":[1440,160],"params":{}}],
+ "links":[
+  {"id":10,"from":[1,0],"to":[2,0]},
+  {"id":11,"from":[2,0],"to":[3,0]},
+  {"id":12,"from":[3,0],"to":[4,0]},
+  {"id":13,"from":[4,0],"to":[5,0]},
+  {"id":14,"from":[1,0],"to":[6,0]},
+  {"id":15,"from":[5,0],"to":[6,1]},
+  {"id":16,"from":[6,0],"to":[7,0]}]},
+ "ui":{}}

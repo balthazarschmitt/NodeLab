@@ -41,7 +41,7 @@ Try `examples/demo.nlproj`: the red channel drives saturation, so only red thing
 
 | Action | How |
 |---|---|
-| Add a node | Right-click the canvas (type to search) |
+| Add a node | Right-click the canvas and start typing to search (Up/Down + Enter), or browse the categories |
 | Connect | Drag from a pin to another pin (or onto a node body) |
 | Add a connected node | Drag a wire into empty space, pick a node |
 | Splice into a wire | Drag an unconnected node onto a wire and release (drag off to cancel) |
@@ -80,10 +80,18 @@ layout is saved per user in `%APPDATA%\NodeLab\layout.ini`.
 | Category | Nodes |
 |---|---|
 | Input / Output | Image Input, Output, Number |
-| Color | Brightness / Contrast, Saturation, Hue Shift, Exposure, Gamma, Levels, Curves, Invert, Split/Combine RGB, Split/Combine HSV, Split/Combine Lab, Luminance |
-| Mix | Mix, Blend (19 modes: Multiply, Screen, Overlay, Soft Light, Difference, Hue, Color, ...) |
-| Converter | Color Ramp, Color Key (hue/saturation/value range mask), Map Range, Math (21 ops), Clamp, Threshold, Expression, Image Expression |
+| Color | Brightness / Contrast, Saturation, Hue Shift, Hue Correct (per-hue H/S/V curves), Exposure, Gamma, Levels, Curves, Color Balance (Lift/Gamma/Gain, ASC CDL), Tone Map, Convert Colorspace, Invert, Luminance, Split/Combine RGB, HSV, HSL, Lab, YCbCr, YUV |
+| Mix | Mix, Blend (19 modes), Alpha Over |
+| Converter | Color Ramp, Color Key, Map Range, Math (21 ops), Clamp, Threshold, Normalize, Float Curve, Set Alpha, Wavelength (nm to color), Blackbody (Kelvin to color), Expression, Image Expression |
+| Filter | Blur, Directional Blur (+spin/zoom), Bilateral Blur, Filter (Soften, Sharpen, Laplace, Sobel, Prewitt, Kirsch, Shadow), Dilate / Erode, Kuwahara, Pixelate, Posterize, Glare (Fog Glow, Streaks, Simple Star), Sun Beams |
+| Transform | Transform, Flip, Crop, Lens Distortion (with chromatic dispersion), Displace, Map UV, Corner Pin |
+| Matte | Box Mask, Ellipse Mask, Channel Key, Luminance Key, Difference Key, Distance Key, Chroma Key, Color Spill, Double Edge Mask |
+| Texture | Noise, Voronoi, Gradient, Wave, Checker, White Noise |
+| Utility | Reroute, Switch, Split (compare), Image Info, File Output (written on Export / File > Write File Outputs / --render) |
 | Group | Groups (Ctrl+G) with Group Input / Group Output inside |
+
+Sizes in pixels (blur radius, offsets, glare size) refer to the full-resolution image; the preview
+scales them so it matches the export. Textures use image-relative coordinates for the same reason.
 
 Color adjustment outputs are clamped to 0..1 and their parameters to their ranges. Math and
 converter nodes are unclamped (enable Clamp where offered) so intermediate values can go

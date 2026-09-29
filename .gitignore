@@ -4,3 +4,4 @@ cmake-build-*/
 *.nlproj.tmp
 .toolchain/
 build-dev/
+build-test/

@@ -42,3 +42,8 @@ void registerColorNodes(NodeRegistry& r);
 void registerMathNodes(NodeRegistry& r);
 void registerConverterNodes(NodeRegistry& r);
 void registerGroupNodes(NodeRegistry& r);
+void registerFilterNodes(NodeRegistry& r);
+void registerTransformNodes(NodeRegistry& r);
+void registerMatteNodes(NodeRegistry& r);
+void registerTextureNodes(NodeRegistry& r);
+void registerUtilityNodes(NodeRegistry& r);
