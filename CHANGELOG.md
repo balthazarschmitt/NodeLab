@@ -5,6 +5,21 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 ## Unreleased
 
+## 0.8.0 (2026-09-30)
+
+- **Develop maths for scene-linear projects** (Basic, Color Mixer, Color Grading), modelled on
+  darktable:
+  - **White balance** is a CAT16 adaptation along the blackbody locus. Temperature and Tint 0/0
+    is no change.
+  - **Highlights / Shadows / Whites / Blacks** form a tone equalizer: gains in stops from an
+    edge-aware exposure mask, applied as RGB ratios, so there are no halos or hue shifts.
+    Highlights can recover detail above white.
+  - **Contrast** is a log-space S-curve around middle grey. **Clarity** and **Texture** work on
+    log luminance.
+  - **Vibrance, Saturation, the Color Mixer and Color Grading** work in Oklab/Oklch. Out-of-gamut
+    colours are compressed toward grey instead of clipped.
+  - Legacy sRGB projects render exactly as before.
+
 ## 0.7.0 (2026-09-30)
 
 - **Scene-linear colour management**, as in Blender. New projects decode images to linear light

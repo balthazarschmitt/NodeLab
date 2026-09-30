@@ -74,7 +74,8 @@ build\nodelab_tests.exe
 ## Layout
 
 ```
-src/core      Image/Channel/Value types + conversions, ColorMath, Curve, Ramp, Noise, Parallel
+src/core      Image/Channel/Value types + conversions, ColorMath, ColorScience (Oklab, CAT16 white
+              balance, gamut compression), Curve, Ramp, Noise, Parallel
 src/graph     Node (params, flags), Graph (links, frames, JSON), Evaluator (+AsyncEvaluator), NodeRegistry
 src/nodes     one file per family: io, color, math (Mix), converter (+Expression), filter, transform,
               matte, texture, utility, group; ImageOps (sampling, box blur, distance transform)

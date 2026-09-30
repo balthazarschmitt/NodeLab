@@ -397,6 +397,19 @@ Blender. Invert, Posterize and the curve-based nodes still work on 0..1.
   atmospheric haze), Vibrance (boosts muted colours more than saturated ones and protects skin
   tones), and Saturation.
 - Factor blends with the original. Wire a mask into it to make a local adjustment.
+- **In scene-linear projects** Basic uses darktable-style maths on the linear light:
+  - White balance is a CAT16 chromatic adaptation. Temperature moves the assumed light along the
+    blackbody (Planckian) locus, and Tint moves it across toward green or magenta. Brightness stays
+    put.
+  - Exposure multiplies without clipping, so detail above white can be brought back.
+  - Highlights, Shadows, Whites and Blacks work like a **tone equalizer**. Each pixel is brightened
+    or darkened by a number of stops that depends on its exposure. Highlights and Shadows read an
+    edge-aware smoothed exposure mask, so whole regions move together without halos at their edges.
+    Colour ratios are kept, so hues don't shift.
+  - Contrast is an S-curve in stops around middle grey. Clarity and Texture work on log luminance.
+  - Vibrance and Saturation scale chroma in Oklab, which keeps lightness and hue. Colours pushed out
+    of gamut are pulled toward grey rather than clipped.
+  - Legacy (sRGB) projects keep the earlier maths.
 
 **Color Mixer**
 - Lightroom's HSL panel: Hue, Saturation and Luminance for eight colour bands (Red, Orange,
@@ -405,6 +418,8 @@ Blender. Invert, Posterize and the curve-based nodes still work on 0..1.
   grey pixels are left alone.
 - **Uses:** darken a blue sky (Blue Luminance down), make foliage autumnal (Green Hue towards
   yellow), or calm down a loud colour.
+- In scene-linear projects the bands are measured in Oklch, a perceptual space, so changing
+  Saturation or Hue keeps a colour's lightness, and Luminance changes it in stops.
 
 **Color Grading**
 - Lightroom's colour wheels: Shadows, Midtones and Highlights, plus Global for the whole image.
@@ -414,6 +429,8 @@ Blender. Invert, Posterize and the curve-based nodes still work on 0..1.
 - **Blending:** how much the three ranges overlap. **Balance:** moves the split between shadows
   and highlights (positive favours the highlights tint).
 - **Uses:** teal shadows with warm highlights, or a gentle overall warm or cool cast.
+- In scene-linear projects the ranges are chosen by Oklab lightness and the tint is added in
+  Oklab, so blacks stay neutral and brightness is kept.
 
 **Tone Map**
 - Compresses very bright values (for example after Exposure, Glare or Add blends) back into 0..1
