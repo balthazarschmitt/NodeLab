@@ -1,4 +1,5 @@
 #pragma once
+#include <unordered_map>
 #include <map>
 #include <set>
 #include <string>
@@ -40,6 +41,9 @@ public:
     // The graph was replaced (new/open/undo): drop selection and in-flight interactions.
     void onGraphReplaced(bool frame);  // also clears the active value field
     void frameAll() { fitFrames_ = 1; }
+    // Blender's "Node Timings" overlay: how long each node took when it last ran, drawn above it.
+    // Keyed by node id of the graph being drawn; empty hides the labels.
+    void setTimings(std::unordered_map<int, double> t) { timings_ = std::move(t); }
     void select(int nodeId);
 
     // Places a node so its title bar sits at a screen position (uses the current view).
@@ -47,6 +51,7 @@ public:
     ImVec2 canvasCenter() const { return ImVec2(origin_.x + size_.x * 0.5f, origin_.y + size_.y * 0.4f); }
 
     // True while the user is mid-gesture (dragging, editing a value), so undo snapshots wait.
+    bool showTimings = true;
     bool interacting() const { return mode_ != Mode::None || editing_.node != 0 || activeNode_ != 0; }
 
     bool duplicateSelection(Graph& g);
@@ -75,6 +80,7 @@ public:
     void setViewState(const nlohmann::json& j);
 
 private:
+    std::unordered_map<int, double> timings_;
     enum class Mode { None, Pan, BoxSelect, PressNode, DragNodes, DragLink, DragFrame, ResizeFrame, Grab, Knife, RerouteCut };
 
     struct PinRef {

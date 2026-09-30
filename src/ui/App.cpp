@@ -263,6 +263,7 @@ void App::drawFrame() {
     }
 
     // Kick evaluation after the UI had a chance to change the graph this frame.
+    const bool gesture = ImGui::IsAnyItemActive() || ImGui::IsMouseDown(ImGuiMouseButton_Left) || editor_.interacting();
     if (evalDirty_) {
         submittedTargets_.clear();
         std::vector<int> pins;
@@ -287,9 +288,12 @@ void App::drawFrame() {
         } else {
             gj = graph_.toJson();
         }
-        eval_->submit(std::move(gj), submittedTargets_, pins);
+        eval_->submit(std::move(gj), submittedTargets_, pins, !gesture);
         evalDirty_ = false;
     }
+    // A drag just ended: its last value is queued behind an intermediate one; skip the latter.
+    if (gestureWas_ && !gesture) eval_->preempt();
+    gestureWas_ = gesture;
     updateTextures();
     updateTitle();
 
@@ -368,6 +372,8 @@ void App::drawEditorWindow() {
             std::equal(groupPath_.begin(), groupPath_.end(), previewPath_.begin()))
             preview = previewPath_.back();
         const int previewBefore = preview;
+        // Timings are for the top-level graph; ids inside a group mean different nodes.
+        editor_.setTimings(groupPath_.empty() ? nodeMs_ : std::unordered_map<int, double>{});
         NodeEditor::Result r = editor_.draw(g, selected_, preview, previewPin_);
         if (preview != previewBefore || r.previewChanged) {
             previewPath_.clear();
@@ -625,6 +631,7 @@ void App::drawMainMenu() {
         ImGui::Separator();
         if (ImGui::MenuItem("Reset Layout")) resetLayout_ = true;
         ImGui::Separator();
+        ImGui::MenuItem("Node Timings", nullptr, &editor_.showTimings);
         if (ImGui::MenuItem("Frame All Nodes", "Home")) editor_.frameAll();
         if (ImGui::MenuItem("Reset Image Zoom", "double-click image")) view_.reset();
         if (ImGui::MenuItem("Clear Node Preview", nullptr, false, !previewPath_.empty())) {
@@ -1245,6 +1252,7 @@ void App::updateTextures() {
 
     if (auto res = eval_->poll()) {
         evalMs_ = res->ms;
+        nodeMs_ = res->nodeMs;
         // Results are in submission order; match them to the viewers that still exist.
         const size_t nv = std::min({viewers_.size(), res->images.size(), submittedViewers_});
         for (size_t i = 0; i < nv; ++i) {

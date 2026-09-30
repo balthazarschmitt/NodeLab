@@ -245,6 +245,7 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
     // Curves node doesn't inherit the previous one's channel.
     ImGui::PushID(n->id);
     const ParamRow row = [&](int i) {
+        if (!n->paramVisible(i)) return false;
         // A param that backs a connected input is overridden by the wire.
         bool driven = false;
         for (int p = 0; p < int(info.inputs.size()); ++p)

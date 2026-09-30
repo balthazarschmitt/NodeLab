@@ -27,6 +27,17 @@ struct ParamDesc {
     float hardMin = 0.0f, hardMax = 1.0f;  // values are clamped to this
     nlohmann::json def;
     std::vector<std::string> options;  // Enum labels
+    // Shown only while param `showIf` equals `showIfValue` (a Bool counts as 0/1), like Blender
+    // hiding Factor X/Y until Blur's Relative is on. Hidden params keep their values.
+    int showIf = -1;
+    int showIfValue = 1;
+
+    ParamDesc when(int param, int value = 1) const {
+        ParamDesc d = *this;
+        d.showIf = param;
+        d.showIfValue = value;
+        return d;
+    }
 
     // Clamped to [mn, mx].
     static ParamDesc Float(std::string n, float def, float mn, float mx) { return make(std::move(n), ParamKind::Float, mn, mx, mn, mx, def); }
@@ -122,6 +133,14 @@ public:
     float paramF(int i) const { return params[i].is_number() ? params[i].get<float>() : 0.0f; }
     int paramI(int i) const { return params[i].is_number() ? params[i].get<int>() : 0; }
     bool paramB(int i) const { return params[i].is_boolean() ? params[i].get<bool>() : false; }
+    // False when the param's ParamDesc::showIf condition hides it (UI only).
+    bool paramVisible(int i) const {
+        const ParamDesc& d = info().params[i];
+        if (d.showIf < 0 || d.showIf >= int(params.size())) return true;
+        const nlohmann::json& v = params[d.showIf];
+        const int cur = v.is_boolean() ? int(v.get<bool>()) : (v.is_number() ? v.get<int>() : 0);
+        return cur == d.showIfValue;
+    }
     std::string paramS(int i) const { return params[i].is_string() ? params[i].get<std::string>() : std::string(); }
     void paramC(int i, float out[3]) const {
         for (int k = 0; k < 3; ++k)

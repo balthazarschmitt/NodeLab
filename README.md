@@ -39,11 +39,14 @@ See [CHANGELOG.md](CHANGELOG.md).
 Headless render: `NodeLab.exe --render project.nlproj out.png`
 Headless batch: `NodeLab.exe --batch project.nlproj outDir [--jpg] a.jpg b.jpg ...` (each source goes
 into the project's first Image Input and is saved as `outDir\<name>_edit.png`)
+Benchmark: `NodeLab.exe --benchmark project.nlproj [--full] [--runs N]` (median ms per node)
 Screenshot of the UI (debug aid): `NodeLab.exe project.nlproj --screenshot shot.png`
 Scripted UI test (feeds input straight to ImGui, ignores the real mouse; see `src/ui/UiScript.h`):
 `NodeLab.exe examples\demo.nlproj --script tests\ui\fanout_addnode.txt`
 
 Try `examples/demo.nlproj`: the red channel drives saturation, so only red things stay colorful.
+`examples/infrared_foliage.nlproj` turns a colour photo into lilac-white infrared foliage under a
+dark sky (see Help > Guide > Recipes).
 
 ## Using it
 
@@ -110,8 +113,8 @@ layout is saved per user in `%APPDATA%\NodeLab\layout.ini`.
 | Input / Output | Image Input, Output, Number |
 | Color | Basic (Lightroom's exposure, highlights/shadows, whites/blacks, texture, clarity, dehaze, vibrance), Color Mixer (8-band HSL), Color Grading (shadow/midtone/highlight/global wheels), Brightness / Contrast, Saturation, Hue Shift, Hue Correct (per-hue H/S/V curves), Exposure, Gamma, Levels, Curves, Color Balance (Lift/Gamma/Gain, ASC CDL), Tone Map, Convert Colorspace, Invert, Luminance, Split/Combine RGB, HSV, HSL, Lab, YCbCr, YUV |
 | Mix | Mix, Blend (19 modes), Alpha Over |
-| Converter | Color Ramp, Color Key, Map Range, Math (21 ops), Clamp, Threshold, Normalize, Float Curve, Set Alpha, Wavelength (nm to color), Blackbody (Kelvin to color), Expression, Image Expression |
-| Filter | Blur, Directional Blur (+spin/zoom), Bilateral Blur, Filter (Soften, Sharpen, Laplace, Sobel, Prewitt, Kirsch, Shadow), Dilate / Erode, Kuwahara, Pixelate, Posterize, Glare (Fog Glow, Streaks, Simple Star), Sun Beams |
+| Converter | Color Ramp, Color Key, Map Range, Math (21 ops), Clamp, Threshold, Normalize (min/max or percentiles), Float Curve, Set Alpha, Wavelength (nm to color), Blackbody (Kelvin to color), Expression, Image Expression |
+| Filter | Blur (pixels or Relative %), Directional Blur (+spin/zoom), Bilateral Blur, Filter (Soften, Sharpen, Laplace, Sobel, Prewitt, Kirsch, Shadow), Dilate / Erode, Kuwahara, Pixelate, Posterize, Glare (Fog Glow, Streaks, Simple Star), Sun Beams |
 | Transform | Transform, Flip, Crop (straighten, aspect presets, on-image frame), Lens Correction (distortion, fringing, vignetting), Lens Distortion (with chromatic dispersion), Displace, Map UV, Corner Pin |
 | Matte | Box Mask, Ellipse Mask, Radial Gradient, Linear Gradient, Brush Mask (painted on the Result), Channel Key, Luminance Key, Difference Key, Distance Key, Chroma Key, Color Spill, Double Edge Mask |
 | Texture | Noise, Voronoi, Gradient, Wave, Checker, White Noise |

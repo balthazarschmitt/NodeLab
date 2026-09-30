@@ -5,6 +5,33 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 ## Unreleased
 
+## 0.6.0 (2026-09-30)
+
+- **Faster processing.** Typical graphs re-render about 3–5× faster. The infrared preset takes
+  about 206 ms at preview size (was about 640 ms) and 570 ms at full resolution (was about 2.9 s):
+  - Expression nodes compile to bytecode that runs over runs of pixels, sharing repeated
+    sub-expressions. The results are bit-identical.
+  - Worker threads start once and are reused, instead of being created for every loop.
+  - Blur reads memory in cache-friendly blocks. Blurring a Channel keeps it a single channel
+    instead of converting it to RGBA.
+  - A long render is cancelled mid-node when you change something. Nodes already finished stay
+    cached, so the new render only redoes what changed.
+- **View > Node Timings:** each node shows how long it took to evaluate, as in Blender's
+  compositor. Slow nodes (50 ms or more) are highlighted.
+- `NodeLab.exe --benchmark project.nlproj [--full] [--runs N]` prints per-node and total times.
+- **Infrared foliage** example (`examples/infrared_foliage.nlproj`) and Guide recipe: lilac-white
+  glowing trees, a dark maroon sky and pink clouds. It was fitted against a real infrared/colour
+  photo pair, handles sky seen through needles (no halos), and works at any resolution or exposure.
+- **Blur > Relative** (Blender's option): Factor X/Y as a percentage of the image size, with
+  Aspect Correction, so one setting fits any resolution.
+- **Normalize > Low % / High %:** percentile range (auto-exposure). The 0 / 100 defaults keep
+  the old min/max behaviour.
+- Node params can now show only while another param is set (Blur's Factor X/Y appear only with
+  Relative, as in Blender).
+- Fix: **Combine RGB** clamped its inputs and output to 0..1. It is now unclamped like Blender's,
+  so it can pack masks and values outside 0..1.
+- Fix: an Image Input that fails to load now names the file in the error.
+
 ## 0.5.0 (2026-09-29)
 
 - **Basic** node: Lightroom's Basic panel in one node (temperature, tint, exposure, contrast,

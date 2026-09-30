@@ -1,5 +1,6 @@
 #include "nodes/utility/UtilityNodes.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -88,15 +89,23 @@ public:
     NODELAB_NODE({"conv.normalize", "Normalize", "Converter",
                   {{"Value", PinType::Channel}},
                   {{"Value", PinType::Channel}},
-                  {}})
+                  {ParamDesc::Float("Low %", 0.0f, 0.0f, 100.0f), ParamDesc::Float("High %", 100.0f, 0.0f, 100.0f)}})
     void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
         ChannelPtr c = toChannel(in[0]);
         if (!c || c->constant) {
             if (c) out[0] = Value(c);
             return;
         }
-        auto [mn, mx] = std::minmax_element(c->data.begin(), c->data.end());
-        const float lo = *mn, range = std::max(*mx - *mn, 1e-9f);
+        // Percentiles instead of plain min/max, so a few specular or black pixels don't set the
+        // range (auto-exposure). 0 / 100 is Blender's min/max; the result is not clamped.
+        std::vector<float> sorted(c->data);
+        auto pct = [&](float p) {
+            size_t k = size_t(std::clamp(p / 100.0f, 0.0f, 1.0f) * float(sorted.size() - 1) + 0.5f);
+            std::nth_element(sorted.begin(), sorted.begin() + k, sorted.end());
+            return sorted[k];
+        };
+        const float lo = pct(std::min(paramF(0), paramF(1))), hi = pct(std::max(paramF(0), paramF(1)));
+        const float range = std::max(hi - lo, 1e-9f);
         out[0] = Value(ChannelPtr(makeChannel(c->w, c->h, [&](int x, int y) {
             return (c->data[size_t(y) * c->w + x] - lo) / range;
         })));

@@ -58,6 +58,8 @@ build\nodelab_tests.exe
 - **Node list:** `NodeLab.exe --list-nodes` prints every node with its pins and params.
 - **Headless render:** `NodeLab.exe --render project.nlproj out.png` renders at full resolution and
   also writes File Output nodes.
+- **Benchmark:** `NodeLab.exe --benchmark project.nlproj [--full] [--runs N]` prints the median ms
+  per node. Use it before and after performance work.
 - **Screenshot of the UI:** `NodeLab.exe project.nlproj --screenshot shot.png`.
 - **Scripted UI tests:** `NodeLab.exe tests\ui\interact.nlproj --script tests\ui\<name>.txt`.
   - Script commands are documented in `src/ui/UiScript.h`.

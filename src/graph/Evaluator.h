@@ -11,11 +11,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/Parallel.h"  // EvalCancelled
 #include "graph/Graph.h"
-
-struct EvalCancelled : std::runtime_error {
-    EvalCancelled() : std::runtime_error("cancelled") {}
-};
 
 // Pull-based graph evaluator with a per-node output cache. A node is recomputed only when
 // its signature (type + params + upstream signatures + resolution mode) changes.
@@ -39,10 +36,18 @@ public:
 
     int recomputeCount = 0;  // nodes actually evaluated (for tests / stats)
 
+    // Milliseconds the node's own evaluate() took when it last ran (upstream work excluded), like
+    // Blender's compositor Node Timings. -1 if the node has no cached result.
+    double nodeMs(int nodeId) const;
+    // Timings of every cached node in the graph last evaluated (top level only; a group's time
+    // includes its inner nodes).
+    std::unordered_map<int, double> timings() const;
+
 private:
     struct Entry {
         size_t sig = 0;
         std::vector<Value> outs;
+        double ms = 0;
     };
     size_t ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unordered_map<int, size_t>& pass);
 
@@ -53,7 +58,9 @@ private:
 void initContextSize(const Graph& g, EvalContext& ctx);
 
 // Runs evaluation on a background thread. Newer submissions replace queued ones; the UI keeps
-// showing the last completed result meanwhile. Cancellation is used only on shutdown.
+// showing the last completed result meanwhile. A running job is normally left to finish, so a
+// slider drag keeps producing intermediate results; `preempt` cancels it instead, for edits whose
+// result is the one that matters (a finished gesture, undo, a typed value).
 class AsyncEvaluator {
 public:
     struct Result {
@@ -61,6 +68,7 @@ public:
         std::vector<std::string> errors;  // one per submitted target (empty = ok)
         double ms = 0;
         uint64_t generation = 0;
+        std::unordered_map<int, double> nodeMs;  // top-level node timings (see Evaluator::timings)
     };
 
     explicit AsyncEvaluator(ImageCache& cache);
@@ -70,7 +78,11 @@ public:
 
     // Evaluates several display targets in one pass (they share the node cache).
     // pins[i]: which output of targets[i] to show (defaults to 0).
-    void submit(nlohmann::json graphJson, std::vector<NodePath> targets, std::vector<int> pins = {});
+    void submit(nlohmann::json graphJson, std::vector<NodePath> targets, std::vector<int> pins = {}, bool preempt = false);
+    // Cancels the running job if a newer one is queued (e.g. when a drag ends: the running job
+    // shows an intermediate value and the queued one the final value). Nodes it already finished
+    // stay cached.
+    void preempt();
     // Returns a result once per completed job.
     std::optional<Result> poll();
     bool busy() const { return busy_.load(); }

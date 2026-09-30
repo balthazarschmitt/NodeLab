@@ -65,39 +65,75 @@ std::vector<int> boxRadii(float sigma) {
     return r;
 }
 
-// One box pass over `count` lines of length `len`; element i of line l is at base(l) + i*stride.
-// Edges clamp. `channels` interleaved values per element.
-void boxPass(float* data, int lines, int len, size_t lineStride, size_t elemStride, int channels, int radius) {
-    if (radius <= 0) return;
-    parallelFor(lines, [&](int l) {
-        std::vector<float> line(size_t(len) * channels);
-        float* base = data + size_t(l) * lineStride;
-        for (int i = 0; i < len; ++i)
-            for (int c = 0; c < channels; ++c) line[size_t(i) * channels + c] = base[size_t(i) * elemStride + c];
-        const float inv = 1.0f / float(2 * radius + 1);
-        for (int c = 0; c < channels; ++c) {
-            auto at = [&](int i) { return line[size_t(std::clamp(i, 0, len - 1)) * channels + c]; };
-            float acc = 0;
-            for (int i = -radius; i <= radius; ++i) acc += at(i);
-            for (int i = 0; i < len; ++i) {
-                base[size_t(i) * elemStride + c] = acc * inv;
-                acc += at(i + radius + 1) - at(i - radius);
-            }
+// One edge-clamped box pass along a line of `len` elements, each `n` contiguous floats (the
+// interleaved channels of one pixel, or of a block of pixels). Reads src, writes dst (distinct).
+// The running sum visits values in the same order as a straightforward clamped loop.
+void boxLine(const float* src, float* dst, int len, int n, int radius, float* acc) {
+    const float inv = 1.0f / float(2 * radius + 1);
+    auto at = [&](int i) { return src + size_t(std::clamp(i, 0, len - 1)) * n; };
+    std::fill(acc, acc + n, 0.0f);
+    for (int i = -radius; i <= radius; ++i) {
+        const float* s = at(i);
+        for (int k = 0; k < n; ++k) acc[k] += s[k];
+    }
+    for (int i = 0; i < len; ++i) {
+        float* d = dst + size_t(i) * n;
+        for (int k = 0; k < n; ++k) d[k] = acc[k] * inv;
+        const float *add = at(i + radius + 1), *sub = at(i - radius);
+        for (int k = 0; k < n; ++k) acc[k] += add[k] - sub[k];
+    }
+}
+
+// All box passes of one axis, done per line (or per block of columns) in scratch buffers, so the
+// data is read and written once per axis instead of once per pass. The vertical axis works on
+// blocks of columns: walking one column at a time touches a new cache line for every pixel.
+void boxBlur(float* data, int w, int h, int ch, float sigmaX, float sigmaY) {
+    const std::vector<int> rx = boxRadii(sigmaX), ry = boxRadii(sigmaY);
+    auto run = [](const std::vector<int>& radii, std::vector<float>& a, std::vector<float>& b, int len, int n,
+                  std::vector<float>& acc) {
+        for (int r : radii) {
+            if (r <= 0) continue;
+            boxLine(a.data(), b.data(), len, n, r, acc.data());
+            a.swap(b);
         }
-    });
+    };
+    if (!rx.empty()) {
+        const size_t row = size_t(w) * ch;
+        parallelFor(h, [&](int y) {
+            std::vector<float> a(data + y * row, data + (y + 1) * row), b(row), acc(static_cast<size_t>(ch));
+            run(rx, a, b, w, ch, acc);
+            std::copy(a.begin(), a.end(), data + y * row);
+        });
+    }
+    if (!ry.empty()) {
+        constexpr int kBlock = 16;  // pixels per column block: 64 B (channel) or 256 B (RGBA) per row
+        const int blocks = (w + kBlock - 1) / kBlock;
+        parallelFor(blocks, [&](int bi) {
+            const int x0 = bi * kBlock, bw = std::min(kBlock, w - x0), n = bw * ch;
+            std::vector<float> a(size_t(h) * n), b(a.size()), acc(static_cast<size_t>(n));
+            for (int y = 0; y < h; ++y) {
+                const float* s = data + (size_t(y) * w + x0) * ch;
+                std::copy(s, s + n, a.data() + size_t(y) * n);
+            }
+            run(ry, a, b, h, n, acc);
+            for (int y = 0; y < h; ++y) {
+                const float* s = a.data() + size_t(y) * n;
+                std::copy(s, s + n, data + (size_t(y) * w + x0) * ch);
+            }
+        });
+    }
 }
 
 }  // namespace
 
 void blurImage(Image& img, float sigmaX, float sigmaY) {
     if (img.empty()) return;
-    for (int r : boxRadii(sigmaX)) boxPass(img.px.data(), img.h, img.w, size_t(img.w) * 4, 4, 4, r);
-    for (int r : boxRadii(sigmaY)) boxPass(img.px.data(), img.w, img.h, 4, size_t(img.w) * 4, 4, r);
+    boxBlur(img.px.data(), img.w, img.h, 4, sigmaX, sigmaY);
 }
 
 void blurChannel(std::vector<float>& ch, int w, int h, float sigmaX, float sigmaY) {
-    for (int r : boxRadii(sigmaX)) boxPass(ch.data(), h, w, size_t(w), 1, 1, r);
-    for (int r : boxRadii(sigmaY)) boxPass(ch.data(), w, h, 1, size_t(w), 1, r);
+    if (w <= 0 || h <= 0) return;
+    boxBlur(ch.data(), w, h, 1, sigmaX, sigmaY);
 }
 
 namespace {

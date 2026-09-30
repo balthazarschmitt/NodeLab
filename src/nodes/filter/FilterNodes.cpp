@@ -21,12 +21,39 @@ public:
     NODELAB_NODE({"filter.blur", "Blur", "Filter",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
-                  {ParamDesc::Float("Size X", 10.0f, 0.0f, 200.0f), ParamDesc::Float("Size Y", 10.0f, 0.0f, 200.0f)}})
+                  {ParamDesc::Float("Size X", 10.0f, 0.0f, 200.0f).when(2, 0), ParamDesc::Float("Size Y", 10.0f, 0.0f, 200.0f).when(2, 0),
+                   ParamDesc::Bool("Relative", false), ParamDesc::Enum("Aspect Correction", 0, {"None", "Y", "X"}).when(2),
+                   ParamDesc::Float("Factor X", 1.0f, 0.0f, 100.0f).when(2), ParamDesc::Float("Factor Y", 1.0f, 0.0f, 100.0f).when(2)}})
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
-        ImagePtr src = toImage(in[0], 0, 0);
-        if (!src) return;
+        // A channel (e.g. a mask) is blurred as one plane and passed on as a channel: converting
+        // it to a grey RGBA image first would blur four identical planes. Consumers convert it
+        // back to an image exactly as they would have (grey, alpha 1), so results don't change.
+        const auto* chp = std::get_if<ChannelPtr>(&in[0].v);
+        const Channel* srcCh = chp && *chp && !(*chp)->constant ? chp->get() : nullptr;
+        if (chp && *chp && (*chp)->constant) {
+            out[0] = in[0];  // flat: nothing to blur
+            return;
+        }
+        ImagePtr src = srcCh ? nullptr : toImage(in[0], 0, 0);
+        if (!src && !srcCh) return;
+        const int w = srcCh ? srcCh->w : src->w, h = srcCh ? srcCh->h : src->h;
+        float sx = paramF(0) * ctx.scale, sy = paramF(1) * ctx.scale;
+        if (paramB(2)) {
+            // Blender's Relative: percent of the image size, so one setting fits any resolution
+            // (the working image is already proxy-sized, so no ctx.scale). Aspect Correction Y
+            // measures Y against the width too (round blur on non-square images), X the reverse.
+            const int ac = paramI(3);
+            sx = paramF(4) * 0.01f * float(ac == 2 ? h : w);
+            sy = paramF(5) * 0.01f * float(ac == 1 ? w : h);
+        }
+        if (srcCh) {
+            auto c = std::make_shared<Channel>(*srcCh);
+            blurChannel(c->data, w, h, sx * 0.5f, sy * 0.5f);
+            out[0] = Value(ChannelPtr(c));
+            return;
+        }
         auto img = copyOf(*src);
-        blurImage(*img, paramF(0) * ctx.scale * 0.5f, paramF(1) * ctx.scale * 0.5f);
+        blurImage(*img, sx * 0.5f, sy * 0.5f);
         out[0] = Value(ImagePtr(img));
     }
 };

@@ -125,6 +125,7 @@ private:
     std::string projectPath_;
     bool modified_ = false;
     bool evalDirty_ = true;
+    bool gestureWas_ = false;  // a drag/slider/text gesture was active last frame
     std::string lastTitle_;
 
     std::string status_;
@@ -141,6 +142,7 @@ private:
     std::vector<std::string> batchSources_;
     std::vector<std::string> exportLog_;
     double evalMs_ = 0;
+    std::unordered_map<int, double> nodeMs_;  // top-level node timings from the last evaluation
 
     // panels / layout
     bool showOriginal_ = true, showEditor_ = true, showInspector_ = true, showResult_ = true;

@@ -21,7 +21,8 @@ F1 (or the **Guide** button in the Inspector) jumps straight to that node's entr
 Every panel is a tab that can be dragged. Drop it on the edge of another panel to dock it there,
 or outside the window to float it. **View > Reset Layout** puts everything back.
 **View > New Viewer** opens an extra image panel that can show any node (see Viewing Intermediate
-Results below).
+Results below). **View > Node Timings** shows how long each node took above it (amber when it is
+50 ms or more), so you can see what slows a graph down.
 
 ### A First Graph
 
@@ -294,7 +295,9 @@ These adjust colour and tone. Their outputs are clamped to 0..1.
 
 **Split RGB / Combine RGB**
 - Split takes an image apart into R, G, B and A channels. Combine builds an image from four
-  channels (unconnected ones use their slider).
+  channels (unconnected ones use their slider). Like Blender, Combine does not clamp, so it can
+  also pack three data channels (masks, values above 1 or below 0) into one image for an
+  Expression to read as r, g and b.
 - These are the most useful nodes in NodeLab: swap channels for false colour, drive other nodes
   from a colour, or process one channel on its own.
 
@@ -481,6 +484,9 @@ Converters work on channels and numbers. They don't clamp unless they have a Cla
 **Normalize**
 - Stretches a channel so its darkest pixel becomes 0 and its brightest 1. Useful after Math or
   Expression, when values have an unknown range.
+- **Low % / High %:** use percentiles instead of the darkest and brightest pixel, so a few black
+  or specular pixels don't set the range. For example 1 / 99 is an auto-exposure, and 0 / 99 makes
+  brightness relative to the photo's highlights. Values outside the range go below 0 or above 1.
 
 **Float Curve**
 - A curve applied to a channel: the horizontal axis is the input, the vertical axis the output.
@@ -498,6 +504,9 @@ Sizes are in full-resolution pixels.
 **Blur**
 - Gaussian-style blur. Size X and Size Y set the horizontal and vertical radius separately, so a
   large Size X with a small Size Y gives a horizontal smear.
+- **Relative:** sizes become Factor X / Factor Y, percentages of the image width and height, so the
+  same setting fits any photo resolution. **Aspect Correction Y** measures Y against the width too
+  (a round blur on a non-square photo); **X** measures X against the height.
 
 **Directional Blur**
 - Motion-style blur with several optional parts:
@@ -827,6 +836,28 @@ so we estimate it: foliage is green, and green foliage is bright in infrared.
    makes a fake infrared channel that is bright on foliage.
 3. **Combine RGB**: R = the infrared expression, G = the original R, B = the original G.
 4. Optionally add **Levels** or **Curves** for contrast, and **Hue Correct** to fine-tune reds.
+
+### Infrared Foliage (lilac / white trees, dark sky)
+
+Open `examples/infrared_foliage.nlproj` and replace the Image Input's file. It is the classic
+full-spectrum infrared look: glowing white-lilac leaves, a dark maroon sky with pink clouds and
+dark ground. It was fitted against a real infrared/colour photo pair. How it works:
+
+1. **Estimate materials.** A lightly blurred copy (Blur, Relative) gives stable colours. Colourful
+   pixels with a warm-to-green hue are vegetation. Sunset light hides green, which is why warm hues
+   count too. Blue pixels, and bright smooth areas (a low local Deviation), are sky.
+2. **Grow the masks** with Blur + Expression (`max(in1, in2 * 1.5)`), so foliage glows into its own
+   shadows and the sky reaches the edges of trees. **Sky gaps:** pixels near the sky that have the
+   local sky colour (a Blend > Difference against the blurred, sky-weighted colour) are sky seen
+   through needles. Without this, the gaps glow and trees get a bright halo.
+3. **Estimate infrared brightness N.** Vegetation is bright (`0.1 + 0.9 * sqrt(L)`), the sky is dark
+   (`-0.12 + 0.62 * L`) and everything else follows luminance. L is Normalize 0 / 99 %, so the
+   result doesn't depend on exposure.
+4. **Glow:** blend N towards a blurred copy inside foliage, and add a soft bloom above 0.6.
+5. **Normalize 1 / 99 %** (auto-exposure), then a **Color Ramp** from near-black brown through mauve
+   to white-lilac, plus a redder ramp mixed in by the sky mask.
+
+Combine RGB packs three masks into one image wherever an Expression needs more than two inputs.
 
 ### Black-and-white Infrared (720 nm style)
 

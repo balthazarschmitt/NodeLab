@@ -49,6 +49,7 @@ size_t Evaluator::ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unor
     if (e.sig != sig) {
         if (ctx.cancel && ctx.cancel->load()) throw EvalCancelled();
         std::vector<Value> outs(info.outputs.size());
+        const auto t0 = std::chrono::steady_clock::now();
         if (n->muted) {
             // Bypass: each output takes the first connected input of the same type (else any
             // convertible one), like Blender's mute.
@@ -65,9 +66,13 @@ size_t Evaluator::ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unor
                     }
             }
         } else {
+            // Parallel loops inside the node poll this flag between chunks, so a cancel lands
+            // mid-node instead of after it.
+            parallel::CancelScope scope(ctx.cancel);
             n->evaluate(ctx, inputs, outs);
         }
         ++recomputeCount;
+        e.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         e.sig = sig;
         e.outs = std::move(outs);
     }
@@ -119,6 +124,18 @@ ImagePtr Evaluator::evaluateDisplayPath(const Graph& g, const NodePath& path, Ev
     return group->previewInner(ctx, inputs, NodePath(path.begin() + 1, path.end()), pin);
 }
 
+double Evaluator::nodeMs(int nodeId) const {
+    auto it = cache_.find(nodeId);
+    return it == cache_.end() || it->second.sig == 0 ? -1.0 : it->second.ms;
+}
+
+std::unordered_map<int, double> Evaluator::timings() const {
+    std::unordered_map<int, double> t;
+    for (const auto& [id, e] : cache_)
+        if (e.sig) t[id] = e.ms;
+    return t;
+}
+
 void Evaluator::prune(const Graph& g) {
     std::erase_if(cache_, [&](const auto& kv) { return g.find(kv.first) == nullptr; });
 }
@@ -153,15 +170,21 @@ AsyncEvaluator::~AsyncEvaluator() {
     thread_.join();
 }
 
-void AsyncEvaluator::submit(nlohmann::json graphJson, std::vector<NodePath> targets, std::vector<int> pins) {
+void AsyncEvaluator::submit(nlohmann::json graphJson, std::vector<NodePath> targets, std::vector<int> pins, bool preempt) {
     pins.resize(targets.size(), 0);
     {
         std::lock_guard lock(mutex_);
         // Latest job wins: it replaces any queued (not yet started) job. The running job is left
         // to finish so continuous slider drags still produce steady intermediate results.
         pending_ = Job{std::move(graphJson), std::move(targets), std::move(pins), nextGen_++};
+        if (preempt) cancel_ = true;  // reset when the worker picks up the pending job
     }
     cv_.notify_all();
+}
+
+void AsyncEvaluator::preempt() {
+    std::lock_guard lock(mutex_);
+    if (pending_) cancel_ = true;
 }
 
 std::optional<AsyncEvaluator::Result> AsyncEvaluator::poll() {
@@ -208,6 +231,7 @@ void AsyncEvaluator::run() {
                 }
             }
             evaluator_.prune(g);
+            res.nodeMs = evaluator_.timings();
         } catch (const EvalCancelled&) {
             cancelled = true;
         } catch (const std::exception& e) {

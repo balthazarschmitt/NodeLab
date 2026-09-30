@@ -9,7 +9,9 @@ void ImageInputNode::evaluate(EvalContext& ctx, const std::vector<Value>&, std::
     if (path.empty() || !ctx.cache) return;  // empty output: nothing loaded yet
     std::string err;
     ImagePtr img = ctx.cache->get(path, ctx.proxy, &err);
-    if (!img) throw std::runtime_error("Image Input: " + err);
+    // Name the file: stb's "can't fopen" alone doesn't say which of several inputs failed, and
+    // relative paths resolve against the project folder, which is easy to get wrong.
+    if (!img) throw std::runtime_error("Image Input: " + err + " (" + path + ")");
     out[0] = Value(img);
 }
 

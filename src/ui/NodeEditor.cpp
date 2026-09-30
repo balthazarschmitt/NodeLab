@@ -60,8 +60,9 @@ bool pinBacked(const NodeInfo& info, int param) {
 }
 
 // Rows a param occupies on the node body (0 = inspector only / shown on its input pin).
-int paramRows(const NodeInfo& info, int i) {
-    if (info.compact) return 0;
+int paramRows(const Node& n, int i) {
+    const NodeInfo& info = n.info();
+    if (info.compact || !n.paramVisible(i)) return 0;
     switch (info.params[i].kind) {
         case ParamKind::Float: return pinBacked(info, i) ? 0 : 1;
         case ParamKind::Path:
@@ -88,7 +89,7 @@ float nodeHeightGrid(const Node& n) {
     }
     const NodeInfo& info = n.info();
     int rows = int(info.inputs.size() + info.outputs.size());
-    for (int i = 0; i < int(info.params.size()); ++i) rows += paramRows(info, i);
+    for (int i = 0; i < int(info.params.size()); ++i) rows += paramRows(n, i);
     return kTitleH + kPad * 2 + rows * kRowH;
 }
 
@@ -196,7 +197,7 @@ NodeEditor::Layout NodeEditor::layoutFor(const Node& n) const {
     for (size_t i = 0; i < info.outputs.size(); ++i, y += row) L.outPins.emplace_back(L.max.x, y + row * 0.5f);
     L.paramBoxes.resize(info.params.size());
     for (int i = 0; i < int(info.params.size()); ++i) {
-        int rows = paramRows(info, i);
+        int rows = paramRows(n, i);
         if (rows == 0) continue;
         L.paramBoxes[i] = ImRect(L.min.x + 10 * z, y + 2 * z, L.max.x - 10 * z, y + row * rows - 2 * z);
         y += row * rows;
@@ -638,6 +639,15 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
     }
     dl->AddRect(L.min, L.max, selected ? IM_COL32(240, 196, 100, 255) : IM_COL32(18, 18, 22, 255), round, 0,
                 selected ? 2.0f : 1.0f);
+    if (showTimings && showText)
+        if (auto t = timings_.find(n.id); t != timings_.end()) {
+            // Above the node like Blender's overlay; slow nodes stand out in amber.
+            char buf[32];
+            std::snprintf(buf, sizeof buf, t->second < 10.0 ? "%.1f ms" : "%.0f ms", t->second);
+            const float tfs = fs * 0.85f;
+            dl->AddText(ImGui::GetFont(), tfs, ImVec2(L.min.x + 4 * z, L.min.y - tfs - 3 * z),
+                        t->second >= 50.0 ? IM_COL32(236, 170, 80, 255) : IM_COL32(170, 170, 178, 220), buf);
+        }
 
     // Only the topmost node under the mouse gets interactive widgets, so overlapping nodes behave.
     const bool ownsMouse = hitNode(g, ImGui::GetIO().MousePos) == n.id;

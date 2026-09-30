@@ -1,4 +1,7 @@
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -53,6 +56,60 @@ static int renderHeadless(const std::string& project, const std::string& outPath
         std::fprintf(stderr, "evaluation failed: %s\n", e.what());
         return 1;
     }
+    return 0;
+}
+
+// NodeLab.exe --benchmark project.nlproj [--full] [--runs N] : evaluates the Output node from an
+// empty cache N times (after one warm-up run that also loads the images) and prints per-node and
+// total median milliseconds. Proxy resolution unless --full.
+static int benchmarkHeadless(const std::string& project, bool full, int runs) {
+    Graph g;
+    nlohmann::json ui;
+    std::string err;
+    if (!loadProject(project, g, ui, err)) {
+        std::fprintf(stderr, "load failed: %s\n", err.c_str());
+        return 1;
+    }
+    int outId = g.firstOfType(OutputNode::staticInfo().type);
+    if (!outId) {
+        std::fprintf(stderr, "project has no Output node\n");
+        return 1;
+    }
+    ImageCache cache;
+    EvalContext ctx;
+    ctx.proxy = !full;
+    ctx.cache = &cache;
+    initContextSize(g, ctx);
+    std::unordered_map<int, std::vector<double>> per;
+    std::vector<double> totals;
+    try {
+        for (int r = 0; r <= runs; ++r) {
+            Evaluator ev;
+            const auto t0 = std::chrono::steady_clock::now();
+            ev.evaluateDisplay(g, outId, ctx);
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            if (r == 0) continue;  // warm-up: image decoding
+            totals.push_back(ms);
+            for (const auto& [id, t] : ev.timings()) per[id].push_back(t);
+        }
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "evaluation failed: %s\n", e.what());
+        return 1;
+    }
+    auto median = [](std::vector<double> v) {
+        std::sort(v.begin(), v.end());
+        return v.empty() ? 0.0 : v[v.size() / 2];
+    };
+    std::vector<std::pair<double, int>> rows;
+    for (const auto& [id, v] : per) rows.push_back({median(v), id});
+    std::sort(rows.rbegin(), rows.rend());
+    std::printf("%s  %dx%d  %s\n", project.c_str(), ctx.defaultW, ctx.defaultH, full ? "full" : "proxy");
+    for (const auto& [ms, id] : rows) {
+        const Node* n = g.find(id);
+        std::string name = n->label.empty() ? n->info().displayName : n->label;
+        std::printf("%9.2f ms  %-6d %-28s %s\n", ms, id, name.c_str(), n->info().type.c_str());
+    }
+    std::printf("%9.2f ms  total (median of %d)\n", median(totals), runs);
     return 0;
 }
 
@@ -137,6 +194,18 @@ int main(int argc, char** argv) {
     if (argc >= 4 && std::string(argv[1]) == "--render") {
         attachParentConsole();
         return renderHeadless(argv[2], argv[3]);
+    }
+
+    if (argc >= 3 && std::string(argv[1]) == "--benchmark") {
+        attachParentConsole();
+        bool full = false;
+        int runs = 5;
+        for (int i = 3; i < argc; ++i) {
+            std::string a = argv[i];
+            if (a == "--full") full = true;
+            else if (a == "--runs" && i + 1 < argc) runs = std::max(1, std::atoi(argv[++i]));
+        }
+        return benchmarkHeadless(argv[2], full, runs);
     }
 
     if (argc >= 5 && std::string(argv[1]) == "--batch") {

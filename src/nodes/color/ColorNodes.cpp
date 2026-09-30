@@ -72,11 +72,12 @@ public:
     NODELAB_NODE({"color.combine_rgb", "Combine RGB", "Color",
                   {{"R", PinType::Channel, 0}, {"G", PinType::Channel, 1}, {"B", PinType::Channel, 2}, {"A", PinType::Channel, 3}},
                   {{"Image", PinType::Image}},
-                  {ParamDesc::Float("R", 0.0f, 0.0f, 1.0f), ParamDesc::Float("G", 0.0f, 0.0f, 1.0f),
-                   ParamDesc::Float("B", 0.0f, 0.0f, 1.0f), ParamDesc::Float("A", 1.0f, 0.0f, 1.0f)}})
+                  {ParamDesc::FloatFree("R", 0.0f, 0.0f, 1.0f), ParamDesc::FloatFree("G", 0.0f, 0.0f, 1.0f),
+                   ParamDesc::FloatFree("B", 0.0f, 0.0f, 1.0f), ParamDesc::Float("A", 1.0f, 0.0f, 1.0f)}})
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         const float defs[4] = {0, 0, 0, 1};
-        combineImage(*this, ctx, in, out, defs, true, [](float r, float g, float b, float* d) {
+        // Unclamped like Blender's Combine Color: it also packs data (HDR, masks, signed values).
+        combineImage(*this, ctx, in, out, defs, false, [](float r, float g, float b, float* d) {
             d[0] = r, d[1] = g, d[2] = b;
         });
     }

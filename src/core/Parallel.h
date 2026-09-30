@@ -1,35 +1,56 @@
 #pragma once
 #include <algorithm>
 #include <atomic>
-#include <thread>
-#include <vector>
+#include <functional>
+#include <stdexcept>
 
-// Runs fn(row) for row in [0, rows) across hardware threads. Rows are handed out
-// in small chunks via an atomic counter so uneven workloads balance out.
+// Thrown when an evaluation is cancelled (a newer edit superseded it, or the app is closing).
+struct EvalCancelled : std::runtime_error {
+    EvalCancelled() : std::runtime_error("cancelled") {}
+};
+
+namespace parallel {
+
+// Worker threads started once and shared by every parallelFor. Starting threads per call cost
+// more than the work itself for fast per-pixel nodes, and a graph makes hundreds of such calls.
+int workerCount();  // threads that run chunks, including the calling thread
+
+// Runs fn(begin, end) over [0, count) in chunks of `chunk`. The calling thread works too, so
+// nested calls (a chunk that itself calls parallelFor) always make progress. Rethrows the first
+// exception a chunk threw. Throws EvalCancelled if the current cancel flag was raised.
+void run(int count, int chunk, const std::function<void(int, int)>& fn);
+
+// The cancel flag parallel work checks between chunks on this thread (and on the workers
+// helping it). Evaluator sets it around each node, so a long node stops soon after a cancel.
+const std::atomic<bool>* currentCancel();
+
+class CancelScope {
+public:
+    explicit CancelScope(const std::atomic<bool>* flag);
+    ~CancelScope();
+    CancelScope(const CancelScope&) = delete;
+    CancelScope& operator=(const CancelScope&) = delete;
+
+private:
+    const std::atomic<bool>* prev_;
+};
+
+}  // namespace parallel
+
+// Runs fn(row) for row in [0, rows) across the worker threads. Rows are handed out in small
+// chunks so uneven workloads balance out.
 template <typename Fn>
 void parallelFor(int rows, Fn&& fn) {
     if (rows <= 0) return;
-    unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-    int workers = static_cast<int>(std::min<unsigned>(hw, static_cast<unsigned>(rows)));
+    const int workers = parallel::workerCount();
     if (workers <= 1 || rows < 16) {
         for (int y = 0; y < rows; ++y) fn(y);
         return;
     }
     const int chunk = std::max(1, rows / (workers * 8));
-    std::atomic<int> next{0};
-    auto work = [&] {
-        for (;;) {
-            int start = next.fetch_add(chunk);
-            if (start >= rows) break;
-            int end = std::min(rows, start + chunk);
-            for (int y = start; y < end; ++y) fn(y);
-        }
-    };
-    std::vector<std::thread> pool;
-    pool.reserve(workers - 1);
-    for (int i = 0; i < workers - 1; ++i) pool.emplace_back(work);
-    work();
-    for (auto& t : pool) t.join();
+    parallel::run(rows, chunk, [&](int y0, int y1) {
+        for (int y = y0; y < y1; ++y) fn(y);
+    });
 }
 
 // Like parallelFor but hands out row ranges: fn(yBegin, yEnd). Useful when each worker needs
@@ -37,19 +58,7 @@ void parallelFor(int rows, Fn&& fn) {
 template <typename Fn>
 void parallelForChunks(int rows, Fn&& fn) {
     if (rows <= 0) return;
-    unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-    int workers = static_cast<int>(std::min<unsigned>(hw, static_cast<unsigned>(rows)));
+    const int workers = parallel::workerCount();
     const int chunk = std::max(1, rows / std::max(1, workers * 4));
-    std::atomic<int> next{0};
-    auto work = [&] {
-        for (;;) {
-            int start = next.fetch_add(chunk);
-            if (start >= rows) break;
-            fn(start, std::min(rows, start + chunk));
-        }
-    };
-    std::vector<std::thread> pool;
-    for (int i = 0; i < workers - 1; ++i) pool.emplace_back(work);
-    work();
-    for (auto& t : pool) t.join();
+    parallel::run(rows, chunk, [&](int y0, int y1) { fn(y0, y1); });
 }
