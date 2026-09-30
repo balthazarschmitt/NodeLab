@@ -8,6 +8,7 @@
 
 #include "core/Curve.h"
 #include "core/Ramp.h"
+#include "ui/ColorDisplay.h"
 
 // ---------------------------------------------------------------- curves
 
@@ -210,7 +211,10 @@ bool rampEditor(const char* id, nlohmann::json& rampJson) {
         sorted.sort();
         sorted.eval(float(k) / segs, c0);
         sorted.eval(float(k + 1) / segs, c1);
-        auto col = [](const float* c) { return ImGui::GetColorU32(ImVec4(c[0], c[1], c[2], c[3])); };
+        auto col = [](float* c) {
+            colordisplay::toDisplay(c);
+            return ImGui::GetColorU32(ImVec4(c[0], c[1], c[2], c[3]));
+        };
         float x0 = p0.x + w * k / segs, x1 = p0.x + w * (k + 1) / segs;
         dl->AddRectFilledMultiColor(ImVec2(x0, p0.y), ImVec2(x1, p1.y), col(c0), col(c1), col(c1), col(c0));
     }
@@ -248,7 +252,8 @@ bool rampEditor(const char* id, nlohmann::json& rampJson) {
 
     for (int i = 0; i < int(ramp.stops.size()); ++i) {
         float x = markerX(ramp.stops[i]);
-        const auto& c = ramp.stops[i].c;
+        float c[3] = {ramp.stops[i].c[0], ramp.stops[i].c[1], ramp.stops[i].c[2]};
+        colordisplay::toDisplay(c);
         ImU32 fill = ImGui::GetColorU32(ImVec4(c[0], c[1], c[2], 1.0f));
         ImVec2 a(x, p1.y + 1), b(x - 6, p1.y + markH), d(x + 6, p1.y + markH);
         dl->AddTriangleFilled(a, b, d, fill);
@@ -259,7 +264,13 @@ bool rampEditor(const char* id, nlohmann::json& rampJson) {
     // Selected stop controls
     RampStop& s = ramp.stops[sel];
     ImGui::SetNextItemWidth(std::min(420.0f, w * 0.75f));
-    if (ImGui::ColorEdit4("Color", s.c, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_AlphaBar)) changed = true;
+    float shown[4] = {s.c[0], s.c[1], s.c[2], s.c[3]};
+    colordisplay::toDisplay(shown);
+    if (ImGui::ColorEdit4("Color", shown, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_AlphaBar)) {
+        colordisplay::fromDisplay(shown);
+        std::copy(shown, shown + 4, s.c);
+        changed = true;
+    }
     ImGui::SetNextItemWidth(120);
     if (ImGui::SliderFloat("Position", &s.pos, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) changed = true;
     ImGui::SameLine();

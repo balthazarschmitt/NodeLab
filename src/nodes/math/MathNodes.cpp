@@ -28,7 +28,8 @@ public:
                 const float* pb = sb(x, y);
                 float f = sf(x, y);
                 float* d = img->pixel(size_t(y) * w + x);
-                for (int k = 0; k < 4; ++k) d[k] = clamp01(pa[k] + (pb[k] - pa[k]) * f);
+                for (int k = 0; k < 3; ++k) d[k] = clampColor(ctx.linear(), pa[k] + (pb[k] - pa[k]) * f);
+                d[3] = clamp01(pa[3] + (pb[3] - pa[3]) * f);
             }
         });
         out[0] = Value(ImagePtr(img));
@@ -61,13 +62,13 @@ float blendChannel(int mode, float a, float b) {
     }
 }
 
-void blendPixel(int mode, const float* a, const float* b, float* out) {
+void blendPixel(int mode, const float* a, const float* b, float* out, bool lin) {
     using namespace colormath;
     if (mode >= Hue) {
         // HSV component swaps
         float ha, sa, va, hb, sb, vb;
-        rgbToHsv(clamp01(a[0]), clamp01(a[1]), clamp01(a[2]), ha, sa, va);
-        rgbToHsv(clamp01(b[0]), clamp01(b[1]), clamp01(b[2]), hb, sb, vb);
+        rgbToHsv(clampColor(lin, a[0]), clampColor(lin, a[1]), clampColor(lin, a[2]), ha, sa, va);
+        rgbToHsv(clampColor(lin, b[0]), clampColor(lin, b[1]), clampColor(lin, b[2]), hb, sb, vb);
         switch (mode) {
             case Hue: hsvToRgb(hb, sa, va, out[0], out[1], out[2]); break;
             case Saturation: hsvToRgb(ha, sb, va, out[0], out[1], out[2]); break;
@@ -110,7 +111,7 @@ public:
                 const float* pa = sa(x, y);
                 const float* pb = sb(x, y);
                 float f = sf(x, y) * pb[3];  // B's alpha limits its influence
-                blendPixel(mode, pa, pb, blended);
+                blendPixel(mode, pa, pb, blended, ctx.linear());
                 float* d = img->pixel(size_t(y) * w + x);
                 for (int k = 0; k < 3; ++k) {
                     d[k] = pa[k] + (blended[k] - pa[k]) * f;

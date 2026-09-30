@@ -6,6 +6,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/ColorManagement.h"
 #include "core/Value.h"
 
 class ImageCache;
@@ -31,6 +32,7 @@ struct ParamDesc {
     // hiding Factor X/Y until Blur's Relative is on. Hidden params keep their values.
     int showIf = -1;
     int showIfValue = 1;
+    bool gammaColor = false;  // Color kind: see ColorGamma()
 
     ParamDesc when(int param, int value = 1) const {
         ParamDesc d = *this;
@@ -66,9 +68,17 @@ struct ParamDesc {
         d.options = std::move(keys);
         return d;
     }
-    // RGB color stored as [r, g, b]; range is the allowed component range.
+    // RGB color stored as [r, g, b]; range is the allowed component range. In scene-linear
+    // projects the value is linear and the picker shows it sRGB-encoded, as in Blender.
     static ParamDesc Color(std::string n, float r, float g, float b, float mx = 1.0f) {
         return make(std::move(n), ParamKind::Color, 0, mx, 0, mx, nlohmann::json::array({r, g, b}));
+    }
+    // A colour of multipliers (lift / gamma / gain), stored and shown as it is in every project,
+    // like Blender's gamma-corrected colour properties.
+    static ParamDesc ColorGamma(std::string n, float r, float g, float b, float mx = 1.0f) {
+        ParamDesc d = Color(std::move(n), r, g, b, mx);
+        d.gammaColor = true;
+        return d;
     }
     // File path chosen with a Save dialog (File Output node).
     static ParamDesc SavePath(std::string n) { return make(std::move(n), ParamKind::SavePath, 0, 0, 0, 0, ""); }
@@ -110,6 +120,10 @@ struct EvalContext {
     float scale = 1.0f;
     ImageCache* cache = nullptr;
     const std::atomic<bool>* cancel = nullptr;
+    // The project's (root graph's) colour management. Nodes check linear() for the working space;
+    // File Output uses the view transform to write display images.
+    ColorManagement colorManagement;
+    bool linear() const { return colorManagement.linear; }
 };
 
 class Node {

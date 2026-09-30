@@ -110,6 +110,7 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
         ctx.proxy = false;
         ctx.cache = &cache;
         ctx.cancel = &cancel_;
+        ctx.colorManagement = g.colorManagement;
         try {
             if (batch) {
                 Node* in = g.find(inputNode);
@@ -117,7 +118,8 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
                 in->params[0] = item.source;
                 setStage("Loading " + pathToU8(u8ToPath(item.source).filename()));
                 std::string err;
-                ImagePtr src = cache.get(item.source, false, &err);
+                ImagePtr src = cache.get(item.source, false, &err,
+                                         static_cast<const ImageInputNode&>(*in).decode(ctx.linear()));
                 if (!src) throw std::runtime_error(err.empty() ? "could not load " + item.source : err);
                 // Size from this source, not whichever Image Input happens to come first.
                 ctx.defaultW = src->w;
@@ -131,7 +133,8 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
                 setStage("Rendering " + outName);
                 ImagePtr img = outId ? ev.evaluateDisplay(g, outId, ctx) : nullptr;
                 if (!img) throw std::runtime_error("the Output node has no input");
-                img = resizeForExport(img, s);
+                img = resizeForExport(img, s);  // before the view transform: resampling in scene light
+                img = colormgmt::displayImage(img, ctx.colorManagement);
                 if (cancel_) break;
                 setStage("Saving " + outName);
                 std::string err;

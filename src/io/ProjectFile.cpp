@@ -12,7 +12,7 @@ bool saveProject(const std::string& pathU8, const Graph& g, const nlohmann::json
     fs::path base = fs::absolute(path).parent_path();
     nlohmann::json j;
     j["app"] = "NodeLab";
-    j["version"] = kProjectVersion;
+    j["version"] = g.colorManagement.linear ? kProjectVersion : 1;
     j["appVersion"] = kNodeLabVersion;
     j["graph"] = g.toJson(&base);
     j["ui"] = ui;

@@ -39,7 +39,8 @@ private:
         ViewState view;
         bool sync = false;  // share zoom/pan with Original and Result
         std::string error;
-        ImagePtr shown;     // the image in tex, for the eyedropper
+        ImagePtr shown;     // the node's output (scene values), for the eyedropper
+        ImagePtr display;   // shown through the view transform: what tex, histogram and clipping use
     };
 
     // project lifecycle
@@ -47,6 +48,8 @@ private:
     bool openProject(const std::string& path);
     bool saveProject(bool saveAs);
     void importImage(const std::string& path);
+    void drawColorMenu();
+    void refreshDisplay(Viewer& v, bool main);
     void openExportWindow();
     void drawExportWindow();
     void startExport(std::vector<ExportItem> items, int inputNode);
@@ -64,6 +67,7 @@ private:
     void drawInspectorWindow();
     void drawViewerWindow(Viewer& v, bool isMain);
     void drawUnsavedModal();
+    void drawConvertModal();
     void handleShortcuts();
     void handleDrops();
 
@@ -104,7 +108,8 @@ private:
     std::map<std::vector<int>, nlohmann::json> groupViews_;  // editor pan/zoom per level
 
     GLTexture leftTex_;
-    ImagePtr leftShown_;
+    ImagePtr leftShown_;    // scene values, for the eyedropper
+    ColorManagement shownCm_;  // the colour management the textures were made with
     ViewState view_;  // shared by Original and Result so they stay in sync
     std::vector<std::unique_ptr<Viewer>> viewers_;
     int nextViewerId_ = 1;
@@ -156,6 +161,7 @@ private:
 
     Pending pending_ = Pending::None;
     bool openUnsavedModal_ = false;
+    bool convertPrompt_ = false;  // Color > Convert Project to Scene-Linear was chosen
     bool quit_ = false;
     std::vector<std::string> drops_;
 

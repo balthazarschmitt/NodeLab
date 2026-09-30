@@ -48,11 +48,14 @@ public:
             for (int i = 0; i < 471; ++i) wavelengthToRgb(360.0f + i, t[i][0], t[i][1], t[i][2]);
             return t;
         }();
+        const bool lin = ctx.linear();
         out[0] = Value(colorFromChannel(*this, ctx, in[0], 550.0f, 0, [&](float nm, float* d) {
             float f = std::clamp(nm - 360.0f, 0.0f, 470.0f);
             int i = std::min(int(f), 469);
             float t = f - i;
             for (int k = 0; k < 3; ++k) d[k] = lut[i][k] + (lut[i + 1][k] - lut[i][k]) * t;
+            if (lin)  // the tables hold display colours
+                for (int k = 0; k < 3; ++k) d[k] = srgbToLinear(d[k]);
         }));
     }
 };
@@ -73,11 +76,14 @@ public:
             }
             return t;
         }();
+        const bool lin = ctx.linear();
         out[0] = Value(colorFromChannel(*this, ctx, in[0], 3200.0f, 0, [&](float kelvin, float* d) {
             float f = std::clamp(std::log(std::max(kelvin, 800.0f) / 800.0f) / std::log(50.0f), 0.0f, 1.0f) * 255.0f;
             int i = std::min(int(f), 254);
             float t = f - i;
             for (int k = 0; k < 3; ++k) d[k] = lut[i][k] + (lut[i + 1][k] - lut[i][k]) * t;
+            if (lin)  // the tables hold display colours
+                for (int k = 0; k < 3; ++k) d[k] = srgbToLinear(d[k]);
         }));
     }
 };
@@ -297,7 +303,7 @@ std::vector<std::string> writeFileOutputs(const Graph& g, Evaluator& ev, EvalCon
         p.replace_extension(n->paramI(1) == 1 ? ".jpg" : ".png");
         path = pathToU8(p);
         try {
-            ImagePtr img = ev.evaluateDisplay(g, id, ctx);
+            ImagePtr img = colormgmt::displayImage(ev.evaluateDisplay(g, id, ctx), ctx.colorManagement);
             std::string err;
             if (!img) report.push_back("File Output: nothing connected (" + path + ")");
             else if (!saveImage(path, *img, err)) report.push_back("File Output: " + err + " (" + path + ")");

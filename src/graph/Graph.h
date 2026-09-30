@@ -8,6 +8,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/ColorManagement.h"
 #include "graph/Node.h"
 
 struct Link {
@@ -65,6 +66,10 @@ public:
 
     const std::map<int, std::unique_ptr<Node>>& nodes() const { return nodes_; }
     const std::vector<Link>& links() const { return links_; }
+
+    // Project colour management. Only the root graph's is used; group insides keep the default.
+    // Stored in the graph so undo snapshots and the background evaluator carry it.
+    ColorManagement colorManagement;
 
     // Serialization. Path params are written relative to baseDir when given.
     nlohmann::json toJson(const std::filesystem::path* baseDir = nullptr) const;

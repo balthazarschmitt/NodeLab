@@ -7,6 +7,7 @@
 
 #include "io/Paths.h"
 #include "nodes/group/GroupNodes.h"
+#include "ui/ColorDisplay.h"
 #include "ui/Eyedropper.h"
 #include "ui/FileDialog.h"
 #include "ui/GuideWindow.h"
@@ -93,9 +94,11 @@ bool editParam(Node& node, int i, float width, bool compact) {
         case ParamKind::Color: {
             float c[3];
             node.paramC(i, c);
+            if (!d.gammaColor) colordisplay::toDisplay(c);
             ImGuiColorEditFlags flags = ImGuiColorEditFlags_Float;
             if (d.max > 1.0f) flags |= ImGuiColorEditFlags_HDR;
             if (ImGui::ColorEdit3(label.c_str(), c, flags)) {
+                if (!d.gammaColor) colordisplay::fromDisplay(c);
                 for (int k = 0; k < 3; ++k) c[k] = std::clamp(c[k], d.hardMin, d.hardMax);
                 node.params[i] = nlohmann::json::array({c[0], c[1], c[2]});
                 changed = true;

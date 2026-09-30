@@ -100,4 +100,8 @@ struct ImageSampler {
 
 inline float clamp01(float v) { return std::clamp(v, 0.0f, 1.0f); }
 
+// Clamp for colour values: 0..1 for display-referred (legacy) projects; in scene-linear ones only
+// negatives go, so highlights above 1 survive, as in Blender's colour nodes.
+inline float clampColor(bool linear, float v) { return linear ? std::max(v, 0.0f) : clamp01(v); }
+
 }  // namespace nodeutil

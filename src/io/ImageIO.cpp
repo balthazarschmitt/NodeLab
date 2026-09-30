@@ -13,10 +13,34 @@
 #define STBIW_WINDOWS_UTF8
 #include <stb_image_write.h>
 
+#include "core/ColorMath.h"
 #include "core/Parallel.h"
 #include "io/Paths.h"
 
-std::shared_ptr<Image> loadImage(const std::string& pathU8, std::string& err) {
+namespace {
+
+// Code value -> float for every value of an 8- or 16-bit channel, so decoding is one lookup.
+std::vector<float> decodeTable(int levels, bool srgbToLinear) {
+    std::vector<float> t(static_cast<size_t>(levels));
+    for (int i = 0; i < levels; ++i) {
+        const float v = float(i) / float(levels - 1);
+        t[size_t(i)] = srgbToLinear ? float(colormath::srgbToLinear(v)) : v;
+    }
+    return t;
+}
+
+template <typename T>
+void decodePixels(const T* data, Image& img, int levels, bool srgbToLinear) {
+    const std::vector<float> rgb = decodeTable(levels, srgbToLinear), alpha = decodeTable(levels, false);
+    parallelFor(img.h, [&](int y) {
+        const size_t i0 = size_t(y) * img.w * 4, i1 = i0 + size_t(img.w) * 4;
+        for (size_t i = i0; i < i1; ++i) img.px[i] = ((i & 3) == 3 ? alpha : rgb)[data[i]];
+    });
+}
+
+}  // namespace
+
+std::shared_ptr<Image> loadImage(const std::string& pathU8, std::string& err, bool srgbToLinear) {
     int w = 0, h = 0, comp = 0;
     const char* p = pathU8.c_str();
     std::shared_ptr<Image> img;
@@ -27,8 +51,7 @@ std::shared_ptr<Image> loadImage(const std::string& pathU8, std::string& err) {
             return nullptr;
         }
         img = std::make_shared<Image>(w, h);
-        const size_t n = img->px.size();
-        for (size_t i = 0; i < n; ++i) img->px[i] = data[i] / 65535.0f;
+        decodePixels(data, *img, 65536, srgbToLinear);
         stbi_image_free(data);
     } else {
         stbi_uc* data = stbi_load(p, &w, &h, &comp, 4);
@@ -37,8 +60,7 @@ std::shared_ptr<Image> loadImage(const std::string& pathU8, std::string& err) {
             return nullptr;
         }
         img = std::make_shared<Image>(w, h);
-        const size_t n = img->px.size();
-        for (size_t i = 0; i < n; ++i) img->px[i] = data[i] / 255.0f;
+        decodePixels(data, *img, 256, srgbToLinear);
         stbi_image_free(data);
     }
     return img;

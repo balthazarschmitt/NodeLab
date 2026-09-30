@@ -54,7 +54,8 @@ private:
     std::unordered_map<int, Entry> cache_;
 };
 
-// Picks the working resolution from the first Image Input node that loads.
+// Sets the context's colour management from the root graph, and its size and scale from the first
+// Image Input that loads.
 void initContextSize(const Graph& g, EvalContext& ctx);
 
 // Runs evaluation on a background thread. Newer submissions replace queued ones; the UI keeps

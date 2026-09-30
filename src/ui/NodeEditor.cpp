@@ -13,6 +13,7 @@
 #include "graph/NodeRegistry.h"
 #include "nodes/group/GroupNodes.h"
 #include "io/Paths.h"
+#include "ui/ColorDisplay.h"
 #include "ui/Eyedropper.h"
 #include "ui/FileDialog.h"
 #include "ui/GuideWindow.h"
@@ -508,7 +509,10 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
             // Gradient preview; stops are edited in the inspector.
             ColorRamp ramp = rampFromJson(n.params[i]);
             const int segs = 48;
-            auto col = [](const float* c) { return ImGui::GetColorU32(ImVec4(c[0], c[1], c[2], 1.0f)); };
+            auto col = [](float* c) {
+                colordisplay::toDisplay(c);
+                return ImGui::GetColorU32(ImVec4(c[0], c[1], c[2], 1.0f));
+            };
             for (int k = 0; k < segs; ++k) {
                 float c0[4], c1[4];
                 ramp.eval(float(k) / segs, c0);
@@ -552,6 +556,7 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
         case ParamKind::Color: {
             float c[3];
             n.paramC(i, c);
+            if (!d.gammaColor) colordisplay::toDisplay(c);
             if (canInteract && button()) ImGui::OpenPopup("##color");
             const float sw = box.GetHeight() * 1.6f;
             ImRect swatch(ImVec2(box.Max.x - sw, box.Min.y), box.Max);
@@ -563,6 +568,7 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
                 ImGuiColorEditFlags flags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoAlpha;
                 if (d.max > 1.0f) flags |= ImGuiColorEditFlags_HDR;  // lift/gain may go above 1
                 if (ImGui::ColorPicker3("##picker", c, flags)) {
+                    if (!d.gammaColor) colordisplay::fromDisplay(c);
                     for (int k = 0; k < 3; ++k) c[k] = std::clamp(c[k], d.hardMin, d.hardMax);
                     n.params[i] = nlohmann::json::array({c[0], c[1], c[2]});
                     changed = true;

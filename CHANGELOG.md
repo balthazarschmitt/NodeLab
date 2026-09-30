@@ -5,6 +5,21 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 ## Unreleased
 
+## 0.7.0 (2026-09-30)
+
+- **Scene-linear colour management**, as in Blender. New projects decode images to linear light
+  and work on unbounded linear values:
+  - **Color menu:** View Transform (Standard, **AgX**, Raw), Look (None, Punchy, Greyscale),
+    view Exposure and Gamma. It applies only in the viewers and when exporting.
+  - **Image Input > Color Space:** sRGB, Linear Rec.709 or Non-Color.
+  - Exposure is an unclamped multiply. Colour nodes keep highlights above 1, and
+    Brightness / Contrast pivots on middle grey.
+  - Colour pickers show display values; the histogram and clipping show the view transform.
+  - Projects saved before this version stay in the legacy sRGB working space and render
+    byte-identically. **Color > Convert Project to Scene-Linear** switches one over.
+  - Scene-linear projects use project format 2, which older NodeLab versions refuse to open
+    instead of rendering them wrongly. Legacy projects still save as format 1.
+
 ## 0.6.0 (2026-09-30)
 
 - **Faster processing.** Typical graphs re-render about 3–5× faster. The infrared preset takes

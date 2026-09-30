@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <cmath>
 
-// Color space helpers. RGB is sRGB-encoded 0..1 (what the app works in).
+// Color space helpers. RGB is sRGB-encoded 0..1 unless a function says otherwise.
 namespace colormath {
 
 // HSV with h, s, v in 0..1 (h wraps).
@@ -45,8 +45,9 @@ inline float linearToSrgb(float c) {
 }
 
 // CIE Lab (D65). Normalized for wires: L in 0..1 (L*/100), a and b roughly -1..1 (a*/128, b*/128).
-inline void rgbToLab(float r, float g, float b, float& L, float& A, float& B) {
-    float lr = srgbToLinear(r), lg = srgbToLinear(g), lb = srgbToLinear(b);
+// `encoded`: RGB is sRGB-encoded (legacy projects) rather than linear.
+inline void rgbToLab(float r, float g, float b, float& L, float& A, float& B, bool encoded = true) {
+    float lr = encoded ? srgbToLinear(r) : r, lg = encoded ? srgbToLinear(g) : g, lb = encoded ? srgbToLinear(b) : b;
     float x = (0.4124564f * lr + 0.3575761f * lg + 0.1804375f * lb) / 0.95047f;
     float y = (0.2126729f * lr + 0.7151522f * lg + 0.0721750f * lb);
     float z = (0.0193339f * lr + 0.1191920f * lg + 0.9503041f * lb) / 1.08883f;
@@ -57,7 +58,7 @@ inline void rgbToLab(float r, float g, float b, float& L, float& A, float& B) {
     B = 200.0f * (fy - fz) / 128.0f;
 }
 
-inline void labToRgb(float L, float A, float B, float& r, float& g, float& b) {
+inline void labToRgb(float L, float A, float B, float& r, float& g, float& b, bool encoded = true) {
     float fy = (L * 100.0f + 16.0f) / 116.0f;
     float fx = fy + A * 128.0f / 500.0f;
     float fz = fy - B * 128.0f / 200.0f;
@@ -66,9 +67,9 @@ inline void labToRgb(float L, float A, float B, float& r, float& g, float& b) {
     float lr = 3.2404542f * x - 1.5371385f * y - 0.4985314f * z;
     float lg = -0.9692660f * x + 1.8760108f * y + 0.0415560f * z;
     float lb = 0.0556434f * x - 0.2040259f * y + 1.0572252f * z;
-    r = linearToSrgb(lr);
-    g = linearToSrgb(lg);
-    b = linearToSrgb(lb);
+    r = encoded ? linearToSrgb(lr) : lr;
+    g = encoded ? linearToSrgb(lg) : lg;
+    b = encoded ? linearToSrgb(lb) : lb;
 }
 
 // YCbCr (Rec.709, full range): Y 0..1, Cb/Cr centered on 0.5.

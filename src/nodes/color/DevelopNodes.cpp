@@ -41,6 +41,23 @@ std::vector<float> guidedSmooth(const std::vector<float>& I, int w, int h, float
     return mean;
 }
 
+// Until these nodes get scene-linear maths (roadmap Phase C), scene-linear projects run them on
+// sRGB-encoded values: they look as in legacy projects but clip at display white.
+ImagePtr encodeSrgb(const Image& src) {
+    return ImagePtr(mapImage(src, [](int, int, const float* s, float* d) {
+        for (int k = 0; k < 3; ++k) d[k] = linearToSrgb(std::max(s[k], 0.0f));
+        d[3] = s[3];
+    }));
+}
+void decodeSrgb(Image& img) {
+    parallelFor(img.h, [&](int y) {
+        for (int x = 0; x < img.w; ++x) {
+            float* d = img.pixel(size_t(y) * img.w + x);
+            for (int k = 0; k < 3; ++k) d[k] = srgbToLinear(std::max(d[k], 0.0f));
+        }
+    });
+}
+
 // Blends the adjusted image back over the source by a Factor channel (Lightroom's masks plug in here).
 void applyFactor(const Node& node, const Image& src, Image& img, const Value& facIn) {
     ChannelPtr fac = channelOr(facIn, 1.0f);
@@ -110,9 +127,11 @@ public:
                    ParamDesc::Float("Dehaze", 0.0f, -100.0f, 100.0f), ParamDesc::Float("Vibrance", 0.0f, -100.0f, 100.0f),
                    ParamDesc::Float("Saturation", 0.0f, -100.0f, 100.0f)},
                   false, true})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
+        const bool lin = ctx.linear();
+        if (lin) src = encodeSrgb(*src);
         const float temp = paramF(1) / 100, tint = paramF(2) / 100, stops = paramF(3);
         const ToneParams tone{paramF(4) / 100, paramF(5) / 100, paramF(6) / 100, paramF(7) / 100, paramF(8) / 100};
         const float texture = paramF(9) / 100, clarity = paramF(10) / 100, dehaze = paramF(11) / 100;
@@ -203,6 +222,7 @@ public:
             }
         });
         applyFactor(*this, *src, *img, in[1]);
+        if (lin) decodeSrgb(*img);
         out[0] = Value(ImagePtr(img));
     }
 
@@ -291,9 +311,11 @@ public:
                   {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   mixerParams(), false, true})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
+        const bool lin = ctx.linear();
+        if (lin) src = encodeSrgb(*src);
         float hue[8], sat[8], lum[8];
         for (int i = 0; i < 8; ++i) hue[i] = paramF(1 + i) / 100, sat[i] = paramF(9 + i) / 100, lum[i] = paramF(17 + i) / 100;
         auto img = mapImage(*src, [&](int, int, const float* s, float* d) {
@@ -320,6 +342,7 @@ public:
             d[3] = s[3];
         });
         applyFactor(*this, *src, *img, in[1]);
+        if (lin) decodeSrgb(*img);
         out[0] = Value(ImagePtr(img));
     }
 };
@@ -342,9 +365,11 @@ public:
                    ParamDesc::Float("Global Luminance", 0.0f, -100.0f, 100.0f),
                    ParamDesc::Float("Blending", 50.0f, 0.0f, 100.0f), ParamDesc::Float("Balance", 0.0f, -100.0f, 100.0f)},
                   false, true})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
+        const bool lin = ctx.linear();
+        if (lin) src = encodeSrgb(*src);
         // Per zone (shadows, midtones, highlights, global): a luma-neutral tint and a lift.
         float tint[4][3], lift[4];
         for (int z = 0; z < 4; ++z) {
@@ -372,6 +397,7 @@ public:
             d[3] = s[3];
         });
         applyFactor(*this, *src, *img, in[1]);
+        if (lin) decodeSrgb(*img);
         out[0] = Value(ImagePtr(img));
     }
 };

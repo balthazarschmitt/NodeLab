@@ -47,7 +47,7 @@ void combineImage(const Node& node, EvalContext& ctx, const std::vector<Value>& 
             float* d = img->pixel(size_t(y) * w + x);
             fn(s[0](x, y), s[1](x, y), s[2](x, y), d);
             if (clampOut)
-                for (int k = 0; k < 3; ++k) d[k] = clamp01(d[k]);
+                for (int k = 0; k < 3; ++k) d[k] = clampColor(ctx.linear(), d[k]);
             d[3] = clamp01(s[3](x, y));
         }
     });
@@ -89,9 +89,10 @@ public:
                   {{"Image", PinType::Image}},
                   {{"H", PinType::Channel}, {"S", PinType::Channel}, {"V", PinType::Channel}, {"A", PinType::Channel}},
                   {}})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
-        splitImage(in[0], out, 4, [](const float* p, float* o) {
-            rgbToHsv(clamp01(p[0]), clamp01(p[1]), clamp01(p[2]), o[0], o[1], o[2]);
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const bool lin = ctx.linear();
+        splitImage(in[0], out, 4, [lin](const float* p, float* o) {
+            rgbToHsv(clampColor(lin, p[0]), clampColor(lin, p[1]), clampColor(lin, p[2]), o[0], o[1], o[2]);
             o[3] = p[3];
         });
     }
@@ -118,9 +119,10 @@ public:
                   {{"Image", PinType::Image}},
                   {{"L", PinType::Channel}, {"a", PinType::Channel}, {"b", PinType::Channel}, {"A", PinType::Channel}},
                   {}})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
-        splitImage(in[0], out, 4, [](const float* p, float* o) {
-            rgbToLab(clamp01(p[0]), clamp01(p[1]), clamp01(p[2]), o[0], o[1], o[2]);
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const bool lin = ctx.linear();
+        splitImage(in[0], out, 4, [lin](const float* p, float* o) {
+            rgbToLab(clampColor(lin, p[0]), clampColor(lin, p[1]), clampColor(lin, p[2]), o[0], o[1], o[2], !lin);
             o[3] = p[3];
         });
     }
@@ -135,8 +137,9 @@ public:
                    ParamDesc::Float("b", 0.0f, -1.0f, 1.0f), ParamDesc::Float("A", 1.0f, 0.0f, 1.0f)}})
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         const float defs[4] = {0.5f, 0, 0, 1};
-        combineImage(*this, ctx, in, out, defs, true, [](float l, float a, float b, float* d) {
-            labToRgb(l, a, b, d[0], d[1], d[2]);
+        const bool lin = ctx.linear();
+        combineImage(*this, ctx, in, out, defs, true, [lin](float l, float a, float b, float* d) {
+            labToRgb(l, a, b, d[0], d[1], d[2], !lin);
         });
     }
 };
@@ -147,7 +150,8 @@ public:
                   {{"Image", PinType::Image}},
                   {{"Value", PinType::Channel}},
                   {ParamDesc::Enum("Method", 0, {"Rec.709 luma", "Average", "Max (HSV value)", "Lab lightness"})}})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const bool lin = ctx.linear();
         ImagePtr img = toImage(in[0], 0, 0);
         if (!img) return;
         const int method = paramI(0);
@@ -158,7 +162,7 @@ public:
                 case 2: return std::max({p[0], p[1], p[2]});
                 case 3: {
                     float L, a, b;
-                    rgbToLab(clamp01(p[0]), clamp01(p[1]), clamp01(p[2]), L, a, b);
+                    rgbToLab(clampColor(lin, p[0]), clampColor(lin, p[1]), clampColor(lin, p[2]), L, a, b, !lin);
                     return L;
                 }
                 default: return luminance(p[0], p[1], p[2]);
@@ -175,7 +179,8 @@ public:
                   {{"Image", PinType::Image}, {"Brightness", PinType::Channel, 0}, {"Contrast", PinType::Channel, 1}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Brightness", 0.0f, -1.0f, 1.0f), ParamDesc::Float("Contrast", 0.0f, -1.0f, 1.0f)}})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const bool lin = ctx.linear();
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
         ChannelPtr br = channelOr(in[1], 0.0f), co = channelOr(in[2], 0.0f);
@@ -185,7 +190,12 @@ public:
             float c = std::min(sc(x, y), 0.999f);
             float slope = (1.0f + c) / (1.0f - c);
             float b = sb(x, y);
-            for (int k = 0; k < 3; ++k) d[k] = clamp01((s[k] - 0.5f) * slope + 0.5f + b);
+            if (lin)
+                // Scene values: the same slope in log space around middle grey (0.18), so contrast
+                // bends shadows and highlights apart without pushing dark values below zero.
+                for (int k = 0; k < 3; ++k) d[k] = clampColor(true, 0.18f * std::pow(std::max(s[k], 0.0f) / 0.18f, slope) + b);
+            else
+                for (int k = 0; k < 3; ++k) d[k] = clampColor(false, (s[k] - 0.5f) * slope + 0.5f + b);
             d[3] = s[3];
         })));
     }
@@ -197,7 +207,8 @@ public:
                   {{"Image", PinType::Image}, {"Amount", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Amount", 1.0f, 0.0f, 4.0f)}})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const bool lin = ctx.linear();
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
         ChannelPtr amt = channelOr(in[1], 1.0f);
@@ -205,7 +216,7 @@ public:
         out[0] = Value(ImagePtr(mapImage(*src, [&](int x, int y, const float* s, float* d) {
             float a = sa(x, y);
             float l = luminance(s[0], s[1], s[2]);
-            for (int k = 0; k < 3; ++k) d[k] = clamp01(l + (s[k] - l) * a);
+            for (int k = 0; k < 3; ++k) d[k] = clampColor(lin, l + (s[k] - l) * a);
             d[3] = s[3];
         })));
     }
@@ -217,14 +228,15 @@ public:
                   {{"Image", PinType::Image}, {"Degrees", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Degrees", 0.0f, -180.0f, 180.0f)}})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const bool lin = ctx.linear();
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
         ChannelPtr deg = channelOr(in[1], 0.0f);
         ChannelSampler sd = paramSampler(*this, 1, deg, src->w, src->h);
         out[0] = Value(ImagePtr(mapImage(*src, [&](int x, int y, const float* s, float* d) {
             float h, sat, v;
-            rgbToHsv(clamp01(s[0]), clamp01(s[1]), clamp01(s[2]), h, sat, v);
+            rgbToHsv(clampColor(lin, s[0]), clampColor(lin, s[1]), clampColor(lin, s[2]), h, sat, v);
             hsvToRgb(h + sd(x, y) / 360.0f, sat, v, d[0], d[1], d[2]);
             d[3] = s[3];
         })));
@@ -237,14 +249,15 @@ public:
                   {{"Image", PinType::Image}, {"Gamma", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Gamma", 1.0f, 0.1f, 5.0f)}})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const bool lin = ctx.linear();
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
         ChannelPtr gm = channelOr(in[1], 1.0f);
         ChannelSampler sg = paramSampler(*this, 1, gm, src->w, src->h);
         out[0] = Value(ImagePtr(mapImage(*src, [&](int x, int y, const float* s, float* d) {
             float inv = 1.0f / sg(x, y);  // > 1 brightens midtones, like the Levels gamma
-            for (int k = 0; k < 3; ++k) d[k] = std::pow(clamp01(s[k]), inv);
+            for (int k = 0; k < 3; ++k) d[k] = std::pow(clampColor(lin, s[k]), inv);
             d[3] = s[3];
         })));
     }
@@ -256,14 +269,18 @@ public:
                   {{"Image", PinType::Image}, {"Stops", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Stops", 0.0f, -5.0f, 5.0f)}})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const bool lin = ctx.linear();
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
         ChannelPtr st = channelOr(in[1], 0.0f);
         ChannelSampler ss = paramSampler(*this, 1, st, src->w, src->h);
         out[0] = Value(ImagePtr(mapImage(*src, [&](int x, int y, const float* s, float* d) {
             float m = std::exp2(ss(x, y));  // scale in linear light, like a camera exposure change
-            for (int k = 0; k < 3; ++k) d[k] = clamp01(linearToSrgb(srgbToLinear(clamp01(s[k])) * m));
+            if (lin)  // unclamped, like Blender's: +1 stop doubles every value, highlights included
+                for (int k = 0; k < 3; ++k) d[k] = s[k] * m;
+            else
+                for (int k = 0; k < 3; ++k) d[k] = clamp01(linearToSrgb(srgbToLinear(clamp01(s[k])) * m));
             d[3] = s[3];
         })));
     }
@@ -300,7 +317,8 @@ public:
                   {ParamDesc::Float("In Black", 0.0f, 0.0f, 1.0f), ParamDesc::Float("In White", 1.0f, 0.0f, 1.0f),
                    ParamDesc::Float("Gamma", 1.0f, 0.1f, 5.0f), ParamDesc::Float("Out Black", 0.0f, 0.0f, 1.0f),
                    ParamDesc::Float("Out White", 1.0f, 0.0f, 1.0f), ParamDesc::Enum("Channel", 0, {"RGB", "Red", "Green", "Blue"})}})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const bool lin = ctx.linear();
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
         const int w = src->w, h = src->h;
@@ -318,9 +336,9 @@ public:
                     d[k] = p[k];
                     continue;
                 }
-                float v = clamp01((p[k] - ib) / std::max(iw - ib, 1e-4f));
+                float v = clampColor(lin, (p[k] - ib) / std::max(iw - ib, 1e-4f));
                 v = std::pow(v, 1.0f / gm);
-                d[k] = clamp01(ob + v * (ow - ob));
+                d[k] = clampColor(lin, ob + v * (ow - ob));
             }
             d[3] = p[3];
         })));
@@ -364,9 +382,10 @@ public:
         NODELAB_NODE({type, title, "Color", {{"Image", PinType::Image}},                               \
                       {{n0, PinType::Channel}, {n1, PinType::Channel}, {n2, PinType::Channel}, {"A", PinType::Channel}}, \
                       {}})                                                                             \
-        void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {  \
-            splitImage(in[0], out, 4, [](const float* p, float* o) {                                   \
-                conv(clamp01(p[0]), clamp01(p[1]), clamp01(p[2]), o[0], o[1], o[2]);                   \
+        void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override { \
+            const bool lin = ctx.linear();                                                             \
+            splitImage(in[0], out, 4, [lin](const float* p, float* o) {                                \
+                conv(clampColor(lin, p[0]), clampColor(lin, p[1]), clampColor(lin, p[2]), o[0], o[1], o[2]); \
                 o[3] = p[3];                                                                           \
             });                                                                                        \
         }                                                                                              \
@@ -410,7 +429,8 @@ public:
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f),
                    ParamDesc::CurveKeys("Hue Curves", {"h:Hue", "s:Saturation", "v:Value", "@hue"}, flatHueCurves())}})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const bool lin = ctx.linear();
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
         const nlohmann::json& cj = params[1];
@@ -423,10 +443,10 @@ public:
         // Each curve is a function of the pixel's hue; 0.5 means "no change".
         out[0] = Value(ImagePtr(mapImage(*src, [&](int x, int y, const float* s, float* d) {
             float h, sat, v;
-            rgbToHsv(clamp01(s[0]), clamp01(s[1]), clamp01(s[2]), h, sat, v);
+            rgbToHsv(clampColor(lin, s[0]), clampColor(lin, s[1]), clampColor(lin, s[2]), h, sat, v);
             float nh = h + (lutLookup(lh, h) - 0.5f);
             float ns = clamp01(sat * lutLookup(ls, h) * 2.0f);
-            float nv = clamp01(v * lutLookup(lv, h) * 2.0f);
+            float nv = clampColor(lin, v * lutLookup(lv, h) * 2.0f);
             float r, g, b;
             hsvToRgb(nh, ns, nv, r, g, b);
             float f = sf(x, y);
@@ -444,12 +464,12 @@ public:
                   {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f), ParamDesc::Enum("Mode", 0, {"Lift / Gamma / Gain", "Offset / Power / Slope"}),
-                   ParamDesc::Color("Lift", 1, 1, 1, 2), ParamDesc::Color("Gamma", 1, 1, 1, 2), ParamDesc::Color("Gain", 1, 1, 1, 2),
-                   ParamDesc::Color("Offset", 0, 0, 0, 1), ParamDesc::Color("Power", 1, 1, 1, 2), ParamDesc::Color("Slope", 1, 1, 1, 2)}})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+                   ParamDesc::ColorGamma("Lift", 1, 1, 1, 2), ParamDesc::ColorGamma("Gamma", 1, 1, 1, 2), ParamDesc::ColorGamma("Gain", 1, 1, 1, 2),
+                   ParamDesc::ColorGamma("Offset", 0, 0, 0, 1), ParamDesc::ColorGamma("Power", 1, 1, 1, 2), ParamDesc::ColorGamma("Slope", 1, 1, 1, 2)}})
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
-        const bool cdl = paramI(1) == 1;
+        const bool cdl = paramI(1) == 1, lin = ctx.linear();
         float lift[3], gamma[3], gain[3], offset[3], power[3], slope[3];
         paramC(2, lift), paramC(3, gamma), paramC(4, gain), paramC(5, offset), paramC(6, power), paramC(7, slope);
         ChannelPtr fac = channelOr(in[1], 1.0f);
@@ -457,7 +477,7 @@ public:
         out[0] = Value(ImagePtr(mapImage(*src, [&](int x, int y, const float* s, float* d) {
             float f = sf(x, y);
             for (int k = 0; k < 3; ++k) {
-                float c = clamp01(s[k]), v;
+                float c = clampColor(lin, s[k]), v;
                 if (cdl) {
                     // ASC CDL: out = (in * slope + offset) ^ power
                     v = std::pow(std::max(c * slope[k] + offset[k], 0.0f), power[k]);
@@ -466,7 +486,7 @@ public:
                     float lifted = (c - 1.0f) * (2.0f - lift[k]) + 1.0f;
                     v = std::pow(std::max(lifted * gain[k], 0.0f), 1.0f / std::max(gamma[k], 1e-3f));
                 }
-                d[k] = clamp01(c + (v - c) * f);
+                d[k] = clampColor(lin, c + (v - c) * f);
             }
             d[3] = s[3];
         })));
@@ -480,7 +500,8 @@ public:
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Exposure", 0.0f, -4.0f, 4.0f), ParamDesc::Float("White Point", 2.0f, 1.0f, 16.0f),
                    ParamDesc::Enum("Operator", 0, {"Reinhard", "Filmic (ACES fit)"})}})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const bool lin = ctx.linear();
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
         const float m = std::exp2(paramF(0)), wp = paramF(1);
@@ -489,10 +510,11 @@ public:
         // that went above 1 (turn off Clamp upstream).
         out[0] = Value(ImagePtr(mapImage(*src, [&](int, int, const float* s, float* d) {
             for (int k = 0; k < 3; ++k) {
-                float x = srgbToLinear(std::max(s[k], 0.0f)) * m, v;
+                float x = std::max(s[k], 0.0f), v;
+                x = (lin ? x : srgbToLinear(x)) * m;
                 if (aces) v = (x * (2.51f * x + 0.03f)) / (x * (2.43f * x + 0.59f) + 0.14f);
                 else v = x * (1.0f + x / (wp * wp)) / (1.0f + x);
-                d[k] = clamp01(linearToSrgb(clamp01(v)));
+                d[k] = lin ? clamp01(v) : clamp01(linearToSrgb(clamp01(v)));
             }
             d[3] = s[3];
         })));

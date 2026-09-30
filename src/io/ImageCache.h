@@ -11,8 +11,12 @@ class ImageCache {
 public:
     static constexpr int kProxyEdge = 1280;
 
-    // Returns null on failure; err receives the reason.
-    ImagePtr get(const std::string& pathU8, bool proxy, std::string* err = nullptr);
+    // How pixel values are decoded. A file decoded both ways is cached twice.
+    enum class Decode { AsIs, SrgbToLinear };
+
+    // Returns null on failure; err receives the reason. The proxy is downscaled after decoding,
+    // so a linear proxy averages in linear light.
+    ImagePtr get(const std::string& pathU8, bool proxy, std::string* err = nullptr, Decode decode = Decode::AsIs);
     // Full-resolution size of a loaded image (false if it has not loaded).
     bool fullSize(const std::string& pathU8, int& w, int& h);
     void clear();

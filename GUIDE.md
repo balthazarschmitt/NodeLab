@@ -135,6 +135,43 @@ arithmetic with values outside that range (use a Clamp node or the Clamp option 
 One output can feed as many inputs as you like. Each input has exactly one wire; connecting a new
 wire to an occupied input replaces the old one.
 
+## Colour Management
+
+New projects are **scene-linear**, like Blender. Pixel values are proportional to the light in the
+scene, and nothing inside the graph limits them to 0..1:
+
+- **Loading:** images are decoded from sRGB to linear light, as set by each Image Input's
+  **Color Space** (sRGB for photos, Linear Rec.709 for linear files, Non-Color for masks and data).
+- **Editing:** Exposure is a plain multiply, so +1 stop doubles every value, highlights included.
+  Blurs, glows and blends mix light realistically. Colour nodes clamp only negative values, so
+  highlights above 1 survive until the end.
+- **Viewing and exporting:** a **view transform** turns scene values into display values, only in
+  the viewers and when exporting (Export, File Output, `--render`), never inside the graph. The
+  Original panel is shown through it too, so it can be compared with the Result.
+
+The **Color** menu holds the project's settings (Blender's Render Properties > Color Management):
+
+- **View Transform:**
+  - **Standard:** the plain sRGB curve. A photo with no edits exports exactly as it was loaded.
+    Values above 1 clip.
+  - **AgX:** Blender's filmic transform. Highlights roll off smoothly up to about 6.5 stops over
+    middle grey, and very bright saturated colours fade toward white instead of clipping to a flat
+    primary.
+  - **Raw:** the linear values, unencoded, for checking data.
+- **Look** (AgX only): None, **Punchy** (more contrast and saturation) or **Greyscale**.
+- **Exposure** (stops) and **Gamma** adjust the view only. They're handy for checking highlight
+  detail without changing the graph, but they also apply when exporting. Right-click resets them.
+
+Colour pickers show and edit display (sRGB) values, as Blender's do; the node receives the
+matching linear colour. The eyedropper picks the scene values under the cursor. The histogram and
+clipping warnings show the view-transformed image.
+
+**Legacy projects.** Projects saved before 0.7 work on sRGB-encoded values, as NodeLab always did,
+and open unchanged: they render exactly as before and the Color menu's view settings are disabled.
+**Color > Convert Project to Scene-Linear** switches one over. Nothing is added to the graph, so
+it will look different: curves, levels and blends tuned on sRGB values may need adjusting. Ctrl+Z
+undoes the conversion. Scene-linear projects can't be opened by NodeLab 0.6 or older.
+
 ## Colour Spaces
 
 An RGB pixel can be described in several other ways. Each **Split** node takes an image apart into
@@ -148,11 +185,13 @@ uses, which are not always the textbook units.
 ### RGB and sRGB
 
 - **What it is:** red, green and blue light, each 0..1. This is how images are stored and shown.
-- **NodeLab works in sRGB:** the values in your image file, with the display's gamma curve built
-  in. 0.5 looks like a middle gray, even though it is only about 21% of the light of white.
+- **sRGB:** the values in your image file, with the display's gamma curve built in. 0.5 looks like
+  a middle gray, even though it is only about 21% of the light of white. Legacy projects work on
+  these values.
 - **Linear light:** physically proportional to the amount of light. Adding light, blurring and
-  glows are more realistic in linear. Use **Convert Colorspace** to go sRGB > Linear before such
-  operations and Linear > sRGB after.
+  glows are more realistic in linear. Scene-linear projects (the default, see Colour Management)
+  work in linear light throughout. In a legacy project, use **Convert Colorspace** to go
+  sRGB > Linear before such operations and Linear > sRGB after.
 - **Alpha (A):** opacity, 1 = solid, 0 = transparent. Every Split node has an A output and every
   Combine node an A input.
 
@@ -238,6 +277,10 @@ value while nothing is connected.
 **Image Input**
 - Loads an image file (PNG, JPEG, BMP or TGA; 8 or 16 bits per channel).
 - Output: Image.
+- **Color Space** (as in Blender) says how the file's values are decoded in a scene-linear
+  project: **sRGB** (photos and most images) converts to linear light; **Linear Rec.709** and
+  **Non-Color** (masks, depth, data) load the values as they are. Legacy projects always load them
+  as they are.
 - The first Image Input in the graph sets the project's working size and is shown in the Original
   panel. You can have as many as you like, for example to blend two photos or to load a mask.
 
@@ -252,11 +295,15 @@ value while nothing is connected.
 
 ### Color
 
-These adjust colour and tone. Their outputs are clamped to 0..1.
+These adjust colour and tone. In legacy projects their outputs are clamped to 0..1. In
+scene-linear projects only negative values are clamped, so highlights above 1 pass through, as in
+Blender. Invert, Posterize and the curve-based nodes still work on 0..1.
 
 **Brightness / Contrast**
 - Brightness adds or removes light (-1..1).
 - Contrast pushes values away from (positive) or towards (negative) middle gray.
+- In scene-linear projects contrast pivots on middle grey (0.18) and bends values in stops, so
+  dark values never go below black and highlights stay unclamped.
 
 **Saturation**
 - Amount 0 = grayscale, 1 = unchanged, above 1 = more colourful (up to 4).
@@ -269,6 +316,8 @@ These adjust colour and tone. Their outputs are clamped to 0..1.
 **Exposure**
 - Brightens or darkens in photographic stops: +1 doubles the light, -1 halves it.
 - Works in linear light, so highlights behave like a camera, not a simple brightness slider.
+- In scene-linear projects it is a plain, unclamped multiply: values above 1 are kept for the view
+  transform (or a later node) to handle.
 
 **Gamma**
 - Bends the midtones: below 1 brightens them, above 1 darkens them. Black and white stay put.

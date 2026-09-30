@@ -155,7 +155,7 @@ public:
                   {ParamDesc::Float("Distortion", 0.0f, -100.0f, 100.0f), ParamDesc::Bool("Constrain to Image", true),
                    ParamDesc::Float("Red / Cyan", 0.0f, -100.0f, 100.0f), ParamDesc::Float("Blue / Yellow", 0.0f, -100.0f, 100.0f),
                    ParamDesc::Float("Vignetting", 0.0f, -100.0f, 100.0f), ParamDesc::Float("Midpoint", 50.0f, 0.0f, 100.0f)}})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
         // Radii are relative to the half diagonal, so the corners are at r = 1.
@@ -169,6 +169,7 @@ public:
         const float vig = paramF(4) / 100.0f * 1.5f;  // stops at the corners
         const float power = 1.0f + 5.0f * paramF(5) / 100.0f;
         const bool geometry = k != 0.0f || sc[0] != 1.0f || sc[2] != 1.0f;
+        const bool lin = ctx.linear();
         out[0] = Value(ImagePtr(mapImage(*src, [&](int x, int y, const float* s, float* d) {
             const float px = (x + 0.5f - cx) / half, py = (y + 0.5f - cy) / half;
             const float r2 = px * px + py * py;
@@ -188,9 +189,9 @@ public:
                 // Brighten (or darken) toward the corners in linear light, like a lens' falloff.
                 const float g = std::exp2(vig * std::pow(std::min(r2, 1.0f), power * 0.5f));
                 for (int c = 0; c < 3; ++c)
-                    d[c] = colormath::linearToSrgb(colormath::srgbToLinear(clamp01(d[c])) * g);
+                    d[c] = lin ? d[c] * g : colormath::linearToSrgb(colormath::srgbToLinear(clamp01(d[c])) * g);
             }
-            for (int c = 0; c < 3; ++c) d[c] = clamp01(d[c]);
+            for (int c = 0; c < 3; ++c) d[c] = clampColor(lin, d[c]);
         })));
     }
 };

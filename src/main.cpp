@@ -47,6 +47,7 @@ static int renderHeadless(const std::string& project, const std::string& outPath
             std::fprintf(stderr, "Output node produced no image\n");
             return 1;
         }
+        img = colormgmt::displayImage(img, ctx.colorManagement);
         if (!saveImage(outPath, *img, err)) {
             std::fprintf(stderr, "save failed: %s\n", err.c_str());
             return 1;

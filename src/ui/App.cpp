@@ -12,6 +12,7 @@
 #include <imgui_impl_opengl3.h>
 #include <imgui_internal.h>
 
+#include "core/ColorManagement.h"
 #include "core/Guide.h"
 #include "core/Version.h"
 #include "io/ImageIO.h"
@@ -22,6 +23,7 @@
 #include "nodes/matte/MatteNodes.h"
 #include "nodes/transform/TransformNodes.h"
 #include "nodes/utility/UtilityNodes.h"
+#include "ui/ColorDisplay.h"
 #include "ui/Eyedropper.h"
 #include "ui/FileDialog.h"
 #include "ui/GuideWindow.h"
@@ -247,6 +249,7 @@ void App::drawFrame() {
     std::erase_if(viewers_, [](const std::unique_ptr<Viewer>& v) { return v->id != 0 && !v->open; });
 
     drawUnsavedModal();
+    drawConvertModal();
 
     // The selected node's on-image controls decide two extra things about the evaluation: a
     // selected Crop shows the whole frame (its rectangle is drawn instead, like Lightroom's crop
@@ -493,7 +496,7 @@ void App::drawViewerWindow(Viewer& v, bool isMain) {
                 drawHistogram(ImGui::GetWindowDrawList(), ImVec2(viewMax.x - size.x - 8.0f, viewMin.y + 8.0f), size,
                               histogram_, clipping_)) {
                 clipping_ = !clipping_;
-                if (v.shown) v.tex.upload(*v.shown, clipping_);
+                if (v.display) v.tex.upload(*v.display, clipping_);
             }
         }
     }
@@ -515,13 +518,13 @@ void App::drawResultToolbar(Node* ov) {
     if (hover && ImGui::IsKeyPressed(ImGuiKey_O, false)) maskOverlay_ = !maskOverlay_;
     if (hover && ImGui::IsKeyPressed(ImGuiKey_H, false)) showHistogram_ = !showHistogram_;
 
-    if (ImGui::Checkbox("Histogram", &showHistogram_) && showHistogram_ && v.shown) histogram_.compute(*v.shown);
+    if (ImGui::Checkbox("Histogram", &showHistogram_) && showHistogram_ && v.display) histogram_.compute(*v.display);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show the histogram (H)");
     ImGui::SameLine();
     clipToggled |= ImGui::Checkbox("Clipping", &clipping_);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show clipped highlights in red and crushed shadows in blue (J)");
-    if (clipToggled && v.shown) v.tex.upload(*v.shown, clipping_);
-    if (showHistogram_ && !histogram_.valid && v.shown) histogram_.compute(*v.shown);
+    if (clipToggled && v.display) v.tex.upload(*v.display, clipping_);
+    if (showHistogram_ && !histogram_.valid && v.display) histogram_.compute(*v.display);
     if (ov && NodeOverlay::isMask(*ov)) {
         ImGui::SameLine();
         ImGui::Checkbox("Mask Overlay", &maskOverlay_);
@@ -568,6 +571,36 @@ void App::drawStatusBar() {
 }
 
 // ---------------------------------------------------------------- menus & shortcuts
+
+// Blender's Render Properties > Color Management. The view settings only change how the viewers
+// and exports show the result, so they don't re-evaluate the graph.
+void App::drawColorMenu() {
+    if (!ImGui::BeginMenu("Color")) return;
+    ColorManagement& cm = graph_.colorManagement;
+    ImGui::TextDisabled(cm.linear ? "Working space: Scene-Linear (Rec.709)" : "Working space: Legacy (sRGB-encoded)");
+    ImGui::Separator();
+    ImGui::BeginDisabled(!cm.linear);
+    bool changed = false;
+    ImGui::TextUnformatted("View Transform");
+    for (int i = 0; i < 3; ++i)
+        if (ImGui::RadioButton(colormgmt::kViewNames[i], &cm.view, i)) changed = true;
+    ImGui::BeginDisabled(cm.view != ColorManagement::AgX);
+    ImGui::SetNextItemWidth(160);
+    changed |= ImGui::Combo("Look", &cm.look, colormgmt::kLookNames, 3);
+    ImGui::EndDisabled();
+    ImGui::SetNextItemWidth(160);
+    changed |= ImGui::DragFloat("Exposure", &cm.exposure, 0.01f, -10.0f, 10.0f, "%.2f");
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) cm.exposure = 0.0f, changed = true;
+    ImGui::SetNextItemWidth(160);
+    changed |= ImGui::DragFloat("Gamma", &cm.gamma, 0.005f, 0.01f, 5.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) cm.gamma = 1.0f, changed = true;
+    ImGui::EndDisabled();
+    if (changed) markChanged(false);
+    ImGui::Separator();
+    if (ImGui::MenuItem("Convert Project to Scene-Linear...", nullptr, false, !cm.linear))
+        convertPrompt_ = true;
+    ImGui::EndMenu();
+}
 
 void App::drawMainMenu() {
     if (!ImGui::BeginMainMenuBar()) return;
@@ -640,6 +673,7 @@ void App::drawMainMenu() {
         }
         ImGui::EndMenu();
     }
+    drawColorMenu();
     if (ImGui::BeginMenu("Help")) {
         ImGui::TextDisabled("NodeLab %s - node-based image manipulation", versionString().c_str());
         ImGui::Separator();
@@ -904,10 +938,35 @@ void App::drawUnsavedModal() {
     ImGui::EndPopup();
 }
 
+void App::drawConvertModal() {
+    // Opened here, not inside the Color menu, so the ID stack matches BeginPopupModal's.
+    if (convertPrompt_) {
+        ImGui::OpenPopup("Convert to Scene-Linear");
+        convertPrompt_ = false;
+    }
+    if (!ImGui::BeginPopupModal("Convert to Scene-Linear", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    ImGui::TextUnformatted("Images will load as linear light and nodes will work on linear values,");
+    ImGui::TextUnformatted("with the view transform applied only for display and export.");
+    ImGui::TextUnformatted("Nothing is added to the graph, so the result will look different:");
+    ImGui::TextUnformatted("curves, levels and blends tuned on sRGB values may need adjusting.");
+    ImGui::TextUnformatted("Ctrl+Z undoes the conversion.");
+    ImGui::Spacing();
+    if (ImGui::Button("Convert")) {
+        ImGui::CloseCurrentPopup();
+        graph_.colorManagement.linear = true;
+        markChanged(true);
+        status_ = "Converted to scene-linear";
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+}
+
 // ---------------------------------------------------------------- project lifecycle
 
 void App::newProject() {
     graph_.clear();
+    graph_.colorManagement = ColorManagement::sceneLinear();
     Node* in = graph_.addNode(ImageInputNode::staticInfo().type, 40, 80);
     Node* out = graph_.addNode(OutputNode::staticInfo().type, 460, 80);
     graph_.connect(in->id, 0, out->id, 0);
@@ -969,7 +1028,9 @@ bool App::saveProject(bool saveAs) {
 
 void App::importImage(const std::string& path) {
     std::string err;
-    if (!cache_.get(path, true, &err)) {
+    // Decode as the new Image Input will (sRGB, the param's default), so the cache entry is reused.
+    const auto decode = graph_.colorManagement.linear ? ImageCache::Decode::SrgbToLinear : ImageCache::Decode::AsIs;
+    if (!cache_.get(path, true, &err, decode)) {
         status_ = "Import failed: " + err;
         return;
     }
@@ -1236,18 +1297,34 @@ NodePath App::resultTarget() {
     return out ? NodePath{out} : NodePath{};
 }
 
+void App::refreshDisplay(Viewer& v, bool main) {
+    v.display = colormgmt::displayImage(v.shown, graph_.colorManagement);
+    if (v.display) v.tex.upload(*v.display, main && clipping_);
+    else v.tex.reset();
+}
+
 void App::updateTextures() {
+    colordisplay::linear = graph_.colorManagement.linear;
     // Original panel: the selected Image Input (in the graph being edited), else the root's first.
     Graph& cur = currentGraph();
     Node* src = cur.find(selected_);
     if (!src || src->info().type != ImageInputNode::staticInfo().type)
         src = graph_.find(graph_.firstOfType(ImageInputNode::staticInfo().type));
     ImagePtr left;
-    if (src && !src->paramS(0).empty()) left = cache_.get(src->paramS(0), true);
-    if (left != leftShown_) {
+    const ColorManagement& cm = graph_.colorManagement;
+    if (src && !src->paramS(0).empty())
+        left = cache_.get(src->paramS(0), true, nullptr, static_cast<const ImageInputNode&>(*src).decode(cm.linear));
+    // Changing the view transform only redraws; the graph's values are unaffected.
+    const bool cmChanged = !(cm == shownCm_);
+    shownCm_ = cm;
+    if (left != leftShown_ || cmChanged) {
         leftShown_ = left;
-        if (left) leftTex_.upload(*left);
+        if (left) leftTex_.upload(*colormgmt::displayImage(left, cm));
         else leftTex_.reset();
+    }
+    if (cmChanged) {
+        for (size_t i = 0; i < viewers_.size(); ++i) refreshDisplay(*viewers_[i], i == 0);
+        histogram_.valid = false;
     }
 
     if (auto res = eval_->poll()) {
@@ -1259,12 +1336,11 @@ void App::updateTextures() {
             Viewer& v = *viewers_[i];
             v.error = res->errors[i];
             v.shown = res->images[i];
-            if (v.shown) v.tex.upload(*v.shown, i == 0 && clipping_);
-            else v.tex.reset();
+            refreshDisplay(v, i == 0);
         }
         // The histogram follows the Result; recomputed only when shown.
         histogram_.valid = false;
-        if (showHistogram_ && !viewers_.empty() && viewers_[0]->shown) histogram_.compute(*viewers_[0]->shown);
+        if (showHistogram_ && !viewers_.empty() && viewers_[0]->display) histogram_.compute(*viewers_[0]->display);
         // A mask target follows the viewers (see drawFrame).
         if (maskWanted_ && res->images.size() > submittedViewers_ && res->images[submittedViewers_])
             maskTex_.uploadTint(*res->images[submittedViewers_], 1.0f, 0.25f, 0.2f, 0.45f);

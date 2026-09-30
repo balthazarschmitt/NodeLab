@@ -252,6 +252,7 @@ void Graph::clear() {
     nodes_.clear();
     links_.clear();
     frames_.clear();
+    colorManagement = {};
     nextId_ = 1;
 }
 
@@ -290,6 +291,8 @@ nlohmann::json Graph::toJson(const fs::path* baseDir) const {
             jf.push_back({{"id", f.id}, {"label", f.label}, {"rect", {f.x, f.y, f.w, f.h}},
                           {"color", {f.color[0], f.color[1], f.color[2]}}});
     }
+    // Legacy graphs (and group insides) write nothing, so their files stay as older builds wrote them.
+    if (colorManagement != ColorManagement{}) j["colorManagement"] = colorManagement.toJson();
     return j;
 }
 
@@ -352,5 +355,7 @@ void Graph::fromJson(const nlohmann::json& j, const fs::path* baseDir) {
             frames_.push_back(f);
         }
     }
+    // Absent in projects from before scene-linear support: those keep the legacy working space.
+    if (auto cm = j.find("colorManagement"); cm != j.end()) colorManagement = ColorManagement::fromJson(*cm);
     nextId_ = std::max(j.value("nextId", 1), maxId + 1);
 }

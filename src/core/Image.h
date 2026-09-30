@@ -3,7 +3,8 @@
 #include <memory>
 #include <vector>
 
-// Float RGBA image, interleaved, values nominally 0..1 (sRGB-encoded, not linear).
+// Float RGBA image, interleaved. Values are sRGB-encoded 0..1 in legacy projects and unbounded
+// scene-linear Rec.709 in scene-linear ones (see core/ColorManagement.h).
 struct Image {
     int w = 0, h = 0;
     std::vector<float> px;

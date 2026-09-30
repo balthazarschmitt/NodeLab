@@ -138,7 +138,7 @@ public:
                   {ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f),
                    ParamDesc::Enum("Type", Sobel, {"Soften", "Box Sharpen", "Diamond Sharpen", "Laplace", "Sobel", "Prewitt",
                                                    "Kirsch", "Shadow"})}})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
         const int type = paramI(1);
@@ -176,7 +176,7 @@ public:
                     default: v = conv(shadow, x, y, k, false) + 0.0f; break;
                 }
                 float f = sf(x, y);
-                d[k] = clamp01(s[k] + (v - s[k]) * f);
+                d[k] = clampColor(ctx.linear(), s[k] + (v - s[k]) * f);
             }
             d[3] = s[3];
         })));
@@ -381,11 +381,11 @@ public:
         }
         auto result = mapImage(*src, [&](int x, int y, const float* s, float* d) {
             const float* gl = glare->pixel(size_t(y) * w + x);
-            for (int k = 0; k < 3; ++k) d[k] = clamp01(s[k] + gl[k] * strength);
+            for (int k = 0; k < 3; ++k) d[k] = clampColor(ctx.linear(), s[k] + gl[k] * strength);
             d[3] = s[3];
         });
         for (size_t i = 0; i < glare->pixelCount(); ++i) {
-            for (int k = 0; k < 3; ++k) glare->pixel(i)[k] = clamp01(glare->pixel(i)[k] * strength);
+            for (int k = 0; k < 3; ++k) glare->pixel(i)[k] = clampColor(ctx.linear(), glare->pixel(i)[k] * strength);
             glare->pixel(i)[3] = 1.0f;
         }
         out[0] = Value(ImagePtr(result));

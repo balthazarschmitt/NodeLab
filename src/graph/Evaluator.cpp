@@ -25,6 +25,7 @@ size_t Evaluator::ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unor
     key += nlohmann::json(n->params).dump();
     key += n->signatureExtra();
     if (n->muted) key += "|muted";
+    if (ctx.linear()) key += "|linear";
 
     std::vector<Value> inputs(info.inputs.size());
     for (size_t i = 0; i < info.inputs.size(); ++i) {
@@ -141,10 +142,13 @@ void Evaluator::prune(const Graph& g) {
 }
 
 void initContextSize(const Graph& g, EvalContext& ctx) {
+    ctx.colorManagement = g.colorManagement;
     if (!ctx.cache) return;
     for (const auto& [id, n] : g.nodes()) {
         if (n->info().type != ImageInputNode::staticInfo().type) continue;
-        if (ImagePtr img = ctx.cache->get(n->paramS(0), ctx.proxy)) {
+        // Same decode as the node's, so the file isn't decoded twice.
+        const auto decode = static_cast<const ImageInputNode&>(*n).decode(ctx.linear());
+        if (ImagePtr img = ctx.cache->get(n->paramS(0), ctx.proxy, nullptr, decode)) {
             ctx.defaultW = img->w;
             ctx.defaultH = img->h;
             int fw, fh;

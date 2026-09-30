@@ -96,8 +96,17 @@ src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (
   - Conversions happen implicitly (`toImage`, `toChannel`).
   - An input pin with `fallbackParam` shows that param's slider when unconnected.
   - An empty wire also falls back to the slider value.
+- **Colour management (Blender model):** the root `Graph::colorManagement` holds the working space
+  and the view settings.
+  - **Scene-linear** projects (new ones) decode sRGB images to linear light (Image Input's Color
+    Space) and apply the view transform (`colormgmt::displayImage`) only in viewers and at export.
+  - **Legacy** projects (no `colorManagement` block) work on sRGB-encoded values and must render
+    byte-identically. Check `ctx.linear()` in any node whose maths depends on the encoding.
+  - `ParamDesc::Color` values are stored linear in linear projects; pickers convert with
+    `ui/ColorDisplay.h`. `ParamDesc::ColorGamma` (multipliers such as lift/gain) is shown as stored.
 - **Clamping:**
-  - Colour nodes clamp outputs to 0..1.
+  - Colour nodes clamp outputs with `clampColor(ctx.linear(), v)`: 0..1 in legacy projects, only
+    negatives in linear ones. Curves, Invert, Posterize, alpha and mattes stay 0..1.
   - Math and converter nodes are unclamped, with a Clamp option where it makes sense.
   - Params clamp to `hardMin`/`hardMax`. `ParamDesc::Float` sets hard equal to soft;
     `FloatFree` is unbounded.
