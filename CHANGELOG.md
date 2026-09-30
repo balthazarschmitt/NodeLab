@@ -3,6 +3,14 @@
 NodeLab uses [semantic versioning](https://semver.org). While it is 0.x, minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
+## Unreleased
+
+- `examples/infrared.nlproj`: infrared false-colour look (lilac-white foliage, maroon sky) from two
+  Image Expression nodes plus Glare; swap the Image Input for your own photo.
+- Curves editor (Curves, Hue Correct, Float Curve) fits the Inspector: it now stretches to the
+  panel's width and fits its height instead of hanging off the bottom, the help tooltip no
+  longer covers the curve while dragging, and each node remembers its own selected channel.
+
 ## 0.4.0 (2026-09-29)
 
 - Move nodes between frames: node right-click → Move to Frame, frame right-click → Move Selected

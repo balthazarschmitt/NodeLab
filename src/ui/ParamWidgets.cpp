@@ -62,16 +62,22 @@ bool curveEditor(const char* id, nlohmann::json& curves, const std::vector<std::
 
     CurvePoints pts = curveFromJson(curves.contains(keys[chan]) ? curves[keys[chan]] : nlohmann::json());
 
-    const float size = std::clamp(ImGui::GetContentRegionAvail().x, 160.0f, 360.0f);
+    // Full panel width, and no taller than the visible height, so the whole curve is on screen in a
+    // short Inspector instead of hanging off the bottom (then it is wider than tall, which is fine
+    // for editing). Adding the scroll offset keeps the size stable while the panel scrolls.
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float w = std::clamp(avail.x, 160.0f, 560.0f);
+    const float fitH = avail.y + ImGui::GetScrollY() - ImGui::GetStyle().ItemSpacing.y;
+    const float h = std::clamp(fitH, 120.0f, std::min(w, 400.0f));
     const ImVec2 p0 = ImGui::GetCursorScreenPos();
-    const ImVec2 p1(p0.x + size, p0.y + size);
-    ImGui::InvisibleButton("##curve", ImVec2(size, size), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+    const ImVec2 p1(p0.x + w, p0.y + h);
+    ImGui::InvisibleButton("##curve", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
     const bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive();
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    auto toScreen = [&](float x, float y) { return ImVec2(p0.x + x * size, p1.y - y * size); };
+    auto toScreen = [&](float x, float y) { return ImVec2(p0.x + x * w, p1.y - y * h); };
     auto toCurve = [&](ImVec2 m) {
-        return std::array<float, 2>{std::clamp((m.x - p0.x) / size, 0.0f, 1.0f), std::clamp((p1.y - m.y) / size, 0.0f, 1.0f)};
+        return std::array<float, 2>{std::clamp((m.x - p0.x) / w, 0.0f, 1.0f), std::clamp((p1.y - m.y) / h, 0.0f, 1.0f)};
     };
     const ImVec2 mouse = ImGui::GetIO().MousePos;
 
@@ -117,16 +123,16 @@ bool curveEditor(const char* id, nlohmann::json& curves, const std::vector<std::
         const int segs = 36;
         for (int k = 0; k < segs; ++k) {
             ImVec4 c0 = ImColor::HSV(float(k) / segs, 0.7f, 0.45f), c1 = ImColor::HSV(float(k + 1) / segs, 0.7f, 0.45f);
-            float x0 = p0.x + size * k / segs, x1 = p0.x + size * (k + 1) / segs;
+            float x0 = p0.x + w * k / segs, x1 = p0.x + w * (k + 1) / segs;
             dl->AddRectFilledMultiColor(ImVec2(x0, p1.y - 14), ImVec2(x1, p1.y), ImGui::GetColorU32(c0), ImGui::GetColorU32(c1),
                                         ImGui::GetColorU32(c1), ImGui::GetColorU32(c0));
         }
-        dl->AddLine(ImVec2(p0.x, p0.y + size * 0.5f), ImVec2(p1.x, p0.y + size * 0.5f), IM_COL32(90, 90, 100, 255));
+        dl->AddLine(ImVec2(p0.x, p0.y + h * 0.5f), ImVec2(p1.x, p0.y + h * 0.5f), IM_COL32(90, 90, 100, 255));
     }
     for (int k = 1; k < 4; ++k) {
         float t = k / 4.0f;
-        dl->AddLine(ImVec2(p0.x + t * size, p0.y), ImVec2(p0.x + t * size, p1.y), IM_COL32(48, 48, 56, 255));
-        dl->AddLine(ImVec2(p0.x, p0.y + t * size), ImVec2(p1.x, p0.y + t * size), IM_COL32(48, 48, 56, 255));
+        dl->AddLine(ImVec2(p0.x + t * w, p0.y), ImVec2(p0.x + t * w, p1.y), IM_COL32(48, 48, 56, 255));
+        dl->AddLine(ImVec2(p0.x, p0.y + t * h), ImVec2(p1.x, p0.y + t * h), IM_COL32(48, 48, 56, 255));
     }
     if (!hueStrip) dl->AddLine(ImVec2(p0.x, p1.y), ImVec2(p1.x, p0.y), IM_COL32(70, 70, 80, 255));
     for (int c = 0; c < nk; ++c) {
@@ -155,7 +161,9 @@ bool curveEditor(const char* id, nlohmann::json& curves, const std::vector<std::
         dl->AddCircle(p, hot ? 6.0f : 4.5f, IM_COL32(10, 10, 12, 255));
     }
     dl->AddRect(p0, p1, IM_COL32(70, 70, 80, 255));
-    if (hovered) ImGui::SetTooltip("Click: add point   Drag: move   Right-click: delete");
+    // Delayed and hidden while dragging, so the tip never covers the curve being edited.
+    if (!active && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+        ImGui::SetTooltip("Click: add point   Drag: move   Right-click: delete");
 
     if (changed) curves[keys[chan]] = curveToJson(pts);
     ImGui::PopID();

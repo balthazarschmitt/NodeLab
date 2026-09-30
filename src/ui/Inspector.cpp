@@ -83,7 +83,9 @@ bool editParam(Node& node, int i, float width, bool compact) {
             break;
         }
         case ParamKind::Curve:
+            // Channel buttons share the label's line, leaving more height for the curve.
             ImGui::TextUnformatted(d.name.c_str());
+            ImGui::SameLine(0, 16);
             changed = curveEditor("##curves", node.params[i], d.options);
             break;
         case ParamKind::Color: {
@@ -237,6 +239,9 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
 
     bool changed = false;
     const float width = ImGui::GetContentRegionAvail().x * 0.6f;
+    // Scope widget state (selected curve channel, ramp stop) to this node, so selecting another
+    // Curves node doesn't inherit the previous one's channel.
+    ImGui::PushID(n->id);
     for (int i = 0; i < int(info.params.size()); ++i) {
         // A param that backs a connected input is overridden by the wire.
         bool driven = false;
@@ -252,5 +257,6 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
             changed |= editParam(*n, i, width, false);
         }
     }
+    ImGui::PopID();
     return changed;
 }

@@ -1,0 +1,122 @@
+{
+ "app": "NodeLab",
+ "version": 1,
+ "graph": {
+  "nextId": 20,
+  "nodes": [
+   {
+    "id": 1,
+    "type": "io.image_input",
+    "pos": [
+     20,
+     40
+    ],
+    "params": {
+     "File": "scene.png"
+    }
+   },
+   {
+    "id": 2,
+    "type": "conv.image_expression",
+    "pos": [
+     260,
+     40
+    ],
+    "params": {
+     "R": "clamp(0.85*(0.35*r+0.25*g-0.15*b+2.2*max(g-(r+b)/2,0)),0,1)",
+     "G": "clamp(0.85*(0.35*r+0.25*g-0.15*b+2.2*max(g-(r+b)/2,0)),0,1)",
+     "B": "(0.3*r+0.59*g+0.11*b)"
+    }
+   },
+   {
+    "id": 3,
+    "type": "conv.image_expression",
+    "pos": [
+     500,
+     40
+    ],
+    "params": {
+     "R": "clamp(0.06+0.86*pow(clamp(r,0,1),0.95)+0.28*b*pow(1-r,2),0,1)",
+     "G": "clamp(0.03+0.84*pow(clamp(r,0,1),1.05),0,1)",
+     "B": "clamp(0.06+0.9*pow(clamp(r,0,1),0.9)+0.04*b*(1-r),0,1)"
+    }
+   },
+   {
+    "id": 4,
+    "type": "filter.glare",
+    "pos": [
+     740,
+     40
+    ],
+    "params": {
+     "Type": 0,
+     "Threshold": 0.6,
+     "Size": 40,
+     "Strength": 0.5
+    }
+   },
+   {
+    "id": 5,
+    "type": "io.output",
+    "pos": [
+     980,
+     40
+    ],
+    "params": {}
+   }
+  ],
+  "links": [
+   {
+    "id": 10,
+    "from": [
+     1,
+     0
+    ],
+    "to": [
+     2,
+     0
+    ]
+   },
+   {
+    "id": 11,
+    "from": [
+     2,
+     0
+    ],
+    "to": [
+     3,
+     0
+    ]
+   },
+   {
+    "id": 12,
+    "from": [
+     3,
+     0
+    ],
+    "to": [
+     4,
+     0
+    ]
+   },
+   {
+    "id": 13,
+    "from": [
+     4,
+     0
+    ],
+    "to": [
+     5,
+     0
+    ]
+   }
+  ]
+ },
+ "ui": {
+  "graphView": [
+   0,
+   0,
+   1
+  ]
+ }
+}
