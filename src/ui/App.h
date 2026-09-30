@@ -6,9 +6,11 @@
 
 #include "graph/Evaluator.h"
 #include "graph/Graph.h"
+#include "io/Export.h"
 #include "io/ImageCache.h"
 #include "ui/ImageView.h"
 #include "ui/NodeEditor.h"
+#include "ui/ViewerOverlay.h"
 
 struct GLFWwindow;
 class GroupNode;
@@ -45,7 +47,10 @@ private:
     bool openProject(const std::string& path);
     bool saveProject(bool saveAs);
     void importImage(const std::string& path);
-    void exportResult();
+    void openExportWindow();
+    void drawExportWindow();
+    void startExport(std::vector<ExportItem> items, int inputNode);
+    void pollExport();
     void requestAction(Pending action);  // asks about unsaved changes first
     void performAction(Pending action);
 
@@ -71,6 +76,8 @@ private:
     std::string pathLabel(const NodePath& p);
     void openViewer(NodePath pin);
     void finishPick(const PickRequest& pick);  // applies an eyedropper pick to its Color param
+    Node* overlayNode();  // selected node with on-image controls, or null
+    void drawResultToolbar(Node* ov);
 
     void markChanged(bool eval);
     void resetHistory();
@@ -98,11 +105,19 @@ private:
 
     GLTexture leftTex_;
     ImagePtr leftShown_;
-    std::string leftLabel_;
     ViewState view_;  // shared by Original and Result so they stay in sync
     std::vector<std::unique_ptr<Viewer>> viewers_;
     int nextViewerId_ = 1;
     std::vector<NodePath> submittedTargets_;
+    size_t submittedViewers_ = 0;  // viewers in the last submission; a mask target may follow them
+
+    // Result viewer extras: on-image controls, mask overlay, histogram and clipping warnings.
+    NodeOverlay overlay_;
+    GLTexture maskTex_;
+    NodePath overlayPath_;      // node the overlay edits (crop mode / mask target follow it)
+    bool maskWanted_ = false;   // a mask node is selected and the overlay is on
+    bool maskOverlay_ = true, showHistogram_ = false, clipping_ = false;
+    Histogram histogram_;
 
     int selected_ = 0;       // selected node in the current graph
     NodePath previewPath_;   // Ctrl+click preview; empty = Output node
@@ -113,6 +128,18 @@ private:
     std::string lastTitle_;
 
     std::string status_;
+
+    // Export window (File > Export): renders on a background thread so the UI never freezes.
+    Exporter exporter_;
+    ExportSettings exportSettings_;
+    bool showExport_ = false, focusExport_ = false;
+    int exportTab_ = 0;  // tab shown last frame: 0 single, 1 batch (drops go to batch sources)
+    char exportPath_[1024] = {};
+    char batchDir_[1024] = {};
+    char batchSuffix_[64] = "_edit";
+    int batchInput_ = 0;  // Image Input node fed each source
+    std::vector<std::string> batchSources_;
+    std::vector<std::string> exportLog_;
     double evalMs_ = 0;
 
     // panels / layout

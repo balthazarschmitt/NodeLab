@@ -31,7 +31,7 @@ Results below).
 3. Drag from the Image Input's **Image** output onto the Saturation's **Image** input.
 4. Drag from the Saturation's output onto the **Output** node.
 5. Drag the **Amount** slider on the node. The Result panel updates live.
-6. **File > Export Result** (Ctrl+E) writes the result at full resolution.
+6. **File > Export** (Ctrl+E) writes the result at full resolution (see Exporting below).
 7. **File > Save** (Ctrl+S) writes a `.nlproj` project file. It stores the graph and the image
    paths (relative to the project), not the pixels, so keep images next to the project.
 
@@ -58,6 +58,33 @@ at the same time, open an extra viewer:
 
 Viewers are ordinary panels: drag the tab to dock them next to the others. Open as many as you
 like; they are saved with the project.
+
+### Histogram and Clipping
+
+The Result panel's toolbar has two toggles (hover the Result panel to use the keys):
+
+- **Histogram (H):** red, green, blue and luminance distribution of the result, drawn in the
+  top-right corner. Dark tones are on the left, bright tones on the right.
+- **Clipping (J):** paints pure-white or channel-clipped pixels red and pure-black pixels blue, like
+  Lightroom's clipping warnings. The triangles in the histogram's corners light up when something
+  clips; click one to toggle the warning.
+
+### On-image Controls
+
+Some nodes are edited directly on the Result panel while they are selected:
+
+- **Crop:** the Result shows the whole frame with the crop rectangle on top. Drag a corner or edge
+  to resize, drag inside to move, and drag outside the frame to straighten (rotate). With an
+  Aspect preset the frame keeps its ratio. Deselect the node to see the cropped result.
+- **Radial Gradient, Box Mask, Ellipse Mask:** drag the centre to move, the side and bottom
+  handles to resize, and the handle above to rotate (Shift snaps to 15 degrees).
+- **Linear Gradient:** drag the Start or End handle, or the middle one to move both.
+- **Brush Mask:** paint with the left mouse, Alt+paint to erase, and `[` / `]` to change the
+  brush size.
+- **Mask Overlay (O):** a selected mask node is tinted red over the image, so you can see what it
+  covers even before it is wired into anything.
+
+Middle-drag still pans and the wheel still zooms while these controls are shown.
 
 ### Picking Colours from the Image
 
@@ -307,6 +334,35 @@ These adjust colour and tone. Their outputs are clamped to 0..1.
   and Power is a gamma per channel.
 - Factor blends with the original.
 
+**Basic**
+- Lightroom's Basic panel in one node, with its sliders in the Inspector (the node itself stays
+  small). All sliders except Exposure run from -100 to 100, with 0 as no change.
+- **White Balance:** Temperature (blue to yellow) and Tint (green to magenta), applied in linear
+  light.
+- **Tone:** Exposure (in stops), Contrast, then Highlights and Shadows (recover or open up the
+  bright and dark tones), and Whites and Blacks (set the end points).
+- **Presence:** Texture (fine detail), Clarity (local midtone contrast), Dehaze (removes or adds
+  atmospheric haze), Vibrance (boosts muted colours more than saturated ones and protects skin
+  tones), and Saturation.
+- Factor blends with the original. Wire a mask into it to make a local adjustment.
+
+**Color Mixer**
+- Lightroom's HSL panel: Hue, Saturation and Luminance for eight colour bands (Red, Orange,
+  Yellow, Green, Aqua, Blue, Purple and Magenta).
+- The Inspector has one tab per property and an All tab. Bands blend smoothly into each other, and
+  grey pixels are left alone.
+- **Uses:** darken a blue sky (Blue Luminance down), make foliage autumnal (Green Hue towards
+  yellow), or calm down a loud colour.
+
+**Color Grading**
+- Lightroom's colour wheels: Shadows, Midtones and Highlights, plus Global for the whole image.
+  Drag in a wheel to pick the tint's hue (the angle) and strength (the distance from the centre).
+  Shift drags finely, and double-click resets the wheel.
+- The slider under each wheel brightens or darkens that range.
+- **Blending:** how much the three ranges overlap. **Balance:** moves the split between shadows
+  and highlights (positive favours the highlights tint).
+- **Uses:** teal shadows with warm highlights, or a gentle overall warm or cool cast.
+
 **Tone Map**
 - Compresses very bright values (for example after Exposure, Glare or Add blends) back into 0..1
   smoothly instead of clipping.
@@ -512,12 +568,26 @@ otherwise.
 - Keeps the region between Left/Right and Top/Bottom (0..1 fractions of the image).
 - Resize Image on: the output is only the cropped region. Off: the image keeps its size and the
   area outside the crop becomes transparent.
+- **Angle** straightens the image first (positive turns it clockwise). With **Constrain to
+  Image** on, it is scaled up just enough that no empty corners show.
+- **Aspect** locks the crop to a ratio (Original, 1:1, 4:5, 2:3, 16:9 and more). The rectangle
+  shrinks around its centre to fit.
+- Select the node to edit the crop on the Result panel (see On-image Controls).
 
 **Lens Distortion**
 - Distortion: positive for barrel (bulging), negative for pincushion.
 - Dispersion: shifts red and blue apart towards the edges for chromatic aberration, a great
   vintage or glitch detail.
 - Fit scales the image so no empty corners show.
+
+**Lens Correction**
+- Lightroom's manual lens corrections.
+- **Distortion:** positive straightens barrel distortion (lines bowing outwards), negative
+  straightens pincushion. Constrain to Image scales up to hide the empty edges.
+- **Red / Cyan** and **Blue / Yellow** shift those channels radially to remove (or add) colour
+  fringes along high-contrast edges near the corners.
+- **Vignetting** brightens (positive) or darkens (negative) the corners; **Midpoint** sets how far
+  in the effect reaches.
 
 **Displace**
 - Pushes each pixel sideways by the X channel and up and down by the Y channel. 0.5 means no
@@ -545,6 +615,26 @@ with the matte applied as alpha.
 - Operation combines it with the incoming Mask: Add (union), Subtract, Multiply (intersection), or
   Not (everything outside the shape).
 - Chain several masks for complex shapes, or use as a vignette with Mix.
+- Select the node to drag its handles on the Result panel.
+
+**Radial Gradient**
+- Like Ellipse Mask, but soft by default (Feather 0.5), like Lightroom's Radial Gradient. It is
+  the quickest way to brighten a subject or make a custom vignette (Operation Not).
+
+**Linear Gradient**
+- Fully on at Start and fading to nothing at End (points as 0..1 fractions of the image), like
+  Lightroom's Linear Gradient. Drag the handles on the Result panel.
+- **Uses:** darken a sky (Start at the top, End at the horizon) by wiring it into a Basic node's
+  Factor.
+
+**Brush Mask**
+- Paint a mask by hand on the Result panel while the node is selected: left mouse paints,
+  Alt+paint erases, and `[` / `]` change the size.
+- Size is a fraction of the image's long edge. Feather softens the brush edge, and Flow is how much
+  each stroke adds. New strokes use the current settings.
+- The Inspector shows the stroke count, with **Remove Last** and **Clear Strokes** buttons.
+  Strokes are saved in the project and scale with the image.
+- An incoming Mask is painted over; Invert flips the result.
 
 **Channel Key**
 - Keys on a single channel: Red, Green, Blue, Hue, Saturation, Value, Y (luma), Cb or Cr.
@@ -635,8 +725,9 @@ Coordinates are relative to the image, so textures look the same in the preview 
 - Outputs the image's Width, Height and Aspect ratio as Numbers.
 
 **File Output**
-- Saves whatever is connected to a file (PNG or JPEG) at full resolution when you choose File >
-  Export or File > Write File Outputs, or when rendering from the command line.
+- Saves whatever is connected to a file (PNG or JPEG) at full resolution when you export a single
+  image or choose File > Write File Outputs, or when rendering from the command line. Batch
+  exports skip it, because every image would overwrite the same file.
 - Use several to export multiple versions (for example colour and black-and-white) in one go.
   Enabled switches one off without deleting it.
 
@@ -659,6 +750,8 @@ Coordinates are relative to the image, so textures look the same in the preview 
 | Connect | Drag from an output pin to an input pin (or the other way round). |
 | Add a connected node | Drag a wire into empty space and pick a node from the menu. |
 | Insert into a wire | Drag a node onto a wire; it is connected when you release. |
+| Swap | Shift+S (or right-click > Swap...) replaces the selected nodes with another type, like Blender's Swap. Wires stay connected where the new node has a matching pin, and settings with the same name are kept. |
+| Arrange | Shift+P (or Edit > Arrange Nodes) lays the selected nodes, or all nodes when fewer than two are selected, out in columns from left to right. |
 | Pull out of a chain | Alt+drag the node. |
 | Disconnect | Drag a wire off an input pin and drop it on empty space, or Ctrl+right-drag across wires (knife). |
 | Pan / zoom | Drag empty space or middle-drag; mouse wheel zooms. |
@@ -683,8 +776,33 @@ Coordinates are relative to the image, so textures look the same in the preview 
 | View an intermediate node | Right-click it > Open in New Viewer. |
 | Pick a colour | Pick next to a colour setting, then click or drag on an image. |
 
+New, pasted, swapped and spliced nodes push any nodes they land on out of the way, so the graph
+doesn't pile up. Sideways pushes take the pushed node's downstream (or upstream) chain along so
+wires keep flowing left to right.
+
 In the image panels, drag to pan and scroll to zoom. The Original and Result panels move together.
 Double-click to reset the view.
+
+## Exporting
+
+**File > Export** (Ctrl+E) opens the Export window. The render runs in the background, so you can
+keep working (later edits don't affect a running export); the status bar and the window show
+progress, and **Cancel** stops it.
+
+- **Single** renders the Output node to one file. It also writes the File Output nodes unless you
+  untick that.
+- **Batch** runs many photos through the same node tree. Add sources with **Add Files...**,
+  **Add Folder...**, or by dropping images or folders on the window while the Batch tab is open.
+  Choose which Image Input receives them (when the tree has several) and an output folder. Each
+  result is saved as the source's name plus the **Name suffix** (`_edit` by default). Sizes in
+  pixels (blur radius, offsets) apply to every photo, and each result keeps its own source's size.
+- **Format:** PNG, or JPEG with a quality setting. PNGs drop the alpha channel when the image is
+  fully opaque.
+- **Size:** Original, **Long edge** (pixels), or **Percent**. Exports are only ever made smaller.
+
+The settings and folders are saved with the project. From the command line,
+`NodeLab.exe --batch project.nlproj outDir [--jpg] a.jpg b.jpg ...` does the same batch without the
+window.
 
 ## Recipes
 
@@ -733,6 +851,15 @@ look.
    Combine RGB with R = B × 0.8, G = B × 0.5 and B = B.
 2. **Curves** to flatten the midtones and brighten highlights.
 3. **Hue Shift** or **Color Balance** towards violet.
+
+### Local Adjustments (Lightroom Masks)
+
+1. Add a **Basic** (or any colour node) after the image and set the look you want in one area.
+2. Add a **Linear Gradient**, **Radial Gradient** or **Brush Mask**, and wire its Mask into the
+   Basic node's **Factor**.
+3. Select the mask and shape it on the Result panel; press O to see it tinted red.
+4. Combine masks with the Operation setting, or chain a Brush Mask after a gradient to paint
+   extra areas in or out.
 
 ### Thermal Camera
 

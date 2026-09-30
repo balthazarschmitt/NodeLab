@@ -1,11 +1,14 @@
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include "core/Version.h"
 #include "graph/Evaluator.h"
 #include "graph/NodeRegistry.h"
+#include "io/Export.h"
 #include "io/ImageCache.h"
 #include "io/ImageIO.h"
+#include "io/Paths.h"
 #include "io/ProjectFile.h"
 #include "nodes/io/IONodes.h"
 #include "nodes/utility/UtilityNodes.h"
@@ -51,6 +54,39 @@ static int renderHeadless(const std::string& project, const std::string& outPath
         return 1;
     }
     return 0;
+}
+
+// NodeLab.exe --batch project.nlproj outDir [--jpg] in1 in2 ... : runs each source image through the
+// project (fed into its first Image Input) and writes outDir/<name>_edit.png (or .jpg).
+static int batchHeadless(const std::string& project, const std::string& outDir, std::vector<std::string> args) {
+    Graph g;
+    nlohmann::json ui;
+    std::string err;
+    if (!loadProject(project, g, ui, err)) {
+        std::fprintf(stderr, "load failed: %s\n", err.c_str());
+        return 1;
+    }
+    ExportSettings s;
+    if (auto e = ui.find("export"); e != ui.end()) s.fromJson(*e);
+    std::vector<ExportItem> items;
+    for (const std::string& a : args) {
+        if (a == "--jpg") s.format = ExportSettings::JPEG;
+        else if (a == "--png") s.format = ExportSettings::PNG;
+    }
+    for (const std::string& a : args)
+        if (a.rfind("--", 0) != 0) items.push_back({a, batchOutputPath(a, outDir, s)});
+    const int input = g.firstOfType(ImageInputNode::staticInfo().type);
+    if (!input || items.empty()) {
+        std::fprintf(stderr, input ? "no source images given\n" : "project has no Image Input node\n");
+        return 1;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(u8ToPath(outDir), ec);
+    Exporter ex;
+    ex.start(g.toJson(), std::move(items), input, s);
+    ex.wait();
+    for (const std::string& line : ex.takeLog()) std::printf("%s\n", line.c_str());
+    return ex.progress().failed ? 1 : 0;
 }
 
 // The Release exe is a GUI app (-mwindows) with no console; when started from a terminal for a
@@ -101,6 +137,11 @@ int main(int argc, char** argv) {
     if (argc >= 4 && std::string(argv[1]) == "--render") {
         attachParentConsole();
         return renderHeadless(argv[2], argv[3]);
+    }
+
+    if (argc >= 5 && std::string(argv[1]) == "--batch") {
+        attachParentConsole();
+        return batchHeadless(argv[2], argv[3], std::vector<std::string>(argv + 4, argv + argc));
     }
 
     App::RunOptions opt;

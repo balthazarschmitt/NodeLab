@@ -86,6 +86,9 @@ struct NodeInfo {
     std::vector<PinDesc> outputs;
     std::vector<ParamDesc> params;
     bool hidden = false;  // not offered in the add-node menu (group internals)
+    // Params are edited only in the Inspector (like Blender's sidebar-only node properties), for
+    // nodes with too many sliders to fit on the node body. Pin-backed params still show on pins.
+    bool compact = false;
 };
 
 struct EvalContext {

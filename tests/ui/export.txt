@@ -1,0 +1,56 @@
+# build\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\export.txt
+# Pane titles, auto spacing on add, Swap (Shift+S), Arrange (Shift+P) and the Export window.
+settle
+shot build/smoke/e1_titles.png
+# add a node right on top of Invert: Invert gets pushed clear
+move 740 350
+shift on
+key a
+shift off
+wait 3
+text gamma
+wait 2
+key enter
+settle
+shot build/smoke/e2_add_spaced.png
+# swap the new node for Brightness/Contrast (click it first: selects it and focuses the editor)
+click 700 351
+wait 3
+shift on
+key s
+shift off
+wait 3
+text bright
+wait 2
+key enter
+settle
+shot build/smoke/e3_swapped.png
+# arrange everything (clicking empty canvas clears the selection, so it applies to all nodes)
+click 1000 480
+wait 3
+shift on
+key p
+shift off
+settle
+shot build/smoke/e4_arranged.png
+ctrl on
+key e
+ctrl off
+wait 5
+shot build/smoke/e5_export.png
+# export into build/smoke instead of the suggested path next to the project
+click 750 354
+wait 2
+ctrl on
+key a
+ctrl off
+text build/smoke/e_export.png
+wait 2
+click 631 555
+wait 40
+shot build/smoke/e6_exported.png
+click 650 253
+wait 5
+shot build/smoke/e7_batch.png
+quit
+

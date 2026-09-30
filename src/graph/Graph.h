@@ -32,6 +32,11 @@ public:
     Node* duplicateNode(int id, float dx, float dy);
     // Copy of a node that may live in another graph (type, params, extra state), at (x, y).
     Node* cloneNode(const Node& src, float x, float y);
+    // Replaces a node with one of another type in place (Blender's Swap), keeping its id, position,
+    // mute/collapse state, params that share a name and kind, and links whose pins can be matched
+    // by name, then by position, then by the first compatible free pin. Returns the new node, or
+    // null for an unknown type.
+    Node* swapNode(int id, const std::string& type);
     // Re-indexes pins on links touching `nodeId` (outputs or inputs). map(old) returns the new
     // index, or -1 to drop the link.
     void remapPins(int nodeId, bool outputs, const std::function<int(int)>& map);

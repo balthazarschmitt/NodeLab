@@ -1,0 +1,44 @@
+# build\NodeLab.exe tests\ui\overlay.nlproj --script tests\ui\overlay.txt
+# On-image controls in the Result viewer: crop frame, gradient handles, brush, histogram, clipping.
+settle
+# select Crop: the Result shows the full frame with the crop rectangle
+click 760 100
+settle
+shot build/smoke/o1_crop.png
+# pull the right edge in, then straighten by dragging outside the frame
+drag 1507 493 1440 493
+wait 3
+drag 1200 370 1215 355
+settle
+shot build/smoke/o2_crop_dragged.png
+# select Radial Gradient: tinted mask with handles; widen it
+click 560 384
+settle
+shot build/smoke/o3_radial.png
+drag 1507 486 1560 486
+settle
+shot build/smoke/o4_radial_wide.png
+# Linear Gradient: move the end handle
+click 760 384
+settle
+drag 1385 541 1385 460
+settle
+shot build/smoke/o5_linear.png
+# Brush: paint a stroke, then erase part of it
+click 960 384
+settle
+drag 1230 450 1500 470
+settle
+alt on
+drag 1350 440 1370 480
+alt off
+settle
+move 1300 560
+wait 2
+shot build/smoke/o6_brush.png
+# histogram (H) and clipping (J) with the pointer over the viewer
+key h
+key j
+settle
+shot build/smoke/o7_hist.png
+quit

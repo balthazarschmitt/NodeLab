@@ -50,8 +50,11 @@ public:
     bool interacting() const { return mode_ != Mode::None || editing_.node != 0 || activeNode_ != 0; }
 
     bool duplicateSelection(Graph& g);
+    void openSwapMenu(const Graph& g);  // Shift+S: pick a type to replace the selected nodes with
     bool groupSelection(Graph& g);    // Ctrl+G
     bool ungroupSelection(Graph& g);  // Ctrl+Alt+G
+    // Shift+P: tidy the selection (2+ nodes) or the whole graph into columns (Blender's Node Arrange).
+    bool arrange(Graph& g);
     bool frameSelection(Graph& g);    // Ctrl+J: frame around the selection (or an empty frame)
     // Moves the selected nodes into frame `frameId` (growing it to fit), or out of their frames when
     // 0 (Alt+P). Membership is geometric (a node belongs to the smallest frame holding its centre).
@@ -168,6 +171,7 @@ private:
     ImVec2 menuPos_{};
     PinRef menuConnect_;  // wire dragged into empty space: connect the chosen node to this pin
     int menuNode_ = 0;
+    std::vector<int> swapTargets_;  // add menu opened as Swap (Shift+S): replace these nodes instead
     char search_[64] = {};
     int searchSel_ = 0;  // highlighted search result (Up/Down, Enter)
 };

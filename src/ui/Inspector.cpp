@@ -10,6 +10,7 @@
 #include "ui/Eyedropper.h"
 #include "ui/FileDialog.h"
 #include "ui/GuideWindow.h"
+#include "ui/NodeInspectors.h"
 #include "ui/ParamWidgets.h"
 
 static const char* kImageFilter = "Images|*.png;*.jpg;*.jpeg;*.bmp;*.tga|All files|*.*";
@@ -28,7 +29,8 @@ bool editParam(Node& node, int i, float width, bool compact) {
                 changed = ImGui::DragFloat(label.c_str(), &v, (d.max - d.min) / 300.0f, d.hardMin, d.hardMax, "%.3f",
                                            ImGuiSliderFlags_AlwaysClamp);
             } else {
-                changed = ImGui::SliderFloat(label.c_str(), &v, d.min, d.max, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+                changed = ImGui::SliderFloat(label.c_str(), &v, d.min, d.max, d.max - d.min >= 20.0f ? "%.1f" : "%.3f",
+                                             ImGuiSliderFlags_AlwaysClamp);
             }
             if (changed) node.params[i] = v;
             break;
@@ -242,7 +244,7 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
     // Scope widget state (selected curve channel, ramp stop) to this node, so selecting another
     // Curves node doesn't inherit the previous one's channel.
     ImGui::PushID(n->id);
-    for (int i = 0; i < int(info.params.size()); ++i) {
+    const ParamRow row = [&](int i) {
         // A param that backs a connected input is overridden by the wire.
         bool driven = false;
         for (int p = 0; p < int(info.inputs.size()); ++p)
@@ -253,10 +255,14 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
             ImGui::EndDisabled();
             ImGui::SameLine();
             ImGui::TextDisabled("(wired)");
-        } else {
-            changed |= editParam(*n, i, width, false);
+            return false;
         }
-    }
+        const bool c = editParam(*n, i, width, false);
+        changed |= c;
+        return c;
+    };
+    if (!drawNodeInspector(*n, row, changed))
+        for (int i = 0; i < int(info.params.size()); ++i) row(i);
     ImGui::PopID();
     return changed;
 }

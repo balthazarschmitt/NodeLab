@@ -3,6 +3,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <commdlg.h>
+#include <shobjidl.h>
 
 #include <vector>
 
@@ -66,7 +67,58 @@ std::optional<std::string> saveFileDialog(const char* title, const char* filter,
     return run(true, title, filter, defaultExt);
 }
 
+std::vector<std::string> openFilesDialog(const char* title, const char* filter) {
+    std::vector<wchar_t> buf(1 << 20, L'\0');  // room for a few thousand names
+    std::wstring wfilter = makeFilter(filter);
+    std::wstring wtitle = widen(title);
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = GetActiveWindow();
+    ofn.lpstrFilter = wfilter.c_str();
+    ofn.lpstrFile = buf.data();
+    ofn.nMaxFile = DWORD(buf.size());
+    ofn.lpstrTitle = wtitle.c_str();
+    ofn.Flags = OFN_NOCHANGEDIR | OFN_EXPLORER | OFN_ALLOWMULTISELECT | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    if (!GetOpenFileNameW(&ofn)) return {};
+    // One file: its full path. Several: the folder, then each name, NUL-separated, ending in two NULs.
+    std::vector<std::wstring> parts;
+    for (const wchar_t* p = buf.data(); *p; p += wcslen(p) + 1) parts.emplace_back(p);
+    std::vector<std::string> out;
+    if (parts.size() == 1) out.push_back(narrow(parts[0].c_str()));
+    else
+        for (size_t i = 1; i < parts.size(); ++i) out.push_back(narrow((parts[0] + L"\\" + parts[i]).c_str()));
+    return out;
+}
+
+std::optional<std::string> folderDialog(const char* title) {
+    // The old SHBrowseForFolder tree is awkward; the Vista dialog in folder mode is what Explorer uses.
+    const HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    std::optional<std::string> result;
+    IFileOpenDialog* dlg = nullptr;
+    if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) {
+        DWORD opts = 0;
+        dlg->GetOptions(&opts);
+        dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+        std::wstring wtitle = widen(title);
+        dlg->SetTitle(wtitle.c_str());
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(dlg->Show(GetActiveWindow())) && SUCCEEDED(dlg->GetResult(&item))) {
+            PWSTR path = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
+                result = narrow(path);
+                CoTaskMemFree(path);
+            }
+            item->Release();
+        }
+        dlg->Release();
+    }
+    if (SUCCEEDED(init)) CoUninitialize();
+    return result;
+}
+
 #else
 std::optional<std::string> openFileDialog(const char*, const char*) { return std::nullopt; }
 std::optional<std::string> saveFileDialog(const char*, const char*, const char*) { return std::nullopt; }
+std::vector<std::string> openFilesDialog(const char*, const char*) { return {}; }
+std::optional<std::string> folderDialog(const char*) { return std::nullopt; }
 #endif

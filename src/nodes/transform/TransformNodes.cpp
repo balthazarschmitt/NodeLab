@@ -1,7 +1,10 @@
 // Transform / distortion nodes. All work by inverse mapping: for each output pixel, find where
 // it comes from in the source and sample there (bilinear).
+#include "nodes/transform/TransformNodes.h"
+
 #include <cmath>
 
+#include "core/ColorMath.h"
 #include "nodes/ImageOps.h"
 #include "nodes/NodeUtil.h"
 
@@ -59,20 +62,41 @@ public:
 
 class CropNode : public Node {
 public:
-    NODELAB_NODE({"xform.crop", "Crop", "Transform",
+    NODELAB_NODE({crop::kType, "Crop", "Transform",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Left", 0.0f, 0.0f, 1.0f), ParamDesc::Float("Right", 1.0f, 0.0f, 1.0f),
                    ParamDesc::Float("Top", 0.0f, 0.0f, 1.0f), ParamDesc::Float("Bottom", 1.0f, 0.0f, 1.0f),
-                   ParamDesc::Bool("Resize Image", true)}})
+                   ParamDesc::Bool("Resize Image", true), ParamDesc::Float("Angle", 0.0f, -45.0f, 45.0f),
+                   ParamDesc::Enum("Aspect", 0, {"Free", "Original", "1:1", "4:5", "5:4", "2:3", "3:2", "3:4", "4:3",
+                                                 "5:7", "7:5", "9:16", "16:9"}),
+                   ParamDesc::Bool("Constrain to Image", true)}})
     void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
-        int x0 = int(std::min(paramF(0), paramF(1)) * src->w), x1 = int(std::max(paramF(0), paramF(1)) * src->w);
-        int y0 = int(std::min(paramF(2), paramF(3)) * src->h), y1 = int(std::max(paramF(2), paramF(3)) * src->h);
+        // Straighten first: rotate around the centre (positive = clockwise, like Lightroom), scaled up
+        // just enough that no empty corners show when Constrain to Image is on.
+        const float deg = paramF(crop::Angle);
+        if (deg != 0.0f) {
+            const float a = -deg * kPi / 180.0f, ca = std::cos(a), sa = std::sin(a);
+            const float w = float(src->w), h = float(src->h);
+            const float cover = paramB(crop::Constrain)
+                                    ? std::max((w * std::fabs(ca) + h * std::fabs(sa)) / w, (w * std::fabs(sa) + h * std::fabs(ca)) / h)
+                                    : 1.0f;
+            const float cx = w * 0.5f, cy = h * 0.5f;
+            ImagePtr rotated = mapImage(*src, [&](int x, int y, const float*, float* d) {
+                const float px = (x + 0.5f - cx) / cover, py = (y + 0.5f - cy) / cover;
+                sampleBilinear(*src, px * ca - py * sa + cx, px * sa + py * ca + cy, d, true);
+            });
+            src = rotated;
+        }
+        const crop::Rect rc = crop::effectiveRect(*this, src->w, src->h);
+        int x0 = int(rc.l * src->w), x1 = int(rc.r * src->w);
+        int y0 = int(rc.t * src->h), y1 = int(rc.b * src->h);
         x1 = std::max(x1, x0 + 1), y1 = std::max(y1, y0 + 1);
         x1 = std::min(x1, src->w), y1 = std::min(y1, src->h);
-        if (paramB(4)) {
+        x0 = std::min(x0, x1 - 1), y0 = std::min(y0, y1 - 1);
+        if (paramB(crop::ResizeImage)) {
             auto img = std::make_shared<Image>(x1 - x0, y1 - y0);
             parallelFor(img->h, [&](int y) {
                 for (int x = 0; x < img->w; ++x) {
@@ -118,6 +142,55 @@ public:
                 d[c] = smp[c];
             }
             d[3] = s[3];
+        })));
+    }
+};
+
+// Lightroom's manual lens corrections: distortion, chromatic aberration fringes and vignetting.
+class LensCorrectionNode : public Node {
+public:
+    NODELAB_NODE({"xform.lens_correction", "Lens Correction", "Transform",
+                  {{"Image", PinType::Image}},
+                  {{"Image", PinType::Image}},
+                  {ParamDesc::Float("Distortion", 0.0f, -100.0f, 100.0f), ParamDesc::Bool("Constrain to Image", true),
+                   ParamDesc::Float("Red / Cyan", 0.0f, -100.0f, 100.0f), ParamDesc::Float("Blue / Yellow", 0.0f, -100.0f, 100.0f),
+                   ParamDesc::Float("Vignetting", 0.0f, -100.0f, 100.0f), ParamDesc::Float("Midpoint", 50.0f, 0.0f, 100.0f)}})
+    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+        ImagePtr src = toImage(in[0], 0, 0);
+        if (!src) return;
+        // Radii are relative to the half diagonal, so the corners are at r = 1.
+        const float cx = src->w * 0.5f, cy = src->h * 0.5f, half = std::hypot(cx, cy);
+        // Positive Distortion straightens barrel distortion (lines bowing outward) by pulling
+        // the edges out; negative fixes pincushion. source = p * (1 + k r^2).
+        const float k = -paramF(0) / 100.0f * 0.25f;
+        const float zoom = paramB(1) && k > 0 ? 1.0f / (1.0f + k) : 1.0f;  // hide the empty corners
+        // Fringe sliders scale the red and blue channels radially against green.
+        const float sc[3] = {1.0f + paramF(2) / 100.0f * 0.005f, 1.0f, 1.0f + paramF(3) / 100.0f * 0.005f};
+        const float vig = paramF(4) / 100.0f * 1.5f;  // stops at the corners
+        const float power = 1.0f + 5.0f * paramF(5) / 100.0f;
+        const bool geometry = k != 0.0f || sc[0] != 1.0f || sc[2] != 1.0f;
+        out[0] = Value(ImagePtr(mapImage(*src, [&](int x, int y, const float* s, float* d) {
+            const float px = (x + 0.5f - cx) / half, py = (y + 0.5f - cy) / half;
+            const float r2 = px * px + py * py;
+            if (geometry) {
+                const float m = (1.0f + k * r2) * zoom;
+                for (int c = 0; c < 3; ++c) {
+                    float smp[4];
+                    const float f = m * sc[c] * half;
+                    sampleBilinear(*src, px * f + cx, py * f + cy, smp, !paramB(1));
+                    d[c] = smp[c];
+                    if (c == 1) d[3] = smp[3];
+                }
+            } else {
+                std::copy(s, s + 4, d);
+            }
+            if (vig != 0.0f) {
+                // Brighten (or darken) toward the corners in linear light, like a lens' falloff.
+                const float g = std::exp2(vig * std::pow(std::min(r2, 1.0f), power * 0.5f));
+                for (int c = 0; c < 3; ++c)
+                    d[c] = colormath::linearToSrgb(colormath::srgbToLinear(clamp01(d[c])) * g);
+            }
+            for (int c = 0; c < 3; ++c) d[c] = clamp01(d[c]);
         })));
     }
 };
@@ -214,11 +287,42 @@ public:
 
 }  // namespace
 
+namespace crop {
+
+float aspectRatio(int option, int imageW, int imageH) {
+    static const float kRatios[] = {0.0f, 0.0f, 1.0f, 4.0f / 5, 5.0f / 4, 2.0f / 3, 3.0f / 2, 3.0f / 4, 4.0f / 3,
+                                    5.0f / 7, 7.0f / 5, 9.0f / 16, 16.0f / 9};
+    if (option == 1) return imageH > 0 ? float(imageW) / imageH : 0.0f;
+    if (option < 0 || option >= int(std::size(kRatios))) return 0.0f;
+    return kRatios[option];
+}
+
+Rect effectiveRect(const Node& n, int imageW, int imageH) {
+    Rect rc{std::min(n.paramF(Left), n.paramF(Right)), std::max(n.paramF(Left), n.paramF(Right)),
+            std::min(n.paramF(Top), n.paramF(Bottom)), std::max(n.paramF(Top), n.paramF(Bottom))};
+    const float ar = n.params.size() > size_t(Aspect) ? aspectRatio(n.paramI(Aspect), imageW, imageH) : 0.0f;
+    if (ar <= 0.0f || imageW <= 0 || imageH <= 0) return rc;
+    // Shrink the longer side around the centre until width / height (in pixels) matches.
+    const float wpx = (rc.r - rc.l) * imageW, hpx = (rc.b - rc.t) * imageH;
+    if (wpx <= 0 || hpx <= 0) return rc;
+    if (wpx / hpx > ar) {
+        const float cxr = (rc.l + rc.r) * 0.5f, hwf = hpx * ar / imageW * 0.5f;
+        rc.l = cxr - hwf, rc.r = cxr + hwf;
+    } else {
+        const float cyr = (rc.t + rc.b) * 0.5f, hhf = wpx / ar / imageH * 0.5f;
+        rc.t = cyr - hhf, rc.b = cyr + hhf;
+    }
+    return rc;
+}
+
+}  // namespace crop
+
 void registerTransformNodes(NodeRegistry& r) {
     r.add<TransformNode>();
     r.add<FlipNode>();
     r.add<CropNode>();
     r.add<LensDistortionNode>();
+    r.add<LensCorrectionNode>();
     r.add<DisplaceNode>();
     r.add<MapUVNode>();
     r.add<CornerPinNode>();

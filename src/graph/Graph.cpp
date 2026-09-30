@@ -1,6 +1,7 @@
 #include "graph/Graph.h"
 
 #include <algorithm>
+#include <cctype>
 #include <stdexcept>
 
 #include "graph/NodeRegistry.h"
@@ -38,6 +39,72 @@ Node* Graph::cloneNode(const Node& src, float x, float y) {
         n->label = src.label;
     }
     return n;
+}
+
+Node* Graph::swapNode(int id, const std::string& type) {
+    Node* old = find(id);
+    if (!old) return nullptr;
+    auto node = NodeRegistry::instance().create(type);
+    if (!node) return nullptr;
+    const NodeInfo& oi = old->info();
+    const NodeInfo& ni = node->info();
+    node->id = id;
+    node->x = old->x;
+    node->y = old->y;
+    node->muted = old->muted;
+    node->collapsed = old->collapsed;
+    for (size_t i = 0; i < ni.params.size(); ++i)
+        for (size_t j = 0; j < oi.params.size(); ++j)
+            if (ni.params[i].name == oi.params[j].name && ni.params[i].kind == oi.params[j].kind) {
+                node->params[i] = old->params[j];
+                break;
+            }
+
+    // New pin for an old pin, used by all of that pin's links. `ok` checks the wire type.
+    auto match = [](const std::vector<PinDesc>& from, const std::vector<PinDesc>& to, int pin, std::vector<bool>& used,
+                    const std::function<bool(PinType)>& ok) {
+        const auto lower = [](std::string s) {
+            for (auto& c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+        const std::string name = lower(from[pin].name);
+        for (int k = 0; k < int(to.size()); ++k)
+            if (!used[k] && lower(to[k].name) == name && ok(to[k].type)) return k;
+        if (pin < int(to.size()) && !used[pin] && ok(to[pin].type)) return pin;
+        for (int k = 0; k < int(to.size()); ++k)
+            if (!used[k] && ok(to[k].type)) return k;
+        return -1;
+    };
+    std::map<int, int> inMap, outMap;
+    std::vector<bool> inUsed(ni.inputs.size()), outUsed(ni.outputs.size());
+    for (const Link& l : links_) {
+        if (l.toNode == id && !inMap.count(l.toPin)) {
+            const Node* a = find(l.fromNode);
+            const PinType src = a->info().outputs[l.fromPin].type;
+            int k = match(oi.inputs, ni.inputs, l.toPin, inUsed, [&](PinType t) { return canConvert(src, t); });
+            if (k >= 0) inUsed[k] = true;
+            inMap[l.toPin] = k;
+        }
+    }
+    for (const Link& l : links_) {
+        if (l.fromNode == id && l.toNode != id && !outMap.count(l.fromPin)) {
+            const Node* b = find(l.toNode);
+            const PinType dst = b->info().inputs[l.toPin].type;
+            int k = match(oi.outputs, ni.outputs, l.fromPin, outUsed, [&](PinType t) { return canConvert(t, dst); });
+            if (k >= 0) outUsed[k] = true;
+            outMap[l.fromPin] = k;
+        }
+    }
+    nodes_[id] = std::move(node);
+    remapPins(id, false, [&](int p) { return inMap.count(p) ? inMap[p] : -1; });
+    remapPins(id, true, [&](int p) { return outMap.count(p) ? outMap[p] : -1; });
+    // A downstream pin can only accept a wire of a compatible type; drop any that no longer fit.
+    std::erase_if(links_, [&](const Link& l) {
+        if (l.fromNode != id) return false;
+        const Node* b = find(l.toNode);
+        return !b || !canConvert(nodes_[id]->info().outputs[l.fromPin].type, b->info().inputs[l.toPin].type);
+    });
+    return nodes_[id].get();
 }
 
 void Graph::remapPins(int nodeId, bool outputs, const std::function<int(int)>& map) {

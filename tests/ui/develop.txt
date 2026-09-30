@@ -1,0 +1,17 @@
+# build\NodeLab.exe tests\ui\develop.nlproj --script tests\ui\develop.txt
+# Custom Inspectors: Basic groups, Color Mixer tabs, Color Grading wheels.
+settle
+click 780 100
+settle
+shot build/smoke/d1_basic.png
+click 780 230
+settle
+shot build/smoke/d2_mixer.png
+click 780 360
+settle
+shot build/smoke/d3_grading.png
+# drag the Midtones wheel towards orange
+drag 683 793 725 760
+settle
+shot build/smoke/d4_wheel.png
+quit

@@ -1,7 +1,12 @@
 #pragma once
+#include <array>
 #include <cstdint>
+#include <vector>
 
 #include "core/Image.h"
+
+struct ImDrawList;
+struct ImVec2;
 
 // An OpenGL texture mirroring an Image (converted to 8-bit for display).
 class GLTexture {
@@ -11,7 +16,11 @@ public:
     GLTexture(const GLTexture&) = delete;
     GLTexture& operator=(const GLTexture&) = delete;
 
-    void upload(const Image& img);
+    // clipping: paint pixels with a clipped channel red (highlights) and pure black blue
+    // (shadows), like Lightroom's clipping warnings.
+    void upload(const Image& img, bool clipping = false);
+    // Mask display: a flat colour whose opacity follows the image's red channel.
+    void uploadTint(const Image& img, float r, float g, float b, float opacity);
     void reset();
     bool valid() const { return id_ != 0 && w_ > 0; }
     uint32_t id() const { return id_; }
@@ -19,6 +28,7 @@ public:
     int height() const { return h_; }
 
 private:
+    void uploadBytes(const std::vector<unsigned char>& bytes, int w, int h);
     uint32_t id_ = 0;
     int w_ = 0, h_ = 0;
 };
@@ -40,6 +50,23 @@ struct PickRequest {
     float rgb[3] = {0, 0, 0};
 };
 
+// On-image controls drawn over a view (crop frame, mask handles, brush). update() runs after the
+// image is drawn, with the image's screen rectangle; it returns true while it owns the left mouse
+// (hovering a handle, dragging, painting) so the view doesn't pan.
+struct ImageOverlay {
+    virtual ~ImageOverlay() = default;
+    virtual bool update(ImDrawList* dl, const ImVec2& imgMin, const ImVec2& imgMax, bool hovered, bool active) = 0;
+};
+
+// Per-channel histogram (256 bins) of an image, for the viewer's histogram overlay.
+struct Histogram {
+    std::array<float, 256> r{}, g{}, b{}, l{};
+    float peak = 1.0f;  // tallest bin (ignoring the end bins) for scaling
+    bool clipHigh = false, clipLow = false;
+    bool valid = false;
+    void compute(const Image& img);
+};
+
 // Average RGB of the pixels in the inclusive rectangle (clamped to the image).
 void averageColor(const Image& img, int x0, int y0, int x1, int y1, float rgb[3]);
 
@@ -47,4 +74,8 @@ void averageColor(const Image& img, int x0, int y0, int x1, int y1, float rgb[3]
 // Wheel zooms around the cursor, left/middle drag pans, double-click resets.
 // With pick set (and pick->image non-null), left mouse picks colours instead of panning.
 void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const char* emptyText,
-                   PickRequest* pick = nullptr);
+                   PickRequest* pick = nullptr, ImageOverlay* overlay = nullptr);
+
+// Histogram box (RGB + luminance) drawn at `pos`, with Lightroom's clipping triangles in the top
+// corners. Returns true when a triangle was clicked (toggles the clipping warning).
+bool drawHistogram(ImDrawList* dl, const ImVec2& pos, const ImVec2& size, const Histogram& h, bool clipOn);

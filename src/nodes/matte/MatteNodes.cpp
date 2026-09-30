@@ -1,10 +1,12 @@
 // Matte nodes: shape masks and keyers. Keyers output a Matte channel (1 = keep) and the keyed
 // image (color * matte, alpha = matte).
+#include "nodes/matte/MatteNodes.h"
+
 #include <cmath>
+#include <cstring>
 
 #include "core/ColorMath.h"
 #include "nodes/ImageOps.h"
-#include "nodes/NodeUtil.h"
 
 using namespace nodeutil;
 using namespace colormath;
@@ -46,13 +48,29 @@ struct KeySource {
 
 // ---------------------------------------------------------------- shape masks
 
+// Combines a mask value into the base mask (the shape masks' Operation).
+float combineMask(int op, float b, float v) {
+    switch (op) {
+        case 1: return clamp01(b - v);                  // Subtract
+        case 2: return clamp01(b * v);                  // Multiply
+        case 3: return clamp01(std::max(b, 1.0f - v));  // Not: everything outside the shape
+        default: return clamp01(std::max(b, v));        // Add
+    }
+}
+
+// Size of a mask node's output: its Mask input's, else the working size.
+void maskSize(const ChannelPtr& base, const EvalContext& ctx, int& w, int& h) {
+    w = base && !base->constant ? base->w : ctx.defaultW;
+    h = base && !base->constant ? base->h : ctx.defaultH;
+}
+
 class ShapeMaskNode : public Node {
 protected:
     // pinned param indices: 0 X, 1 Y, 2 Width, 3 Height, 4 Rotation, 5 Feather, 6 Value, 7 Operation
     void run(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out, bool ellipse) {
         ChannelPtr base = toChannel(in[0]);
-        int w = base && !base->constant ? base->w : ctx.defaultW;
-        int h = base && !base->constant ? base->h : ctx.defaultH;
+        int w, h;
+        maskSize(base, ctx, w, h);
         if (!base) base = std::make_shared<Channel>(Channel::makeConstant(0.0f));
         ChannelPtr val = channelOr(in[1], 1.0f);
         ChannelSampler sb{base.get(), w, h}, sv = paramSampler(*this, 1, val, w, h);
@@ -67,22 +85,17 @@ protected:
             // Normalized "radius": <1 inside. Box uses the max norm, ellipse the Euclidean one.
             float q = ellipse ? std::hypot(rx / hw, ry / hh) : std::max(std::fabs(rx) / hw, std::fabs(ry) / hh);
             float shape = 1.0f - smoothstep(1.0f - feather, 1.0f + 1e-4f, q);
-            float v = sv(x, y) * shape, b = sb(x, y);
-            switch (op) {
-                case 1: return clamp01(b - v);            // Subtract
-                case 2: return clamp01(b * v);            // Multiply
-                case 3: return clamp01(std::max(b, 1.0f - v));  // Not: everything outside the shape
-                default: return clamp01(std::max(b, v));  // Add
-            }
+            return combineMask(op, sb(x, y), sv(x, y) * shape);
         })));
     }
 };
 
-#define SHAPE_PARAMS                                                                                        \
+#define SHAPE_PARAMS_D(wd, ht, fe)                                                                          \
     {ParamDesc::Float("X", 0.5f, 0.0f, 1.0f), ParamDesc::Float("Y", 0.5f, 0.0f, 1.0f),                    \
-     ParamDesc::Float("Width", 0.4f, 0.0f, 2.0f), ParamDesc::Float("Height", 0.3f, 0.0f, 2.0f),           \
-     ParamDesc::Float("Rotation", 0.0f, -180.0f, 180.0f), ParamDesc::Float("Feather", 0.1f, 0.0f, 1.0f),  \
+     ParamDesc::Float("Width", wd, 0.0f, 2.0f), ParamDesc::Float("Height", ht, 0.0f, 2.0f),               \
+     ParamDesc::Float("Rotation", 0.0f, -180.0f, 180.0f), ParamDesc::Float("Feather", fe, 0.0f, 1.0f),    \
      ParamDesc::Float("Value", 1.0f, 0.0f, 1.0f), ParamDesc::Enum("Operation", 0, {"Add", "Subtract", "Multiply", "Not"})}
+#define SHAPE_PARAMS SHAPE_PARAMS_D(0.4f, 0.3f, 0.1f)
 
 class BoxMaskNode : public ShapeMaskNode {
 public:
@@ -100,6 +113,44 @@ public:
                   {{"Mask", PinType::Channel}},
                   SHAPE_PARAMS})
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override { run(ctx, in, out, true); }
+};
+
+// Lightroom's Radial Gradient: an ellipse mask with a wide feather. Operation "Not" is its Invert.
+class RadialGradientNode : public ShapeMaskNode {
+public:
+    NODELAB_NODE({"matte.radial_gradient", "Radial Gradient", "Matte",
+                  {{"Mask", PinType::Channel}, {"Value", PinType::Channel, 6}},
+                  {{"Mask", PinType::Channel}},
+                  SHAPE_PARAMS_D(0.6f, 0.6f, 0.5f)})
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override { run(ctx, in, out, true); }
+};
+
+// Lightroom's Linear Gradient: full strength before Start, fading to nothing at End.
+class LinearGradientNode : public Node {
+public:
+    NODELAB_NODE({"matte.linear_gradient", "Linear Gradient", "Matte",
+                  {{"Mask", PinType::Channel}, {"Value", PinType::Channel, 4}},
+                  {{"Mask", PinType::Channel}},
+                  {ParamDesc::FloatFree("Start X", 0.5f, 0.0f, 1.0f), ParamDesc::FloatFree("Start Y", 0.2f, 0.0f, 1.0f),
+                   ParamDesc::FloatFree("End X", 0.5f, 0.0f, 1.0f), ParamDesc::FloatFree("End Y", 0.6f, 0.0f, 1.0f),
+                   ParamDesc::Float("Value", 1.0f, 0.0f, 1.0f), ParamDesc::Enum("Operation", 0, {"Add", "Subtract", "Multiply", "Not"})}})
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        ChannelPtr base = toChannel(in[0]);
+        int w, h;
+        maskSize(base, ctx, w, h);
+        if (!base) base = std::make_shared<Channel>(Channel::makeConstant(0.0f));
+        ChannelPtr val = channelOr(in[1], 1.0f);
+        ChannelSampler sb{base.get(), w, h}, sv = paramSampler(*this, 1, val, w, h);
+        // In pixels, so the fade stays perpendicular to the Start-End line on non-square images.
+        const float x0 = paramF(0) * w, y0 = paramF(1) * h;
+        const float dx = paramF(2) * w - x0, dy = paramF(3) * h - y0;
+        const float len2 = std::max(dx * dx + dy * dy, 1e-6f);
+        const int op = paramI(5);
+        out[0] = Value(ChannelPtr(makeChannel(w, h, [&](int x, int y) {
+            float t = ((x + 0.5f - x0) * dx + (y + 0.5f - y0) * dy) / len2;
+            return combineMask(op, sb(x, y), sv(x, y) * (1.0f - smoothstep(0.0f, 1.0f, t)));
+        })));
+    }
 };
 
 // ---------------------------------------------------------------- keyers
@@ -291,9 +342,151 @@ public:
 
 }  // namespace
 
+// ---------------------------------------------------------------- brush
+
+void paintStrokes(std::vector<float>& mask, int w, int h, const std::vector<BrushMaskNode::Stroke>& strokes) {
+    const float longEdge = float(std::max(w, h));
+    std::vector<float> cov(mask.size(), 0.0f);  // coverage of the stroke being drawn
+    for (const BrushMaskNode::Stroke& st : strokes) {
+        if (st.pts.empty()) continue;
+        const float r = std::max(st.radius * longEdge, 0.5f);
+        const float inner = r * (1.0f - std::clamp(st.feather, 0.0f, 1.0f));
+        // Points in pixels, and the stroke's bounding box.
+        std::vector<std::array<float, 2>> p(st.pts.size());
+        float bx0 = 1e30f, by0 = 1e30f, bx1 = -1e30f, by1 = -1e30f;
+        for (size_t i = 0; i < p.size(); ++i) {
+            p[i] = {st.pts[i][0] * w, st.pts[i][1] * h};
+            bx0 = std::min(bx0, p[i][0]), bx1 = std::max(bx1, p[i][0]);
+            by0 = std::min(by0, p[i][1]), by1 = std::max(by1, p[i][1]);
+        }
+        const int x0 = std::max(0, int(std::floor(bx0 - r))), x1 = std::min(w - 1, int(std::ceil(bx1 + r)));
+        const int y0 = std::max(0, int(std::floor(by0 - r))), y1 = std::min(h - 1, int(std::ceil(by1 + r)));
+        if (x0 > x1 || y0 > y1) continue;
+        // Within one stroke coverage is the max over its segments, so a slow drag (many points
+        // close together) doesn't build up more than a fast one; strokes then accumulate.
+        parallelFor(y1 - y0 + 1, [&](int row) {
+            const int y = y0 + row;
+            const float py = y + 0.5f;
+            for (size_t s = 0; s < p.size(); ++s) {
+                const auto& a = p[s];
+                const auto& b = s + 1 < p.size() ? p[s + 1] : p[s];
+                if (py < std::min(a[1], b[1]) - r || py > std::max(a[1], b[1]) + r) continue;
+                const int sx0 = std::max(x0, int(std::floor(std::min(a[0], b[0]) - r)));
+                const int sx1 = std::min(x1, int(std::ceil(std::max(a[0], b[0]) + r)));
+                const float ex = b[0] - a[0], ey = b[1] - a[1], el = ex * ex + ey * ey;
+                for (int x = sx0; x <= sx1; ++x) {
+                    const float px = x + 0.5f;
+                    float t = el > 0 ? std::clamp(((px - a[0]) * ex + (py - a[1]) * ey) / el, 0.0f, 1.0f) : 0.0f;
+                    const float d = std::hypot(px - a[0] - t * ex, py - a[1] - t * ey);
+                    if (d >= r) continue;
+                    const float c = (1.0f - smoothstep(inner, r, d)) * st.flow;
+                    float& cv = cov[size_t(y) * w + x];
+                    if (c > cv) cv = c;
+                }
+            }
+        });
+        parallelFor(y1 - y0 + 1, [&](int row) {
+            const int y = y0 + row;
+            for (int x = x0; x <= x1; ++x) {
+                float& cv = cov[size_t(y) * w + x];
+                if (cv <= 0) continue;
+                float& m = mask[size_t(y) * w + x];
+                m = st.erase ? m * (1.0f - cv) : m + (1.0f - m) * cv;
+                cv = 0.0f;
+            }
+        });
+    }
+}
+
+void BrushMaskNode::evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) {
+    ChannelPtr base = toChannel(in[0]);
+    int w, h;
+    maskSize(base, ctx, w, h);
+    auto ch = std::make_shared<Channel>(Channel::makeSized(w, h));
+    if (base) {
+        ChannelSampler sb{base.get(), w, h};
+        parallelFor(h, [&](int y) {
+            for (int x = 0; x < w; ++x) ch->data[size_t(y) * w + x] = clamp01(sb(x, y));
+        });
+    }
+    paintStrokes(ch->data, w, h, strokes);
+    if (paramB(3))
+        for (float& v : ch->data) v = 1.0f - v;
+    out[0] = Value(ChannelPtr(ch));
+}
+
+void BrushMaskNode::saveExtra(nlohmann::json& j) const {
+    nlohmann::json arr = nlohmann::json::array();
+    for (const Stroke& s : strokes) {
+        nlohmann::json pts = nlohmann::json::array();
+        for (const auto& p : s.pts) pts.push_back({p[0], p[1]});
+        arr.push_back({{"radius", s.radius}, {"feather", s.feather}, {"flow", s.flow}, {"erase", s.erase}, {"pts", pts}});
+    }
+    j["strokes"] = arr;
+}
+
+void BrushMaskNode::loadExtra(const nlohmann::json& j) {
+    strokes.clear();
+    auto it = j.find("strokes");
+    if (it == j.end() || !it->is_array()) return;
+    for (const auto& o : *it) {
+        if (!o.is_object()) continue;
+        Stroke s;
+        s.radius = o.value("radius", 0.04f);
+        s.feather = o.value("feather", 0.5f);
+        s.flow = o.value("flow", 1.0f);
+        s.erase = o.value("erase", false);
+        if (auto p = o.find("pts"); p != o.end() && p->is_array())
+            for (const auto& q : *p)
+                if (q.is_array() && q.size() == 2 && q[0].is_number() && q[1].is_number())
+                    s.pts.push_back({q[0].get<float>(), q[1].get<float>()});
+        strokes.push_back(std::move(s));
+    }
+}
+
+std::string BrushMaskNode::signatureExtra() const {
+    // FNV-1a over the stroke data: cheaper than serializing thousands of points every evaluation.
+    uint64_t hsh = 1469598103934665603ull;
+    auto mix = [&](const void* data, size_t n) {
+        const auto* b = static_cast<const unsigned char*>(data);
+        for (size_t i = 0; i < n; ++i) hsh = (hsh ^ b[i]) * 1099511628211ull;
+    };
+    for (const Stroke& s : strokes) {
+        mix(&s.radius, sizeof s.radius), mix(&s.feather, sizeof s.feather), mix(&s.flow, sizeof s.flow);
+        mix(&s.erase, sizeof s.erase);
+        if (!s.pts.empty()) mix(s.pts.data(), s.pts.size() * sizeof s.pts[0]);
+    }
+    return "brush:" + std::to_string(strokes.size()) + ":" + std::to_string(hsh);
+}
+
+void BrushMaskNode::beginStroke(float u, float v, bool erase) {
+    Stroke s;
+    s.radius = paramF(0);
+    s.feather = paramF(1);
+    s.flow = paramF(2);
+    s.erase = erase;
+    s.pts.push_back({u, v});
+    strokes.push_back(std::move(s));
+}
+
+bool BrushMaskNode::extendStroke(float u, float v, int imageW, int imageH) {
+    if (strokes.empty()) return false;
+    Stroke& s = strokes.back();
+    const float longEdge = float(std::max(imageW, imageH));
+    const auto& last = s.pts.back();
+    // Points closer than a fifth of the radius add nothing visible.
+    const float d = std::hypot((u - last[0]) * imageW, (v - last[1]) * imageH);
+    if (d < std::max(s.radius * longEdge * 0.2f, 1.0f)) return false;
+    s.pts.push_back({u, v});
+    return true;
+}
+
 void registerMatteNodes(NodeRegistry& r) {
     r.add<BoxMaskNode>();
     r.add<EllipseMaskNode>();
+    r.add<RadialGradientNode>();
+    r.add<LinearGradientNode>();
+    r.add<BrushMaskNode>();
     r.add<ChannelKeyNode>();
     r.add<LuminanceKeyNode>();
     r.add<DifferenceKeyNode>();

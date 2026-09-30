@@ -5,6 +5,36 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 ## Unreleased
 
+## 0.5.0 (2026-09-29)
+
+- **Basic** node: Lightroom's Basic panel in one node (temperature, tint, exposure, contrast,
+  highlights, shadows, whites, blacks, texture, clarity, dehaze, vibrance, saturation), with the
+  sliders grouped in the Inspector.
+- **Color Mixer** (8-band HSL with Hue / Saturation / Luminance tabs) and **Color Grading**
+  (colour wheels for shadows, midtones, highlights and global, with Blending and Balance).
+- **Masks:** Radial Gradient, Linear Gradient and Brush Mask, edited directly on the Result
+  panel with handles or by painting (Alt erases, `[` `]` size). A selected mask is tinted red over
+  the image (O).
+- **Crop** gains Angle (straighten), Aspect presets and Constrain to Image. While selected, the
+  Result shows the whole frame with a draggable crop rectangle; drag outside it to straighten.
+- **Lens Correction:** distortion, red/cyan and blue/yellow fringing, and vignetting with
+  midpoint.
+- **Histogram** (H) and **clipping warnings** (J) on the Result panel.
+- Nodes can be "compact" (settings only in the Inspector) so large nodes like Basic stay small in
+  the graph. Inspector sliders with wide ranges show one decimal.
+- **Export window** (File > Export, Ctrl+E): exports render on a background thread with progress
+  and Cancel instead of freezing the app. Choose PNG or JPEG (with quality) and an optional
+  downscale (long edge or percent). PNG saving is faster: lighter compression, and no alpha
+  channel when the image is opaque. File > Write File Outputs also runs in the background.
+- **Batch export:** run a list of photos (files, a folder, or dropped images) through the node tree
+  into an output folder as `<name>_edit.png/.jpg`; also `NodeLab.exe --batch`.
+- **Swap** (Shift+S, node right-click → Swap...): changes a node's type in place, keeping its wires
+  where pins match and settings with the same name, as in Blender.
+- **Auto spacing:** added, pasted, swapped and spliced nodes push the nodes they overlap out of
+  the way. **Arrange** (Shift+P, Edit > Arrange Nodes) lays the selection or the whole graph out in
+  columns.
+- The Original pane is titled just "Original", and the Result pane no longer shows an "Output"
+  label.
 - `examples/infrared.nlproj`: infrared false-colour look (lilac-white foliage, maroon sky) from two
   Image Expression nodes plus Glare; swap the Image Input for your own photo.
 - Curves editor (Curves, Hue Correct, Float Curve) fits the Inspector: it now stretches to the

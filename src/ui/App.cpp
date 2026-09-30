@@ -19,6 +19,8 @@
 #include "io/ProjectFile.h"
 #include "nodes/group/GroupNodes.h"
 #include "nodes/io/IONodes.h"
+#include "nodes/matte/MatteNodes.h"
+#include "nodes/transform/TransformNodes.h"
 #include "nodes/utility/UtilityNodes.h"
 #include "ui/Eyedropper.h"
 #include "ui/FileDialog.h"
@@ -31,6 +33,12 @@ namespace fs = std::filesystem;
 static const char* kProjectFilter = "NodeLab project (*.nlproj)|*.nlproj|All files|*.*";
 static const char* kImageFilter = "Images|*.png;*.jpg;*.jpeg;*.bmp;*.tga|All files|*.*";
 static const char* kExportFilter = "PNG image|*.png|JPEG image|*.jpg";
+
+static bool isImageFile(const std::filesystem::path& p) {
+    std::string e = pathToU8(p.extension());
+    std::transform(e.begin(), e.end(), e.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    return e == ".png" || e == ".jpg" || e == ".jpeg" || e == ".bmp" || e == ".tga";
+}
 static const char* kDockName = "NodeLabDockSpace";
 
 void dropCallback(GLFWwindow* w, int count, const char** paths) {
@@ -234,9 +242,25 @@ void App::drawFrame() {
     if (showResult_) drawViewerWindow(*viewers_[0], true);
     for (size_t i = 1; i < viewers_.size(); ++i) drawViewerWindow(*viewers_[i], false);
     drawGuideWindow();
+    drawExportWindow();
+    pollExport();
     std::erase_if(viewers_, [](const std::unique_ptr<Viewer>& v) { return v->id != 0 && !v->open; });
 
     drawUnsavedModal();
+
+    // The selected node's on-image controls decide two extra things about the evaluation: a
+    // selected Crop shows the whole frame (its rectangle is drawn instead, like Lightroom's crop
+    // tool), and a selected mask is evaluated too, for the tinted mask overlay.
+    Node* ov = overlayNode();
+    NodePath ovPath;
+    if (ov) ovPath = groupPath_, ovPath.push_back(ov->id);
+    const bool wantMask = ov && NodeOverlay::isMask(*ov) && maskOverlay_;
+    if (ovPath != overlayPath_ || wantMask != maskWanted_) {
+        overlayPath_ = ovPath;
+        maskWanted_ = wantMask;
+        maskTex_.reset();
+        evalDirty_ = true;
+    }
 
     // Kick evaluation after the UI had a chance to change the graph this frame.
     if (evalDirty_) {
@@ -247,7 +271,23 @@ void App::drawFrame() {
             submittedTargets_.push_back(followsPreview ? resultTarget() : v->pin);
             pins.push_back(followsPreview && pathValid(previewPath_) ? previewPin_ : 0);
         }
-        eval_->submit(graph_.toJson(), submittedTargets_, pins);
+        submittedViewers_ = viewers_.size();
+        if (maskWanted_) {
+            submittedTargets_.push_back(overlayPath_);
+            pins.push_back(0);
+        }
+        nlohmann::json gj;
+        if (ov && ov->info().type == crop::kType) {
+            const std::vector<nlohmann::json> saved = ov->params;
+            ov->params[crop::Left] = 0.0f, ov->params[crop::Right] = 1.0f;
+            ov->params[crop::Top] = 0.0f, ov->params[crop::Bottom] = 1.0f;
+            ov->params[crop::Aspect] = 0;
+            gj = graph_.toJson();
+            ov->params = saved;
+        } else {
+            gj = graph_.toJson();
+        }
+        eval_->submit(std::move(gj), submittedTargets_, pins);
         evalDirty_ = false;
     }
     updateTextures();
@@ -287,8 +327,7 @@ void App::buildDefaultLayout(unsigned dockIdU) {
 static constexpr ImGuiWindowFlags kCanvasFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 
 void App::drawOriginalWindow() {
-    std::string title = "Original" + (leftLabel_.empty() ? "" : "  -  " + leftLabel_) + "###Original";
-    if (ImGui::Begin(title.c_str(), &showOriginal_, kCanvasFlags)) {
+    if (ImGui::Begin("Original###Original", &showOriginal_, kCanvasFlags)) {
         PickRequest pick{leftShown_.get()};
         drawImageView("##leftview", leftTex_, view_, "Drop an image here or use File > Import Image",
                       eyedropper().active() ? &pick : nullptr);
@@ -420,18 +459,76 @@ void App::drawViewerWindow(Viewer& v, bool isMain) {
             ImGui::SameLine();
             ImGui::Checkbox("Sync view", &v.sync);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom and pan together with Original and Result");
-        } else {
-            ImGui::TextDisabled("%s", label.c_str());
+        }
+        Node* ov = isMain ? overlayNode() : nullptr;
+        if (isMain) {
+            drawResultToolbar(ov);
+            if (!previewPath_.empty()) {
+                // Only worth mentioning when showing something other than the Output node.
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", label.c_str());
+            }
         }
         const char* emptyMsg = !v.error.empty() ? v.error.c_str()
                                : shown.empty() ? "Add an Output node (right-click the canvas)"
                                                : "No output yet - connect this node's inputs";
         PickRequest pick{v.shown.get()};
+        overlay_.set(ov, maskWanted_ && maskTex_.valid() ? &maskTex_ : nullptr);
+        const ImVec2 viewMin = ImGui::GetCursorScreenPos();
         drawImageView(isMain ? "##result" : "##viewer", v.tex, isMain || v.sync ? view_ : v.view, emptyMsg,
-                      eyedropper().active() ? &pick : nullptr);
+                      eyedropper().active() ? &pick : nullptr, ov ? &overlay_ : nullptr);
         finishPick(pick);
+        if (ov && overlay_.takeChanged()) markChanged(true);
+        if (isMain && showHistogram_ && histogram_.valid) {
+            // Top-right corner of the view, like Lightroom's histogram panel.
+            const ImVec2 viewMax = ImGui::GetItemRectMax();
+            const ImVec2 size(std::min(256.0f, viewMax.x - viewMin.x - 16.0f), 110.0f);
+            if (size.x > 60.0f && viewMax.y - viewMin.y > size.y + 16.0f &&
+                drawHistogram(ImGui::GetWindowDrawList(), ImVec2(viewMax.x - size.x - 8.0f, viewMin.y + 8.0f), size,
+                              histogram_, clipping_)) {
+                clipping_ = !clipping_;
+                if (v.shown) v.tex.upload(*v.shown, clipping_);
+            }
+        }
     }
     ImGui::End();
+}
+
+Node* App::overlayNode() {
+    Node* n = currentGraph().find(selected_);
+    return n && NodeOverlay::supports(*n) ? n : nullptr;
+}
+
+void App::drawResultToolbar(Node* ov) {
+    Viewer& v = *viewers_[0];
+    // Hotkeys while the pointer is over the Result viewer (J and O as in Lightroom).
+    const bool hover = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !ImGui::GetIO().WantTextInput &&
+                       !ImGui::GetIO().KeyCtrl;
+    bool clipToggled = false;
+    if (hover && ImGui::IsKeyPressed(ImGuiKey_J, false)) clipping_ = !clipping_, clipToggled = true;
+    if (hover && ImGui::IsKeyPressed(ImGuiKey_O, false)) maskOverlay_ = !maskOverlay_;
+    if (hover && ImGui::IsKeyPressed(ImGuiKey_H, false)) showHistogram_ = !showHistogram_;
+
+    if (ImGui::Checkbox("Histogram", &showHistogram_) && showHistogram_ && v.shown) histogram_.compute(*v.shown);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show the histogram (H)");
+    ImGui::SameLine();
+    clipToggled |= ImGui::Checkbox("Clipping", &clipping_);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show clipped highlights in red and crushed shadows in blue (J)");
+    if (clipToggled && v.shown) v.tex.upload(*v.shown, clipping_);
+    if (showHistogram_ && !histogram_.valid && v.shown) histogram_.compute(*v.shown);
+    if (ov && NodeOverlay::isMask(*ov)) {
+        ImGui::SameLine();
+        ImGui::Checkbox("Mask Overlay", &maskOverlay_);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tint the selected mask over the image (O)");
+    }
+    if (ov) {
+        ImGui::SameLine();
+        const char* hint = ov->info().type == crop::kType
+                               ? "Drag the frame or its handles; drag outside to straighten"
+                           : dynamic_cast<BrushMaskNode*>(ov) ? "Paint to add, Alt+paint to erase, [ ] brush size"
+                                                              : "Drag the handles to shape the mask";
+        ImGui::TextDisabled("%s", hint);
+    }
 }
 
 void App::drawStatusBar() {
@@ -444,6 +541,10 @@ void App::drawStatusBar() {
                 st = std::to_string(main.tex.width()) + " x " + std::to_string(main.tex.height()) + " preview  |  " +
                      std::to_string(int(evalMs_)) + " ms";
             if (eval_->busy()) st += "  |  evaluating...";
+            if (exporter_.busy()) {
+                const Exporter::Progress pr = exporter_.progress();
+                st += "  |  Export " + std::to_string(pr.done) + "/" + std::to_string(pr.total) + ": " + pr.stage;
+            }
             if (!main.error.empty()) st += "  |  " + main.error;
             if (!status_.empty()) st += "  |  " + status_;
             if (eyedropper().active()) {
@@ -472,11 +573,8 @@ void App::drawMainMenu() {
         ImGui::Separator();
         if (ImGui::MenuItem("Import Image...", "Ctrl+I"))
             if (auto p = openFileDialog("Import image", kImageFilter)) importImage(*p);
-        if (ImGui::MenuItem("Export Result...", "Ctrl+E")) exportResult();
-        if (ImGui::MenuItem("Write File Outputs")) {
-            auto lines = writeFileOutputs(graph_, cache_);
-            status_ = lines.empty() ? "No File Output nodes" : lines.back() + (lines.size() > 1 ? " (+" + std::to_string(lines.size() - 1) + " more)" : "");
-        }
+        if (ImGui::MenuItem("Export...", "Ctrl+E")) openExportWindow();
+        if (ImGui::MenuItem("Write File Outputs", nullptr, false, !exporter_.busy())) startExport({{"", ""}}, 0);
         ImGui::Separator();
         if (ImGui::MenuItem("Exit")) requestAction(Pending::Quit);
         ImGui::EndMenu();
@@ -508,6 +606,7 @@ void App::drawMainMenu() {
         ImGui::Separator();
         if (ImGui::MenuItem("Frame Selected", "Ctrl+J") && editor_.frameSelection(g)) markChanged(false);
         if (ImGui::MenuItem("Remove from Frame", "Alt+P") && editor_.moveSelectionToFrame(g, 0)) markChanged(false);
+        if (ImGui::MenuItem("Arrange Nodes", "Shift+P") && editor_.arrange(g)) markChanged(false);
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("View")) {
@@ -565,7 +664,7 @@ void App::handleShortcuts() {
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S)) saveProject(true);
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_I))
         if (auto p = openFileDialog("Import image", kImageFilter)) importImage(*p);
-    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_E)) exportResult();
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_E)) openExportWindow();
     if (eyedropper().active() && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) eyedropper().cancel();
     if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) {
         // F1 opens the guide at the selected node's entry, like context help.
@@ -582,6 +681,22 @@ void App::handleDrops() {
     auto drops = std::move(drops_);
     drops_.clear();
     for (const auto& p : drops) {
+        // With the Batch tab open, dropped images and folders become batch sources instead.
+        if (showExport_ && exportTab_ == 1 && !exporter_.busy()) {
+            std::vector<std::string> found;
+            std::error_code ec;
+            if (std::filesystem::is_directory(u8ToPath(p), ec)) {
+                for (const auto& e : std::filesystem::directory_iterator(u8ToPath(p), ec))
+                    if (e.is_regular_file() && isImageFile(e.path())) found.push_back(pathToU8(e.path()));
+                std::sort(found.begin(), found.end());
+            } else if (isImageFile(u8ToPath(p))) {
+                found.push_back(p);
+            }
+            for (std::string& f : found)
+                if (std::find(batchSources_.begin(), batchSources_.end(), f) == batchSources_.end())
+                    batchSources_.push_back(std::move(f));
+            if (!found.empty()) continue;
+        }
         std::string ext = pathToU8(u8ToPath(p).extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
         if (ext == ".nlproj") {
@@ -869,34 +984,220 @@ void App::importImage(const std::string& path) {
     markChanged(true);
 }
 
-void App::exportResult() {
-    int outId = graph_.firstOfType(OutputNode::staticInfo().type);
-    if (!outId) {
-        status_ = "Nothing to export: add an Output node";
+void App::openExportWindow() {
+    showExport_ = true;
+    focusExport_ = true;
+    // Suggest a file next to the project the first time.
+    if (!exportPath_[0]) {
+        auto base = projectPath_.empty() ? std::filesystem::path("export") : u8ToPath(projectPath_).replace_extension();
+        std::snprintf(exportPath_, sizeof(exportPath_), "%s", pathToU8(base.string() + std::string(exportSettings_.extension())).c_str());
+    }
+}
+
+void App::startExport(std::vector<ExportItem> items, int inputNode) {
+    if (exporter_.busy() || items.empty()) return;
+    exportSettings_.suffix = batchSuffix_;
+    exportLog_.clear();
+    // The root graph, whatever group is open: exports always render the whole project.
+    exporter_.start(graph_.toJson(), std::move(items), inputNode, exportSettings_);
+}
+
+void App::pollExport() {
+    for (std::string& line : exporter_.takeLog()) {
+        status_ = line;
+        exportLog_.push_back(std::move(line));
+    }
+}
+
+void App::drawExportWindow() {
+    if (!showExport_) return;
+    ImGui::SetNextWindowSize(ImVec2(520, 660), ImGuiCond_FirstUseEver);
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
+                            ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+    if (focusExport_) ImGui::SetNextWindowFocus();
+    focusExport_ = false;
+    if (!ImGui::Begin("Export", &showExport_, ImGuiWindowFlags_NoDocking)) {
+        ImGui::End();
         return;
     }
-    auto p = saveFileDialog("Export result", kExportFilter, "png");
-    if (!p) return;
-    // Full-resolution pass on the UI thread; a progress UI can come later.
-    try {
-        EvalContext ctx;
-        ctx.proxy = false;
-        ctx.cache = &cache_;
-        initContextSize(graph_, ctx);
-        Evaluator ev;
-        ImagePtr img = ev.evaluateDisplay(graph_, outId, ctx);
-        std::string err;
-        if (!img) status_ = "Export failed: Output node has no input";
-        else if (!saveImage(*p, *img, err)) status_ = "Export failed: " + err;
-        else {
-            status_ = "Exported " + pathToU8(u8ToPath(*p).filename()) + " (" + std::to_string(img->w) + " x " +
-                      std::to_string(img->h) + ")";
-            auto lines = writeFileOutputs(graph_, cache_);
-            if (!lines.empty()) status_ += ", File Outputs: " + std::to_string(lines.size());
+    const bool busy = exporter_.busy();
+    ExportSettings& es = exportSettings_;
+    const float browseW = ImGui::CalcTextSize("Browse...").x + ImGui::GetStyle().FramePadding.x * 2;
+    auto pathField = [&](const char* id, char* buf, size_t size) {
+        ImGui::SetNextItemWidth(-browseW - ImGui::GetStyle().ItemSpacing.x);
+        ImGui::InputText(id, buf, size);
+        ImGui::SameLine();
+        ImGui::PushID(id);
+        const bool clicked = ImGui::Button("Browse...");
+        ImGui::PopID();
+        return clicked;
+    };
+    auto withExt = [&](std::string path) {
+        auto p = u8ToPath(path);
+        p.replace_extension(es.extension());
+        return pathToU8(p);
+    };
+
+    ImGui::BeginDisabled(busy);
+    int tab = -1;
+    if (ImGui::BeginTabBar("##exportTabs")) {
+        if (ImGui::BeginTabItem("Single")) {
+            tab = 0;
+            ImGui::TextUnformatted("Renders the Output node at full resolution.");
+            ImGui::TextUnformatted("File");
+            if (pathField("##exportPath", exportPath_, sizeof(exportPath_)))
+                if (auto p = saveFileDialog("Export result", kExportFilter, es.format == ExportSettings::JPEG ? "jpg" : "png")) {
+                    std::string ext = pathToU8(u8ToPath(*p).extension());
+                    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+                    es.format = (ext == ".jpg" || ext == ".jpeg") ? ExportSettings::JPEG : ExportSettings::PNG;
+                    std::snprintf(exportPath_, sizeof(exportPath_), "%s", p->c_str());
+                }
+            ImGui::EndTabItem();
         }
-    } catch (const std::exception& e) {
-        status_ = std::string("Export failed: ") + e.what();
+        if (ImGui::BeginTabItem("Batch")) {
+            tab = 1;
+            ImGui::TextWrapped("Runs every source image through this node tree and saves each result to the output folder.");
+            // Which Image Input receives each source.
+            std::vector<const Node*> inputs;
+            for (const auto& [id, n] : graph_.nodes())
+                if (n->info().type == ImageInputNode::staticInfo().type) inputs.push_back(n.get());
+            if (!graph_.find(batchInput_) && !inputs.empty()) batchInput_ = inputs.front()->id;
+            auto inputName = [](const Node* n) {
+                std::string f = n->paramS(0).empty() ? "no file" : pathToU8(u8ToPath(n->paramS(0)).filename());
+                return n->title() + " (" + f + ")";
+            };
+            const Node* cur = graph_.find(batchInput_);
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            if (ImGui::BeginCombo("##batchInput", cur ? inputName(cur).c_str() : "No Image Input node")) {
+                for (const Node* n : inputs) {
+                    ImGui::PushID(n->id);
+                    if (ImGui::Selectable(inputName(n).c_str(), n->id == batchInput_)) batchInput_ = n->id;
+                    ImGui::PopID();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::Text("Sources (%d)", int(batchSources_.size()));
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Add Files..."))
+                for (std::string& f : openFilesDialog("Add source images", kImageFilter))
+                    if (std::find(batchSources_.begin(), batchSources_.end(), f) == batchSources_.end())
+                        batchSources_.push_back(std::move(f));
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Add Folder..."))
+                if (auto dir = folderDialog("Add every image in a folder")) {
+                    std::vector<std::string> found;
+                    std::error_code ec;
+                    for (const auto& e : std::filesystem::directory_iterator(u8ToPath(*dir), ec))
+                        if (e.is_regular_file() && isImageFile(e.path())) found.push_back(pathToU8(e.path()));
+                    std::sort(found.begin(), found.end());
+                    for (std::string& f : found)
+                        if (std::find(batchSources_.begin(), batchSources_.end(), f) == batchSources_.end())
+                            batchSources_.push_back(std::move(f));
+                }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Clear")) batchSources_.clear();
+            if (ImGui::BeginChild("##sources", ImVec2(0, 110), ImGuiChildFlags_Borders)) {
+                int remove = -1;
+                for (int i = 0; i < int(batchSources_.size()); ++i) {
+                    ImGui::PushID(i);
+                    if (ImGui::SmallButton("x")) remove = i;
+                    ImGui::SameLine();
+                    ImGui::TextUnformatted(pathToU8(u8ToPath(batchSources_[i]).filename()).c_str());
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", batchSources_[i].c_str());
+                    ImGui::PopID();
+                }
+                if (batchSources_.empty()) ImGui::TextDisabled("Add files, a folder, or drop images here");
+                if (remove >= 0) batchSources_.erase(batchSources_.begin() + remove);
+            }
+            ImGui::EndChild();
+            ImGui::TextUnformatted("Output folder");
+            if (pathField("##batchDir", batchDir_, sizeof(batchDir_)))
+                if (auto d = folderDialog("Output folder")) std::snprintf(batchDir_, sizeof(batchDir_), "%s", d->c_str());
+            ImGui::SetNextItemWidth(160);
+            ImGui::InputText("Name suffix", batchSuffix_, sizeof(batchSuffix_));
+            if (!batchSources_.empty()) {
+                ExportSettings tmp = es;
+                tmp.suffix = batchSuffix_;
+                ImGui::TextDisabled("e.g. %s", pathToU8(u8ToPath(batchOutputPath(batchSources_[0], batchDir_, tmp)).filename()).c_str());
+            }
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
     }
+    exportTab_ = tab;
+
+    ImGui::SeparatorText("Format");
+    ImGui::SetNextItemWidth(160);
+    ImGui::Combo("##format", &es.format, "PNG\0JPEG\0");
+    if (es.format == ExportSettings::JPEG) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::SliderInt("##quality", &es.jpegQuality, 1, 100, "Quality %d");
+    }
+    ImGui::SetNextItemWidth(160);
+    ImGui::Combo("##size", &es.sizeMode, "Original size\0Long edge\0Percent\0");
+    if (es.sizeMode == ExportSettings::LongEdge) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(120);
+        ImGui::InputInt("px", &es.longEdge, 64, 512);
+        es.longEdge = std::clamp(es.longEdge, 16, 65536);
+    } else if (es.sizeMode == ExportSettings::Percent) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::SliderInt("##percent", &es.percent, 1, 100, "%d %%");
+    }
+    if (tab == 0) ImGui::Checkbox("Also write File Output nodes", &es.fileOutputs);
+    ImGui::EndDisabled();
+
+    ImGui::Separator();
+    if (busy) {
+        const Exporter::Progress pr = exporter_.progress();
+        // No per-node progress from the evaluator, so within an item the bar just shows the stage.
+        const float frac = pr.total ? float(pr.done) / pr.total : 0.0f;
+        const std::string label = std::to_string(pr.done) + " / " + std::to_string(pr.total) + "  " + pr.stage;
+        ImGui::ProgressBar(frac, ImVec2(-ImGui::CalcTextSize("Cancel").x - 30, 0), label.c_str());
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) exporter_.cancel();
+    } else {
+        std::string why;
+        std::vector<ExportItem> items;
+        int input = 0;
+        if (tab == 0) {
+            if (!exportPath_[0]) why = "Choose a file";
+            else if (!graph_.firstOfType(OutputNode::staticInfo().type)) why = "Add an Output node";
+            else items.push_back({"", withExt(exportPath_)});
+        } else if (tab == 1) {
+            input = batchInput_;
+            ExportSettings tmp = es;
+            tmp.suffix = batchSuffix_;
+            if (!graph_.find(input)) why = "The tree needs an Image Input node";
+            else if (batchSources_.empty()) why = "Add source images";
+            else if (!batchDir_[0]) why = "Choose an output folder";
+            else if (!graph_.firstOfType(OutputNode::staticInfo().type)) why = "Add an Output node";
+            else
+                for (const std::string& src : batchSources_) items.push_back({src, batchOutputPath(src, batchDir_, tmp)});
+        }
+        ImGui::BeginDisabled(!why.empty());
+        const std::string label = tab == 1 ? "Export " + std::to_string(items.size()) + " Images" : std::string("Export");
+        if (ImGui::Button(label.c_str(), ImVec2(160, 0))) {
+            if (tab == 1) std::filesystem::create_directories(u8ToPath(batchDir_));
+            // Keep the path's extension in step with the chosen format.
+            if (tab == 0) std::snprintf(exportPath_, sizeof(exportPath_), "%s", items[0].output.c_str());
+            startExport(std::move(items), input);
+        }
+        ImGui::EndDisabled();
+        if (!why.empty()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", why.c_str());
+        }
+    }
+    if (ImGui::BeginChild("##exportLog", ImVec2(0, 0), ImGuiChildFlags_Borders)) {
+        for (const std::string& line : exportLog_) ImGui::TextWrapped("%s", line.c_str());
+        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) ImGui::SetScrollHereY(1.0f);
+    }
+    ImGui::EndChild();
+    ImGui::End();
 }
 
 // ---------------------------------------------------------------- helpers
@@ -935,11 +1236,7 @@ void App::updateTextures() {
     if (!src || src->info().type != ImageInputNode::staticInfo().type)
         src = graph_.find(graph_.firstOfType(ImageInputNode::staticInfo().type));
     ImagePtr left;
-    leftLabel_.clear();
-    if (src && !src->paramS(0).empty()) {
-        left = cache_.get(src->paramS(0), true);
-        leftLabel_ = pathToU8(u8ToPath(src->paramS(0)).filename());
-    }
+    if (src && !src->paramS(0).empty()) left = cache_.get(src->paramS(0), true);
     if (left != leftShown_) {
         leftShown_ = left;
         if (left) leftTex_.upload(*left);
@@ -949,13 +1246,20 @@ void App::updateTextures() {
     if (auto res = eval_->poll()) {
         evalMs_ = res->ms;
         // Results are in submission order; match them to the viewers that still exist.
-        for (size_t i = 0; i < viewers_.size() && i < res->images.size(); ++i) {
+        const size_t nv = std::min({viewers_.size(), res->images.size(), submittedViewers_});
+        for (size_t i = 0; i < nv; ++i) {
             Viewer& v = *viewers_[i];
             v.error = res->errors[i];
             v.shown = res->images[i];
-            if (v.shown) v.tex.upload(*v.shown);
+            if (v.shown) v.tex.upload(*v.shown, i == 0 && clipping_);
             else v.tex.reset();
         }
+        // The histogram follows the Result; recomputed only when shown.
+        histogram_.valid = false;
+        if (showHistogram_ && !viewers_.empty() && viewers_[0]->shown) histogram_.compute(*viewers_[0]->shown);
+        // A mask target follows the viewers (see drawFrame).
+        if (maskWanted_ && res->images.size() > submittedViewers_ && res->images[submittedViewers_])
+            maskTex_.uploadTint(*res->images[submittedViewers_], 1.0f, 0.25f, 0.2f, 0.45f);
     }
 }
 
@@ -981,7 +1285,17 @@ nlohmann::json App::uiState() const {
             {"preview", previewPath_},
             {"graphView", groupPath_.empty() ? editor_.viewState()
                           : groupViews_.count(std::vector<int>()) ? groupViews_.at(std::vector<int>()) : nlohmann::json()},
-            {"viewers", viewers}};
+            {"viewers", viewers},
+            {"histogram", showHistogram_},
+            {"clipping", clipping_},
+            {"maskOverlay", maskOverlay_},
+            {"export", [&] {
+                 nlohmann::json e = exportSettings_.toJson();
+                 e["suffix"] = std::string(batchSuffix_);
+                 e["path"] = std::string(exportPath_);
+                 e["batchDir"] = std::string(batchDir_);
+                 return e;
+             }()}};
 }
 
 void App::applyUiState(const nlohmann::json& j) {
@@ -995,12 +1309,21 @@ void App::applyUiState(const nlohmann::json& j) {
             view_.panY = (*v)[2].get<float>();
         }
         if (auto gv = j.find("graphView"); gv != j.end()) editor_.setViewState(*gv);
+        showHistogram_ = j.value("histogram", showHistogram_);
+        clipping_ = j.value("clipping", clipping_);
+        maskOverlay_ = j.value("maskOverlay", maskOverlay_);
         if (auto p = j.find("preview"); p != j.end()) {
             // Older projects stored a plain node id.
             if (p->is_number_integer() && p->get<int>() != 0) previewPath_ = {p->get<int>()};
             else if (p->is_array()) previewPath_ = p->get<NodePath>();
         }
         if (!pathValid(previewPath_)) previewPath_.clear();
+        if (auto e = j.find("export"); e != j.end() && e->is_object()) {
+            exportSettings_.fromJson(*e);
+            std::snprintf(batchSuffix_, sizeof(batchSuffix_), "%s", exportSettings_.suffix.c_str());
+            std::snprintf(exportPath_, sizeof(exportPath_), "%s", e->value("path", std::string()).c_str());
+            std::snprintf(batchDir_, sizeof(batchDir_), "%s", e->value("batchDir", std::string()).c_str());
+        }
         if (auto vs = j.find("viewers"); vs != j.end() && vs->is_array())
             for (const auto& vj : *vs) {
                 auto v = std::make_unique<Viewer>();

@@ -25,6 +25,7 @@ void registerAllNodes() {
     auto& r = NodeRegistry::instance();
     registerIONodes(r);
     registerColorNodes(r);
+    registerDevelopNodes(r);
     registerMathNodes(r);
     registerConverterNodes(r);
     registerFilterNodes(r);

@@ -44,23 +44,37 @@ std::shared_ptr<Image> loadImage(const std::string& pathU8, std::string& err) {
     return img;
 }
 
-bool saveImage(const std::string& pathU8, const Image& img, std::string& err) {
+bool saveImage(const std::string& pathU8, const Image& img, std::string& err, int jpegQuality) {
     if (img.empty()) {
         err = "nothing to save";
         return false;
     }
-    std::vector<unsigned char> bytes(img.px.size());
-    for (size_t i = 0; i < bytes.size(); ++i) {
-        float v = std::clamp(img.px[i], 0.0f, 1.0f);
-        bytes[i] = static_cast<unsigned char>(std::lround(v * 255.0f));
-    }
     std::string ext = pathToU8(u8ToPath(pathU8).extension());
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    const bool jpeg = ext == ".jpg" || ext == ".jpeg";
+    // Drop alpha when it is fully opaque: a quarter less data to compress, and JPEG ignores it anyway.
+    bool opaque = true;
+    for (size_t i = 0, n = img.pixelCount(); i < n && opaque; ++i)
+        if (img.px[i * 4 + 3] < 1.0f) opaque = false;
+    const int comp = (jpeg || opaque) ? 3 : 4;
+    std::vector<unsigned char> bytes(img.pixelCount() * comp);
+    parallelFor(img.h, [&](int y) {
+        for (int x = 0; x < img.w; ++x) {
+            const size_t i = size_t(y) * img.w + x;
+            for (int c = 0; c < comp; ++c) {
+                float v = std::clamp(img.px[i * 4 + c], 0.0f, 1.0f);
+                bytes[i * comp + c] = static_cast<unsigned char>(std::lround(v * 255.0f));
+            }
+        }
+    });
     int ok = 0;
-    if (ext == ".jpg" || ext == ".jpeg") {
-        ok = stbi_write_jpg(pathU8.c_str(), img.w, img.h, 4, bytes.data(), 95);
+    if (jpeg) {
+        ok = stbi_write_jpg(pathU8.c_str(), img.w, img.h, comp, bytes.data(), std::clamp(jpegQuality, 1, 100));
     } else {
-        ok = stbi_write_png(pathU8.c_str(), img.w, img.h, 4, bytes.data(), img.w * 4);
+        // stb's default level 8 spends most of the export time searching for matches for a few
+        // percent smaller files; 4 is several times faster.
+        stbi_write_png_compression_level = 4;
+        ok = stbi_write_png(pathU8.c_str(), img.w, img.h, comp, bytes.data(), img.w * comp);
     }
     if (!ok) err = "could not write file";
     return ok != 0;

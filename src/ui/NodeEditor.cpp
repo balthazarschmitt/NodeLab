@@ -9,6 +9,7 @@
 
 #include "core/Curve.h"
 #include "core/Ramp.h"
+#include "graph/Layout.h"
 #include "graph/NodeRegistry.h"
 #include "nodes/group/GroupNodes.h"
 #include "io/Paths.h"
@@ -60,6 +61,7 @@ bool pinBacked(const NodeInfo& info, int param) {
 
 // Rows a param occupies on the node body (0 = inspector only / shown on its input pin).
 int paramRows(const NodeInfo& info, int i) {
+    if (info.compact) return 0;
     switch (info.params[i].kind) {
         case ParamKind::Float: return pinBacked(info, i) ? 0 : 1;
         case ParamKind::Path:
@@ -89,6 +91,9 @@ float nodeHeightGrid(const Node& n) {
     for (int i = 0; i < int(info.params.size()); ++i) rows += paramRows(info, i);
     return kTitleH + kPad * 2 + rows * kRowH;
 }
+
+// Drawn size in grid units, for automatic spacing.
+NodeSize gridSize(const Node& n) { return {isReroute(n) ? kRerouteSize : kNodeW, nodeHeightGrid(n)}; }
 
 void bezierPoints(ImVec2 a, ImVec2 b, float zoom, ImVec2& c1, ImVec2& c2) {
     float d = std::max(std::fabs(b.x - a.x) * 0.5f, 40.0f * zoom);
@@ -763,6 +768,7 @@ void NodeEditor::finishLinkDrag(Graph& g, Result& r) {
         menuConnect_ = linkFrom_;
         menuPos_ = mouse;
         search_[0] = '\0';
+        swapTargets_.clear();
         ImGui::OpenPopup("AddNode");
     }
     linkDetached_ = false;
@@ -1008,6 +1014,7 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
             selectedFrame_ = ft;
             ImGui::OpenPopup("FrameMenu");
         } else {
+            swapTargets_.clear();
             ImGui::OpenPopup("AddNode");
         }
     }
@@ -1161,8 +1168,15 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
         menuPos_ = ImGui::GetMousePos();
         search_[0] = 0;
         menuConnect_ = {};
+        swapTargets_.clear();
         ImGui::OpenPopup("AddNode");
     }
+    // Swap the selected nodes for another type (Blender's Shift+S), using the add menu to pick it.
+    // Hover is enough, like Shift+A, since the pointer is usually over the node being swapped.
+    if ((ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) || ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)) &&
+        !io.WantTextInput && mode_ == Mode::None &&
+        ImGui::IsKeyChordPressed(ImGuiMod_Shift | ImGuiKey_S))
+        openSwapMenu(g);
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !io.WantTextInput) {
         const bool noMods = !io.KeyCtrl && !io.KeyShift && !io.KeyAlt;
         if (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace) ||
@@ -1198,6 +1212,7 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
             r.evalChanged = r.docChanged = true;
         if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_J) && frameSelection(g)) r.docChanged = true;
         if (ImGui::IsKeyChordPressed(ImGuiMod_Alt | ImGuiKey_P) && moveSelectionToFrame(g, 0)) r.docChanged = true;
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Shift | ImGuiKey_P) && arrange(g)) r.docChanged = true;
         if (ImGui::IsKeyPressed(ImGuiKey_Tab) && !io.KeyCtrl) {
             if (int gid = selectedGroup(g)) r.enterGroup = gid;
             else r.exitGroup = true;
@@ -1222,10 +1237,27 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
 
 // ---------------------------------------------------------------- menus
 
+void NodeEditor::openSwapMenu(const Graph& g) {
+    swapTargets_.clear();
+    for (int id : selection_)
+        if (const Node* n = g.find(id); n && !n->info().hidden) swapTargets_.push_back(id);
+    if (swapTargets_.empty()) return;
+    menuPos_ = ImGui::GetMousePos();
+    search_[0] = 0;
+    menuConnect_ = {};
+    ImGui::OpenPopup("AddNode");
+}
+
 void NodeEditor::drawAddMenu(Graph& g, Result& r) {
     if (!ImGui::BeginPopup("AddNode")) {
         menuConnect_ = {};
+        swapTargets_.clear();
         return;
+    }
+    const bool swapping = !swapTargets_.empty();
+    if (swapping) {
+        if (swapTargets_.size() == 1) ImGui::TextDisabled("Swap node to:");
+        else ImGui::TextDisabled("Swap %d nodes to:", int(swapTargets_.size()));
     }
     // When a wire was dropped here, only offer nodes that can accept / provide it.
     const Node* src = g.find(menuConnect_.node);
@@ -1297,7 +1329,7 @@ void NodeEditor::drawAddMenu(Graph& g, Result& r) {
                 ImGui::EndMenu();
             }
         }
-        if (!src) {
+        if (!src && !swapping) {
             ImGui::Separator();
             if (ImGui::MenuItem("Frame", "Ctrl+J")) {
                 ImVec2 gp = toGrid(menuPos_);
@@ -1308,7 +1340,14 @@ void NodeEditor::drawAddMenu(Graph& g, Result& r) {
         }
     }
 
-    if (!chosen.empty()) {
+    if (!chosen.empty() && swapping) {
+        for (int id : swapTargets_) g.swapNode(id, chosen);
+        // The new type may be taller; nudge neighbours out of the way.
+        spaceOut(g, std::set<int>(swapTargets_.begin(), swapTargets_.end()), gridSize);
+        swapTargets_.clear();
+        r.evalChanged = r.docChanged = true;
+        ImGui::CloseCurrentPopup();
+    } else if (!chosen.empty()) {
         if (Node* n = g.addNode(chosen)) {
             placeAtScreen(*n, menuPos_);
             if (src) {
@@ -1318,6 +1357,7 @@ void NodeEditor::drawAddMenu(Graph& g, Result& r) {
                     else g.connect(n->id, pin, menuConnect_.node, menuConnect_.pin);
                 }
             }
+            spaceOut(g, {n->id}, gridSize);  // make room rather than landing on top of other nodes
             select(n->id);
             r.evalChanged = r.docChanged = true;
         }
@@ -1330,7 +1370,7 @@ void NodeEditor::drawAddMenu(Graph& g, Result& r) {
 void NodeEditor::drawNodeMenu(Graph& g, int& preview, Result& r) {
     if (!ImGui::BeginPopup("NodeMenu")) return;
     const Node* mn0 = g.find(menuNode_);
-    bool openRename = false;
+    bool openRename = false, openSwap = false;
     if (ImGui::MenuItem("Duplicate", "Ctrl+D") && duplicateSelection(g)) r.evalChanged = r.docChanged = true;
     if (ImGui::MenuItem(preview == menuNode_ ? "Stop Previewing" : "Preview", "Ctrl+Click")) {
         preview = (preview == menuNode_) ? 0 : menuNode_;
@@ -1349,6 +1389,9 @@ void NodeEditor::drawNodeMenu(Graph& g, int& preview, Result& r) {
         openRename = true;
     }
     if (ImGui::MenuItem("Make Links", "F", false, selection_.size() > 1) && makeLinks(g)) r.evalChanged = r.docChanged = true;
+    if (ImGui::MenuItem("Swap...", "Shift+S", false, mn && !mn->info().hidden)) openSwap = true;
+    if (ImGui::MenuItem(selection_.size() > 1 ? "Arrange Selected" : "Arrange All", "Shift+P") && arrange(g))
+        r.docChanged = true;
     ImGui::Separator();
     if (ImGui::MenuItem("Group", "Ctrl+G") && groupSelection(g)) r.evalChanged = r.docChanged = true;
     const bool isGroup = dynamic_cast<GroupNode*>(g.find(menuNode_)) != nullptr;
@@ -1373,6 +1416,7 @@ void NodeEditor::drawNodeMenu(Graph& g, int& preview, Result& r) {
     if (ImGui::MenuItem("Delete", "Alt+Del") && deleteSelection(g, preview, false)) r.evalChanged = r.docChanged = true;
     ImGui::EndPopup();
     if (openRename) ImGui::OpenPopup("NodeRename");
+    if (openSwap) openSwapMenu(g);
 }
 
 // ---------------------------------------------------------------- frames
@@ -1478,6 +1522,17 @@ void NodeEditor::drawFrameMenu(Graph& g, Result& r) {
         if (done) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
+}
+
+bool NodeEditor::arrange(Graph& g) {
+    std::set<int> ids;
+    if (selection_.size() > 1) ids = selection_;
+    else
+        for (const auto& [id, n] : g.nodes()) ids.insert(id);
+    if (!arrangeNodes(g, ids, gridSize)) return false;
+    // Arranging a selection can land it on the nodes around it.
+    if (ids.size() < g.nodes().size()) spaceOut(g, ids, gridSize);
+    return true;
 }
 
 bool NodeEditor::frameSelection(Graph& g) {
@@ -1617,6 +1672,7 @@ void NodeEditor::finishDragNodes(Graph& g, Result& r) {
             for (int d : down)
                 if (Node* dn = g.find(d)) dn->x += shift;
         }
+        spaceOut(g, {id}, gridSize);  // anything else it landed on (nodes above/below the wire)
     }
     insertLink_ = 0;
 }
@@ -1655,6 +1711,7 @@ bool NodeEditor::paste(Graph& g) {
         if (remap.count(l.fromNode) && remap.count(l.toNode)) g.connect(remap[l.fromNode], l.fromPin, remap[l.toNode], l.toPin);
     selection_.clear();
     for (auto& [a, b] : remap) selection_.insert(b);
+    spaceOut(g, selection_, gridSize);
     selectedLink_ = 0;
     return true;
 }

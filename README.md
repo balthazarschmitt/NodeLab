@@ -37,6 +37,8 @@ Version: `NodeLab.exe --version` (also in the window title, Help menu and the ex
 See [CHANGELOG.md](CHANGELOG.md).
 
 Headless render: `NodeLab.exe --render project.nlproj out.png`
+Headless batch: `NodeLab.exe --batch project.nlproj outDir [--jpg] a.jpg b.jpg ...` (each source goes
+into the project's first Image Input and is saved as `outDir\<name>_edit.png`)
 Screenshot of the UI (debug aid): `NodeLab.exe project.nlproj --screenshot shot.png`
 Scripted UI test (feeds input straight to ImGui, ignores the real mouse; see `src/ui/UiScript.h`):
 `NodeLab.exe examples\demo.nlproj --script tests\ui\fanout_addnode.txt`
@@ -51,6 +53,9 @@ Try `examples/demo.nlproj`: the red channel drives saturation, so only red thing
 | Connect | Drag from a pin to another pin (or onto a node body) |
 | Add a connected node | Drag a wire into empty space, pick a node |
 | Splice into a wire | Drag an unconnected node onto a wire and release (drag off to cancel); downstream nodes shift to make room |
+| Swap a node's type | Shift+S (or right-click → Swap...) and pick the new type; wires and matching settings carry over |
+| Auto spacing | New, pasted, swapped and spliced nodes push overlapping nodes out of the way |
+| Arrange | Shift+P (Edit > Arrange Nodes) lays the selection (2+ nodes), or the whole graph, out in tidy columns |
 | Disconnect | Drag a wire off its input pin |
 | Pan / zoom graph | Drag empty space (or middle-drag) / mouse wheel |
 | Select | Click, Shift+click to add, Shift+drag a box, Ctrl+A all |
@@ -77,7 +82,11 @@ Try `examples/demo.nlproj`: the red channel drives saturation, so only red thing
 | Eyedropper | "Pick" next to a colour setting (or Pick from Image in the node's colour popup), then click a pixel or drag a rectangle on any image panel for the area's average; right-click / Esc cancels |
 | Guide | Help > Guide or F1 (opens at the selected node's entry); also the Inspector's Guide button |
 | Zoom / pan images | Mouse wheel / drag; double-click resets. Both panes stay in sync |
+| Histogram / clipping | Result toolbar, or H / J with the mouse over the Result: RGB histogram, and clipped highlights in red and crushed shadows in blue |
+| On-image controls | Select a Crop, gradient, shape or Brush Mask node and edit it on the Result: drag handles; Crop shows the whole frame (drag outside to straighten); Brush paints, Alt erases, `[` `]` size; O toggles the red mask overlay |
 | Import image | File > Import Image, or drop a file on the window |
+| Export | File > Export (Ctrl+E) opens the Export window: renders in the background with a progress bar and Cancel. Format (PNG/JPEG + quality), size (original, long edge, percent) |
+| Batch | Export window → Batch: add files or a folder (or drop them on the window), pick the Image Input they feed and an output folder; each result is saved as `<name><suffix>` |
 
 **Wire types**
 - **Image** (amber, square pins): full RGBA.
@@ -99,14 +108,14 @@ layout is saved per user in `%APPDATA%\NodeLab\layout.ini`.
 | Category | Nodes |
 |---|---|
 | Input / Output | Image Input, Output, Number |
-| Color | Brightness / Contrast, Saturation, Hue Shift, Hue Correct (per-hue H/S/V curves), Exposure, Gamma, Levels, Curves, Color Balance (Lift/Gamma/Gain, ASC CDL), Tone Map, Convert Colorspace, Invert, Luminance, Split/Combine RGB, HSV, HSL, Lab, YCbCr, YUV |
+| Color | Basic (Lightroom's exposure, highlights/shadows, whites/blacks, texture, clarity, dehaze, vibrance), Color Mixer (8-band HSL), Color Grading (shadow/midtone/highlight/global wheels), Brightness / Contrast, Saturation, Hue Shift, Hue Correct (per-hue H/S/V curves), Exposure, Gamma, Levels, Curves, Color Balance (Lift/Gamma/Gain, ASC CDL), Tone Map, Convert Colorspace, Invert, Luminance, Split/Combine RGB, HSV, HSL, Lab, YCbCr, YUV |
 | Mix | Mix, Blend (19 modes), Alpha Over |
 | Converter | Color Ramp, Color Key, Map Range, Math (21 ops), Clamp, Threshold, Normalize, Float Curve, Set Alpha, Wavelength (nm to color), Blackbody (Kelvin to color), Expression, Image Expression |
 | Filter | Blur, Directional Blur (+spin/zoom), Bilateral Blur, Filter (Soften, Sharpen, Laplace, Sobel, Prewitt, Kirsch, Shadow), Dilate / Erode, Kuwahara, Pixelate, Posterize, Glare (Fog Glow, Streaks, Simple Star), Sun Beams |
-| Transform | Transform, Flip, Crop, Lens Distortion (with chromatic dispersion), Displace, Map UV, Corner Pin |
-| Matte | Box Mask, Ellipse Mask, Channel Key, Luminance Key, Difference Key, Distance Key, Chroma Key, Color Spill, Double Edge Mask |
+| Transform | Transform, Flip, Crop (straighten, aspect presets, on-image frame), Lens Correction (distortion, fringing, vignetting), Lens Distortion (with chromatic dispersion), Displace, Map UV, Corner Pin |
+| Matte | Box Mask, Ellipse Mask, Radial Gradient, Linear Gradient, Brush Mask (painted on the Result), Channel Key, Luminance Key, Difference Key, Distance Key, Chroma Key, Color Spill, Double Edge Mask |
 | Texture | Noise, Voronoi, Gradient, Wave, Checker, White Noise |
-| Utility | Reroute, Switch, Split (compare), Image Info, File Output (written on Export / File > Write File Outputs / --render) |
+| Utility | Reroute, Switch, Split (compare), Image Info, File Output (written on single Export / File > Write File Outputs / --render) |
 | Group | Groups (Ctrl+G) with Group Input / Group Output inside |
 
 Sizes in pixels (blur radius, offsets, glare size) refer to the full-resolution image; the preview

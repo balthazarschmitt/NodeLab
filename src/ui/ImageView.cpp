@@ -23,7 +23,7 @@ void GLTexture::reset() {
     w_ = h_ = 0;
 }
 
-void GLTexture::upload(const Image& img) {
+void GLTexture::upload(const Image& img, bool clipping) {
     if (img.empty()) {
         reset();
         return;
@@ -33,7 +33,30 @@ void GLTexture::upload(const Image& img) {
         for (int k = 0; k < 3; ++k)
             bytes[i + k] = static_cast<unsigned char>(std::lround(std::clamp(img.px[i + k], 0.0f, 1.0f) * 255.0f));
         bytes[i + 3] = 255;  // show alpha as opaque; transparency display comes later
+        if (clipping) {
+            const unsigned char mx = std::max({bytes[i], bytes[i + 1], bytes[i + 2]});
+            if (mx == 255) bytes[i] = 255, bytes[i + 1] = 0, bytes[i + 2] = 0;
+            else if (mx == 0) bytes[i] = 0, bytes[i + 1] = 90, bytes[i + 2] = 255;
+        }
     }
+    uploadBytes(bytes, img.w, img.h);
+}
+
+void GLTexture::uploadTint(const Image& img, float r, float g, float b, float opacity) {
+    if (img.empty()) {
+        reset();
+        return;
+    }
+    std::vector<unsigned char> bytes(img.px.size());
+    const auto c8 = [](float v) { return static_cast<unsigned char>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+    for (size_t i = 0; i < bytes.size(); i += 4) {
+        bytes[i] = c8(r), bytes[i + 1] = c8(g), bytes[i + 2] = c8(b);
+        bytes[i + 3] = c8(img.px[i] * opacity);
+    }
+    uploadBytes(bytes, img.w, img.h);
+}
+
+void GLTexture::uploadBytes(const std::vector<unsigned char>& bytes, int w, int h) {
     if (!id_) {
         GLuint t = 0;
         glGenTextures(1, &t);
@@ -45,9 +68,75 @@ void GLTexture::upload(const Image& img) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.w, img.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, bytes.data());
-    w_ = img.w;
-    h_ = img.h;
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, bytes.data());
+    w_ = w;
+    h_ = h;
+}
+
+void Histogram::compute(const Image& img) {
+    r.fill(0), g.fill(0), b.fill(0), l.fill(0);
+    valid = !img.empty();
+    clipHigh = clipLow = false;
+    if (!valid) return;
+    // Every pixel of the preview is cheap enough, but skip rows on huge images.
+    const int step = std::max(1, int(img.pixelCount() / 2000000));
+    auto bin = [](float v) { return std::clamp(int(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)), 0, 255); };
+    for (int y = 0; y < img.h; y += step)
+        for (int x = 0; x < img.w; ++x) {
+            const float* p = img.pixel(size_t(y) * img.w + x);
+            const int br = bin(p[0]), bg = bin(p[1]), bb = bin(p[2]);
+            r[br] += 1, g[bg] += 1, b[bb] += 1;
+            l[bin(0.2126f * p[0] + 0.7152f * p[1] + 0.0722f * p[2])] += 1;
+            if (br == 255 || bg == 255 || bb == 255) clipHigh = true;
+            if (br == 0 && bg == 0 && bb == 0) clipLow = true;
+        }
+    // Scale to the tallest inner bin: a spike at pure black or white would flatten the rest.
+    peak = 1.0f;
+    for (int i = 1; i < 255; ++i) peak = std::max({peak, r[i], g[i], b[i], l[i]});
+}
+
+bool drawHistogram(ImDrawList* dl, const ImVec2& pos, const ImVec2& size, const Histogram& h, bool clipOn) {
+    const ImVec2 end(pos.x + size.x, pos.y + size.y);
+    dl->AddRectFilled(pos, end, IM_COL32(18, 18, 22, 215), 4);
+    dl->AddRect(pos, end, IM_COL32(80, 80, 90, 200), 4);
+    if (!h.valid) return false;
+    const float x0 = pos.x + 4, w = size.x - 8, base = end.y - 4, hgt = size.y - 18;
+    // Square-root scale keeps small populations visible next to big ones.
+    const float norm = 1.0f / std::sqrt(h.peak);
+    auto plot = [&](const std::array<float, 256>& bins, ImU32 fill, ImU32 line) {
+        ImVec2 prev;
+        for (int i = 0; i < 256; ++i) {
+            const ImVec2 p(x0 + w * i / 255.0f, base - std::min(std::sqrt(bins[i]) * norm, 1.0f) * hgt);
+            if (i > 0) {
+                dl->AddQuadFilled(ImVec2(prev.x, base), prev, p, ImVec2(p.x, base), fill);
+                dl->AddLine(prev, p, line, 1.0f);
+            }
+            prev = p;
+        }
+    };
+    plot(h.l, IM_COL32(200, 200, 200, 45), IM_COL32(220, 220, 220, 140));
+    plot(h.r, IM_COL32(255, 60, 60, 55), IM_COL32(255, 90, 90, 200));
+    plot(h.g, IM_COL32(60, 255, 60, 55), IM_COL32(90, 230, 90, 200));
+    plot(h.b, IM_COL32(70, 110, 255, 55), IM_COL32(110, 140, 255, 220));
+
+    // Clipping triangles: lit when pixels are clipped; clicking either toggles the warning.
+    bool clicked = false;
+    auto tri = [&](bool right, bool lit, ImU32 litCol) {
+        const float s = 10.0f, y = pos.y + 3;
+        const float x = right ? end.x - 3 - s : pos.x + 3;
+        const ImVec2 a(x, y), b2(x + s, y), c(right ? x + s : x, y + s);
+        dl->AddTriangleFilled(a, b2, c, lit ? litCol : IM_COL32(70, 70, 78, 255));
+        if (clipOn) dl->AddTriangle(a, b2, c, IM_COL32(255, 255, 255, 230), 1.5f);
+        const ImVec2 mp = ImGui::GetIO().MousePos;
+        if (mp.x >= x - 3 && mp.x <= x + s + 3 && mp.y >= y - 3 && mp.y <= y + s + 3) {
+            ImGui::SetTooltip("%s", right ? "Highlight clipping: click (or J) to show it on the image in red"
+                                          : "Shadow clipping: click (or J) to show it on the image in blue");
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) clicked = true;
+        }
+    };
+    tri(false, h.clipLow, IM_COL32(70, 140, 255, 255));
+    tri(true, h.clipHigh, IM_COL32(255, 70, 70, 255));
+    return clicked;
 }
 
 void averageColor(const Image& img, int x0, int y0, int x1, int y1, float rgb[3]) {
@@ -142,7 +231,8 @@ void drawPicker(PickRequest& pick, ImGuiID id, ImVec2 imgMin, float scale, const
 }
 }  // namespace
 
-void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const char* emptyText, PickRequest* pick) {
+void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const char* emptyText, PickRequest* pick,
+                   ImageOverlay* overlay) {
     ImVec2 origin = ImGui::GetCursorScreenPos();
     ImVec2 avail = ImGui::GetContentRegionAvail();
     avail.x = std::max(avail.x, 1.0f);
@@ -178,19 +268,24 @@ void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const 
             view.panX = (mx - ix * scaleNew) / view.zoom;
             view.panY = (my - iy * scaleNew) / view.zoom;
         }
-        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !picking) view.reset();
     }
-    if (ImGui::IsItemActive() &&
-        ((ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f) && !picking) || ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f))) {
-        view.panX += io.MouseDelta.x / view.zoom;
-        view.panY += io.MouseDelta.y / view.zoom;
-    }
+    const bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive();
 
     const float scale = fit * view.zoom;
     const float hw = tex.width() * scale * 0.5f, hh = tex.height() * scale * 0.5f;
     const float cx = center.x + view.panX * view.zoom, cy = center.y + view.panY * view.zoom;
     dl->PushClipRect(origin, end, true);
     dl->AddImage((ImTextureID)(intptr_t)tex.id(), ImVec2(cx - hw, cy - hh), ImVec2(cx + hw, cy + hh));
+    bool captured = false;
     if (picking) drawPicker(*pick, ImGui::GetItemID(), ImVec2(cx - hw, cy - hh), scale, tex, dl);
+    else if (overlay) captured = overlay->update(dl, ImVec2(cx - hw, cy - hh), ImVec2(cx + hw, cy + hh), hovered, active);
     dl->PopClipRect();
+
+    // Pan after the overlay had its say, so dragging a handle doesn't also move the image.
+    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !picking && !captured) view.reset();
+    if (active && ((ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f) && !picking && !captured) ||
+                   ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f))) {
+        view.panX += io.MouseDelta.x / view.zoom;
+        view.panY += io.MouseDelta.y / view.zoom;
+    }
 }

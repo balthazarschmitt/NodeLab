@@ -266,12 +266,16 @@ public:
 }  // namespace
 
 std::vector<std::string> writeFileOutputs(const Graph& g, ImageCache& cache) {
-    std::vector<std::string> report;
     EvalContext ctx;
     ctx.proxy = false;
     ctx.cache = &cache;
     initContextSize(g, ctx);
     Evaluator ev;  // shared, so upstream work common to several outputs runs once
+    return writeFileOutputs(g, ev, ctx);
+}
+
+std::vector<std::string> writeFileOutputs(const Graph& g, Evaluator& ev, EvalContext& ctx) {
+    std::vector<std::string> report;
     for (const auto& [id, n] : g.nodes()) {
         if (n->info().type != FileOutputNode::staticInfo().type || !n->paramB(2)) continue;
         std::string path = n->paramS(0);
@@ -289,6 +293,8 @@ std::vector<std::string> writeFileOutputs(const Graph& g, ImageCache& cache) {
             if (!img) report.push_back("File Output: nothing connected (" + path + ")");
             else if (!saveImage(path, *img, err)) report.push_back("File Output: " + err + " (" + path + ")");
             else report.push_back("Wrote " + path);
+        } catch (const EvalCancelled&) {
+            throw;
         } catch (const std::exception& e) {
             report.push_back(std::string("File Output: ") + e.what());
         }
