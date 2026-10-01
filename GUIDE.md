@@ -820,9 +820,12 @@ Coordinates are relative to the image, so textures look the same in the preview 
 - Outputs the image's Width, Height and Aspect ratio as Numbers.
 
 **File Output**
-- Saves whatever is connected to a file (PNG or JPEG) at full resolution when you export a single
-  image or choose File > Write File Outputs, or when rendering from the command line. Batch
-  exports skip it, because every image would overwrite the same file.
+- Saves whatever is connected to a file (PNG, JPEG, TIFF or OpenEXR) at full resolution when you
+  export a single image or choose File > Write File Outputs, or when rendering from the command
+  line. Batch exports skip it, because every image would overwrite the same file.
+- **Format** follows the file type picked in Browse. Only the chosen format's setting is shown:
+  **Color Depth** (8 or 16 bit) for PNG and TIFF, **EXR Depth** (Float (Half) or Float (Full))
+  for OpenEXR, and **Quality** for JPEG. See Exporting for what each format stores.
 - Use several to export multiple versions (for example colour and black-and-white) in one go.
   Enabled switches one off without deleting it.
 
@@ -891,13 +894,25 @@ progress, and **Cancel** stops it.
   Choose which Image Input receives them (when the tree has several) and an output folder. Each
   result is saved as the source's name plus the **Name suffix** (`_edit` by default). Sizes in
   pixels (blur radius, offsets) apply to every photo, and each result keeps its own source's size.
-- **Format:** PNG, or JPEG with a quality setting. PNGs drop the alpha channel when the image is
-  fully opaque.
-- **Size:** Original, **Long edge** (pixels), or **Percent**. Exports are only ever made smaller.
+- **Format:**
+  - **PNG** and **TIFF** (8 or 16 bit) and **JPEG** (with a quality setting) are display images:
+    the view transform is applied, as in the viewer, and they are tagged sRGB (PNG's sRGB chunk,
+    an embedded sRGB ICC profile in JPEG and TIFF), so other apps show the same colours.
+  - 16 bit keeps smooth gradients for further editing elsewhere; 8 bit is for sharing.
+  - **OpenEXR** (Float (Half) or Float (Full)) keeps the scene-linear values without the view
+    transform, as Blender does, including values above 1. Use it to hand the image to another
+    compositor or grading tool. Half is about a third the size of Full and is plenty for photos.
+  - **JPEG** keeps the source photo's EXIF data (camera, lens, exposure, date), from JPEG and
+    camera RAW sources. The orientation is reset, because the pixels are already upright.
+  - Alpha is dropped when the image is fully opaque.
+- **Size:** Original, **Long edge** (pixels), or **Percent**. Exports are only ever made smaller,
+  with a sharp Lanczos filter in linear light (the same as Blender's and darktable's high-quality
+  resize), so fine detail stays crisp without halos.
 
 The settings and folders are saved with the project. From the command line,
-`NodeLab.exe --batch project.nlproj outDir [--jpg] a.jpg b.jpg ...` does the same batch without the
-window.
+`NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr] [--depth N] a.jpg b.jpg ...`
+does the same batch without the window, and `NodeLab.exe --render project.nlproj out.tif
+[--depth 16]` renders one image (the extension picks the format; `--depth 32` for full-float EXR).
 
 ## Recipes
 

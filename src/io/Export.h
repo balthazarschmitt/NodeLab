@@ -8,13 +8,19 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/ColorManagement.h"
 #include "core/Image.h"
+#include "io/ImageWrite.h"
+
+class Graph;
 
 // Output options shared by single exports and batches (File > Export).
 struct ExportSettings {
-    enum Format { PNG = 0, JPEG = 1 };
+    enum Format { PNG = 0, JPEG = 1, TIFF = 2, EXR = 3 };  // FileFormat's order
     enum Size { Original = 0, LongEdge = 1, Percent = 2 };
     int format = PNG;
+    // Bits per channel: 8 or 16 for PNG and TIFF, 16 (half) or 32 (full float) for OpenEXR.
+    int depth = 8;
     int jpegQuality = 92;
     int sizeMode = Original;
     int longEdge = 2048;    // px, for LongEdge
@@ -23,13 +29,31 @@ struct ExportSettings {
     // Batch naming: <source name><suffix>.<ext> in the output folder.
     std::string suffix = "_edit";
 
-    const char* extension() const { return format == JPEG ? ".jpg" : ".png"; }
+    const char* extension() const { return formatExtension(FileFormat(format)); }
+    // The writer options for an image of w x h exported from `source` (for its EXIF).
+    SaveOptions saveOptions(const std::string& source, int w, int h) const;
     nlohmann::json toJson() const;
     void fromJson(const nlohmann::json& j);
 };
 
-// Applies the size option (box-filter downscale; never enlarges).
-std::shared_ptr<const Image> resizeForExport(const std::shared_ptr<const Image>& img, const ExportSettings& s);
+// Resamples to w x h with a Lanczos-3 filter (widened when downscaling, so it also antialiases).
+// Colour is filtered premultiplied by alpha, and each pass clamps to the range of the pixels it
+// reads, so edges stay sharp without dark or bright halos. Filter linear-light values: with
+// srgbEncoded the values are decoded first and re-encoded after.
+std::shared_ptr<Image> resizeLanczos(const Image& src, int w, int h, bool srgbEncoded = false);
+
+// Applies the size option (Lanczos-3 in linear light; never enlarges). srgbEncoded: the values
+// are sRGB-encoded (legacy projects).
+std::shared_ptr<const Image> resizeForExport(const std::shared_ptr<const Image>& img, const ExportSettings& s,
+                                             bool srgbEncoded = false);
+
+// Saves a rendered image the way Blender does: display formats (PNG, JPEG, TIFF) get the view
+// transform; OpenEXR stays scene-linear (legacy projects' sRGB-encoded values are decoded first).
+bool saveRendered(const std::string& pathU8, const std::shared_ptr<const Image>& scene, const ColorManagement& cm,
+                  const SaveOptions& opt, std::string& err);
+
+// The file whose metadata exports carry: the first Image Input with a file, or "".
+std::string metadataSource(const Graph& g);
 
 // Output path for one batch source: outDir/<stem><suffix><ext>. Never returns the source itself.
 std::string batchOutputPath(const std::string& sourceU8, const std::string& outDirU8, const ExportSettings& s);

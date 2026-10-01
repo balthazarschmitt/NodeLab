@@ -20,4 +20,13 @@ bool isRawPath(const std::string& pathU8);
 std::shared_ptr<Image> load(const std::string& pathU8, std::string& err, int highlights, bool halfSize,
                             int* fullW = nullptr, int* fullH = nullptr);
 
+// Capture settings, for the EXIF of exported JPEGs. Zero / empty where the file has none.
+struct Metadata {
+    std::string make, model, lens;
+    float exposureTime = 0, fNumber = 0, iso = 0, focalLength = 0;  // seconds, f/, ISO, mm
+    long long timestamp = 0;                                         // capture time (time_t)
+};
+// Reads only the metadata (no decoding). False when the file can't be opened as a RAW.
+bool readMetadata(const std::string& pathU8, Metadata& out);
+
 }  // namespace raw

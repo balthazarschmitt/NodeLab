@@ -6,6 +6,7 @@
 #include <imgui.h>
 
 #include "io/ImageIO.h"
+#include "io/ImageWrite.h"
 #include "io/Paths.h"
 #include "nodes/group/GroupNodes.h"
 #include "ui/ColorDisplay.h"
@@ -116,8 +117,12 @@ bool editParam(Node& node, int i, float width, bool compact) {
         case ParamKind::SavePath: {
             std::string path = node.paramS(i);
             if (ImGui::Button("Save as...")) {
-                if (auto p = saveFileDialog("File Output", "PNG image|*.png|JPEG image|*.jpg", "png")) {
+                if (auto p = saveFileDialog("File Output", kSaveImageFilter, "png")) {
                     node.params[i] = *p;
+                    // File Output: the type picked in the dialog sets the Format.
+                    const auto& descs = node.info().params;
+                    if (size_t(i) + 1 < descs.size() && descs[i + 1].name == "Format")
+                        node.params[i + 1] = int(formatFromPath(*p));
                     changed = true;
                 }
             }

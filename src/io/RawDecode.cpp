@@ -98,4 +98,22 @@ std::shared_ptr<Image> load(const std::string& pathU8, std::string& err, int hig
     return img;
 }
 
+bool readMetadata(const std::string& pathU8, Metadata& out) {
+    std::ifstream f(u8ToPath(pathU8), std::ios::binary);
+    if (!f) return false;
+    std::vector<char> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    auto lr = std::make_unique<LibRaw>();
+    if (lr->open_buffer(bytes.data(), bytes.size()) != LIBRAW_SUCCESS) return false;
+    const auto& d = lr->imgdata;
+    out.make = d.idata.make;
+    out.model = d.idata.model;
+    out.lens = d.lens.Lens;
+    out.exposureTime = d.other.shutter;
+    out.fNumber = d.other.aperture;
+    out.iso = d.other.iso_speed;
+    out.focalLength = d.other.focal_len;
+    out.timestamp = static_cast<long long>(d.other.timestamp);
+    return true;
+}
+
 }  // namespace raw

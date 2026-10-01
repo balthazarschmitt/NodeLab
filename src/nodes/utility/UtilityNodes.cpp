@@ -7,6 +7,8 @@
 #include "core/ColorMath.h"
 #include "core/Curve.h"
 #include "graph/Evaluator.h"
+#include "io/Exif.h"
+#include "io/Export.h"
 #include "io/ImageIO.h"
 #include "io/Paths.h"
 #include "nodes/NodeUtil.h"
@@ -273,9 +275,25 @@ public:
     NODELAB_NODE({"util.file_output", "File Output", "Utility",
                   {{"Image", PinType::Image}},
                   {},
-                  {ParamDesc::SavePath("File"), ParamDesc::Enum("Format", 0, {"PNG", "JPEG"}), ParamDesc::Bool("Enabled", true)}})
+                  {ParamDesc::SavePath("File"), ParamDesc::Enum("Format", 0, {"PNG", "JPEG", "TIFF", "OpenEXR"}),
+                   ParamDesc::Bool("Enabled", true), ParamDesc::Enum("Color Depth", 0, {"8", "16"}),
+                   ParamDesc::Enum("EXR Depth", 0, {"Float (Half)", "Float (Full)"}), ParamDesc::Int("Quality", 95, 1, 100)}})
     // Sink: files are written by File > Export (full resolution), not during previews.
     void evaluate(EvalContext&, const std::vector<Value>&, std::vector<Value>&) override {}
+    // Like Blender's File Output, show only the chosen format's settings.
+    bool paramHidden(int i) const override {
+        const auto f = FileFormat(paramI(1));
+        return (i == 3 && f != FileFormat::PNG && f != FileFormat::TIFF) || (i == 4 && f != FileFormat::EXR) ||
+               (i == 5 && f != FileFormat::JPEG);
+    }
+    SaveOptions saveOptions(const Graph& g, int w, int h) const {
+        SaveOptions o;
+        o.format = FileFormat(std::clamp(paramI(1), 0, 3));
+        o.depth = o.format == FileFormat::EXR ? (paramI(4) == 1 ? 32 : 16) : (paramI(3) == 1 ? 16 : 8);
+        o.jpegQuality = paramI(5);
+        if (o.format == FileFormat::JPEG) o.exif = exif::exportBlock(metadataSource(g), w, h);
+        return o;
+    }
 };
 
 }  // namespace
@@ -300,13 +318,15 @@ std::vector<std::string> writeFileOutputs(const Graph& g, Evaluator& ev, EvalCon
         }
         // Make the extension match the chosen format.
         auto p = u8ToPath(path);
-        p.replace_extension(n->paramI(1) == 1 ? ".jpg" : ".png");
+        p.replace_extension(formatExtension(FileFormat(std::clamp(n->paramI(1), 0, 3))));
         path = pathToU8(p);
         try {
-            ImagePtr img = colormgmt::displayImage(ev.evaluateDisplay(g, id, ctx), ctx.colorManagement);
+            ImagePtr img = ev.evaluateDisplay(g, id, ctx);
             std::string err;
             if (!img) report.push_back("File Output: nothing connected (" + path + ")");
-            else if (!saveImage(path, *img, err)) report.push_back("File Output: " + err + " (" + path + ")");
+            else if (!saveRendered(path, img, ctx.colorManagement,
+                                   static_cast<const FileOutputNode&>(*n).saveOptions(g, img->w, img->h), err))
+                report.push_back("File Output: " + err + " (" + path + ")");
             else report.push_back("Wrote " + path);
         } catch (const EvalCancelled&) {
             throw;

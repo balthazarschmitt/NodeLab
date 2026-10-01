@@ -5,6 +5,22 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 ## Unreleased
 
+## 0.10.0 (2026-09-30)
+
+- **Export formats:** 16-bit PNG, 8/16-bit TIFF (Deflate) and **OpenEXR** (half or full float),
+  in the Export window, File Output nodes and the command line.
+  - PNG, JPEG and TIFF get the view transform and are tagged sRGB (PNG sRGB chunk; ICC profile in
+    JPEG and TIFF).
+  - OpenEXR stays scene-linear, as in Blender, and keeps values above 1.
+- **EXIF in JPEG exports**, copied from JPEG sources or built from camera RAW metadata (camera,
+  lens, exposure, ISO, date). The orientation is reset to upright.
+- **Lanczos resizing in linear light** for smaller exports, replacing the box filter.
+- PNG, TIFF and EXR compress with zlib in parallel: 8-bit PNGs are about a third smaller and
+  16-bit PNGs export about 5x faster.
+- The Export window's file name follows the chosen format.
+- Command line: `--render out.tif|out.exr [--depth N]`; `--batch` takes `--tif`, `--exr` and
+  `--depth N`.
+
 ## 0.9.0 (2026-09-30)
 
 - **Camera RAW files** (CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2 and more) via LibRaw:

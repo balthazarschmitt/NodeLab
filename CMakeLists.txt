@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 # The app version. Bump it (and CHANGELOG.md) when a feature set lands; see CLAUDE.md.
-project(NodeLab VERSION 0.9.0 LANGUAGES C CXX)
+project(NodeLab VERSION 0.10.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -60,7 +60,15 @@ FetchContent_Declare(libraw
     GIT_SHALLOW TRUE
     SOURCE_SUBDIR _none)
 
-FetchContent_MakeAvailable(glfw json imgui stb tinyexpr libraw)
+# zlib compresses PNG, TIFF and OpenEXR exports (stb's deflate is single-threaded and fixed-Huffman
+# only). Built from its sources below, like LibRaw, to keep its install and example targets out.
+FetchContent_Declare(zlib
+    GIT_REPOSITORY https://github.com/madler/zlib.git
+    GIT_TAG v1.3.1
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR _none)
+
+FetchContent_MakeAvailable(glfw json imgui stb tinyexpr libraw zlib)
 
 find_package(OpenGL REQUIRED)
 
@@ -174,6 +182,20 @@ if(WIN32)
     target_link_libraries(libraw PUBLIC ws2_32)
 endif()
 
+add_library(zlib STATIC
+    ${zlib_SOURCE_DIR}/adler32.c
+    ${zlib_SOURCE_DIR}/compress.c
+    ${zlib_SOURCE_DIR}/crc32.c
+    ${zlib_SOURCE_DIR}/deflate.c
+    ${zlib_SOURCE_DIR}/inffast.c
+    ${zlib_SOURCE_DIR}/inflate.c
+    ${zlib_SOURCE_DIR}/inftrees.c
+    ${zlib_SOURCE_DIR}/trees.c
+    ${zlib_SOURCE_DIR}/uncompr.c
+    ${zlib_SOURCE_DIR}/zutil.c)
+target_include_directories(zlib PUBLIC ${zlib_SOURCE_DIR})
+target_compile_options(zlib PRIVATE -w)
+
 add_library(stb INTERFACE)
 target_include_directories(stb INTERFACE ${stb_SOURCE_DIR})
 
@@ -220,6 +242,7 @@ add_library(nodelab_core STATIC
     src/graph/NodeRegistry.cpp
     src/graph/Evaluator.cpp
     src/io/ImageIO.cpp
+    src/io/ImageWrite.cpp
     src/io/RawDecode.cpp
     src/io/Exif.cpp
     src/io/ImageCache.cpp
@@ -240,7 +263,7 @@ add_library(nodelab_core STATIC
     src/nodes/utility/UtilityNodes.cpp)
 target_include_directories(nodelab_core PUBLIC src)
 add_dependencies(nodelab_core nodelab_version)
-target_link_libraries(nodelab_core PUBLIC nlohmann_json::nlohmann_json stb tinyexpr libraw)
+target_link_libraries(nodelab_core PUBLIC nlohmann_json::nlohmann_json stb tinyexpr libraw zlib)
 if(WIN32)
     target_compile_definitions(nodelab_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
@@ -285,7 +308,7 @@ if(NODELAB_BUILD_TESTS)
     FetchContent_MakeAvailable(doctest)
 
     enable_testing()
-    add_executable(nodelab_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp tests/test_groups.cpp tests/test_nodes2.cpp tests/test_version.cpp tests/test_guide.cpp tests/test_layout.cpp tests/test_export.cpp tests/test_develop.cpp tests/test_ir_tools.cpp tests/test_expression_vm.cpp tests/test_parallel.cpp tests/test_colorpipe.cpp tests/test_develop_linear.cpp tests/test_raw_exif.cpp)
+    add_executable(nodelab_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp tests/test_groups.cpp tests/test_nodes2.cpp tests/test_version.cpp tests/test_guide.cpp tests/test_layout.cpp tests/test_export.cpp tests/test_develop.cpp tests/test_ir_tools.cpp tests/test_expression_vm.cpp tests/test_parallel.cpp tests/test_colorpipe.cpp tests/test_develop_linear.cpp tests/test_raw_exif.cpp tests/test_image_write.cpp)
     target_include_directories(nodelab_tests PRIVATE ${doctest_SOURCE_DIR})
     target_link_libraries(nodelab_tests PRIVATE nodelab_core)
     nodelab_allow_relink(nodelab_tests)

@@ -22,7 +22,7 @@ build\nodelab_tests.exe
     renames the running exe to `NodeLab.old-<timestamp>.exe`, because Windows allows renaming a
     running exe but not overwriting it. The next build deletes old copies that are no longer running.
   - Never kill the user's NodeLab process.
-- **Dependencies:** FetchContent pulls glfw, imgui (v1.91.8-docking), nlohmann/json, stb, tinyexpr,
+- **Dependencies:** FetchContent pulls glfw, imgui (v1.91.8-docking), nlohmann/json, stb, tinyexpr, zlib,
   LibRaw (0.21.3) and doctest.
   - LibRaw has no CMake build; `CMakeLists.txt` lists its sources (from its `Makefile.dist`). It is
     built with OpenMP, forced on with `LIBRAW_FORCE_OPENMP` because LibRaw disables OpenMP for MinGW.
@@ -62,7 +62,8 @@ build\nodelab_tests.exe
     (`cmake/EmbedText.cmake`) and shown by Help > Guide.
 - **Node list:** `NodeLab.exe --list-nodes` prints every node with its pins and params.
 - **Headless render:** `NodeLab.exe --render project.nlproj out.png` renders at full resolution and
-  also writes File Output nodes.
+  also writes File Output nodes. The extension picks the format (.png/.jpg/.tif/.exr), and
+  `--depth 16` (or 32 for full-float EXR) sets the bit depth.
 - **Benchmark:** `NodeLab.exe --benchmark project.nlproj [--full] [--runs N]` prints the median ms
   per node. Use it before and after performance work.
 - **Screenshot of the UI:** `NodeLab.exe project.nlproj --screenshot shot.png`.
@@ -84,7 +85,8 @@ src/core      Image/Channel/Value types + conversions, ColorMath, ColorScience (
 src/graph     Node (params, flags), Graph (links, frames, JSON), Evaluator (+AsyncEvaluator), NodeRegistry
 src/nodes     one file per family: io, color, math (Mix), converter (+Expression), filter, transform,
               matte, texture, utility, group; ImageOps (sampling, box blur, distance transform)
-src/io        image load/save (stb), RawDecode (LibRaw), Exif (JPEG orientation), ImageCache (proxy only;
+src/io        image load (stb), ImageWrite (PNG/JPEG/TIFF/EXR, ICC, parallel zlib; Tiff.h IFD writer),
+              RawDecode (LibRaw), Exif (orientation, export EXIF), Export (Lanczos resize), ImageCache (proxy only;
               full-res decoded on demand; RAW proxies from a half-size decode), project files
 src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (custom canvas), Inspector,
               GuideWindow (renders the embedded GUIDE.md), Eyedropper (pick state),

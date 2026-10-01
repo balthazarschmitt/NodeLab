@@ -8,6 +8,7 @@
 #include "core/Version.h"
 #include "graph/Evaluator.h"
 #include "graph/NodeRegistry.h"
+#include "io/Exif.h"
 #include "io/Export.h"
 #include "io/ImageCache.h"
 #include "io/ImageIO.h"
@@ -21,8 +22,10 @@
 #include <windows.h>
 #endif
 
-// NodeLab.exe --render project.nlproj out.png  : evaluate at full resolution without a window.
-static int renderHeadless(const std::string& project, const std::string& outPath) {
+// NodeLab.exe --render project.nlproj out.png [--depth N] : evaluate at full resolution without a
+// window. The extension picks the format (.png, .jpg, .tif, .exr); --depth 16 for 16-bit PNG/TIFF,
+// 32 for full-float EXR.
+static int renderHeadless(const std::string& project, const std::string& outPath, int depth) {
     Graph g;
     nlohmann::json ui;
     std::string err;
@@ -47,8 +50,11 @@ static int renderHeadless(const std::string& project, const std::string& outPath
             std::fprintf(stderr, "Output node produced no image\n");
             return 1;
         }
-        img = colormgmt::displayImage(img, ctx.colorManagement);
-        if (!saveImage(outPath, *img, err)) {
+        SaveOptions opt;
+        opt.format = formatFromPath(outPath);
+        opt.depth = depth;
+        if (opt.format == FileFormat::JPEG) opt.exif = exif::exportBlock(metadataSource(g), img->w, img->h);
+        if (!saveRendered(outPath, img, ctx.colorManagement, opt, err)) {
             std::fprintf(stderr, "save failed: %s\n", err.c_str());
             return 1;
         }
@@ -114,8 +120,9 @@ static int benchmarkHeadless(const std::string& project, bool full, int runs) {
     return 0;
 }
 
-// NodeLab.exe --batch project.nlproj outDir [--jpg] in1 in2 ... : runs each source image through the
-// project (fed into its first Image Input) and writes outDir/<name>_edit.png (or .jpg).
+// NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr] [--depth N] in1 in2 ... : runs
+// each source image through the project (fed into its first Image Input) and writes
+// outDir/<name>_edit.<ext>. Unset options come from the project's Export settings.
 static int batchHeadless(const std::string& project, const std::string& outDir, std::vector<std::string> args) {
     Graph g;
     nlohmann::json ui;
@@ -127,12 +134,17 @@ static int batchHeadless(const std::string& project, const std::string& outDir, 
     ExportSettings s;
     if (auto e = ui.find("export"); e != ui.end()) s.fromJson(*e);
     std::vector<ExportItem> items;
-    for (const std::string& a : args) {
+    std::vector<std::string> sources;
+    for (size_t i = 0; i < args.size(); ++i) {
+        const std::string& a = args[i];
         if (a == "--jpg") s.format = ExportSettings::JPEG;
         else if (a == "--png") s.format = ExportSettings::PNG;
+        else if (a == "--tif") s.format = ExportSettings::TIFF;
+        else if (a == "--exr") s.format = ExportSettings::EXR;
+        else if (a == "--depth" && i + 1 < args.size()) s.depth = std::atoi(args[++i].c_str());
+        else if (a.rfind("--", 0) != 0) sources.push_back(a);
     }
-    for (const std::string& a : args)
-        if (a.rfind("--", 0) != 0) items.push_back({a, batchOutputPath(a, outDir, s)});
+    for (const std::string& a : sources) items.push_back({a, batchOutputPath(a, outDir, s)});
     const int input = g.firstOfType(ImageInputNode::staticInfo().type);
     if (!input || items.empty()) {
         std::fprintf(stderr, input ? "no source images given\n" : "project has no Image Input node\n");
@@ -194,7 +206,10 @@ int main(int argc, char** argv) {
     // Note: argv is in the ANSI code page on Windows; fine for ASCII paths in headless mode.
     if (argc >= 4 && std::string(argv[1]) == "--render") {
         attachParentConsole();
-        return renderHeadless(argv[2], argv[3]);
+        int depth = 8;
+        for (int i = 4; i + 1 < argc; ++i)
+            if (std::string(argv[i]) == "--depth") depth = std::atoi(argv[i + 1]);
+        return renderHeadless(argv[2], argv[3], depth);
     }
 
     if (argc >= 3 && std::string(argv[1]) == "--benchmark") {

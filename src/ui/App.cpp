@@ -16,6 +16,7 @@
 #include "core/Guide.h"
 #include "core/Version.h"
 #include "io/ImageIO.h"
+#include "io/ImageWrite.h"
 #include "io/Paths.h"
 #include "io/ProjectFile.h"
 #include "nodes/group/GroupNodes.h"
@@ -33,7 +34,6 @@
 namespace fs = std::filesystem;
 
 static const char* kProjectFilter = "NodeLab project (*.nlproj)|*.nlproj|All files|*.*";
-static const char* kExportFilter = "PNG image|*.png|JPEG image|*.jpg";
 
 static bool isImageFile(const std::filesystem::path& p) { return isImageFile(pathToU8(p)); }
 static const char* kDockName = "NodeLabDockSpace";
@@ -1110,10 +1110,8 @@ void App::drawExportWindow() {
             ImGui::TextUnformatted("Renders the Output node at full resolution.");
             ImGui::TextUnformatted("File");
             if (pathField("##exportPath", exportPath_, sizeof(exportPath_)))
-                if (auto p = saveFileDialog("Export result", kExportFilter, es.format == ExportSettings::JPEG ? "jpg" : "png")) {
-                    std::string ext = pathToU8(u8ToPath(*p).extension());
-                    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-                    es.format = (ext == ".jpg" || ext == ".jpeg") ? ExportSettings::JPEG : ExportSettings::PNG;
+                if (auto p = saveFileDialog("Export result", kSaveImageFilter, es.extension() + 1)) {
+                    es.format = int(formatFromPath(*p));
                     std::snprintf(exportPath_, sizeof(exportPath_), "%s", p->c_str());
                 }
             ImGui::EndTabItem();
@@ -1192,11 +1190,22 @@ void App::drawExportWindow() {
 
     ImGui::SeparatorText("Format");
     ImGui::SetNextItemWidth(160);
-    ImGui::Combo("##format", &es.format, "PNG\0JPEG\0");
+    // The path field follows the format, so what it shows is the file that gets written.
+    if (ImGui::Combo("##format", &es.format, "PNG\0JPEG\0TIFF\0OpenEXR\0") && exportPath_[0])
+        std::snprintf(exportPath_, sizeof(exportPath_), "%s", withExt(exportPath_).c_str());
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("PNG, JPEG and TIFF are display images (view transform applied, tagged sRGB).\n"
+                          "OpenEXR keeps the scene-linear values, as Blender does.");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-FLT_MIN);
     if (es.format == ExportSettings::JPEG) {
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::SliderInt("##quality", &es.jpegQuality, 1, 100, "Quality %d");
+    } else {
+        // Blender's Color Depth: 8/16 bits for PNG and TIFF, half or full float for OpenEXR.
+        const bool exr = es.format == ExportSettings::EXR;
+        int hi = formatDepth(FileFormat(es.format), es.depth) > (exr ? 16 : 8) ? 1 : 0;
+        if (ImGui::Combo("##depth", &hi, exr ? "Float (Half)\0Float (Full)\0" : "8 bit\00016 bit\0"))
+            es.depth = exr ? (hi ? 32 : 16) : (hi ? 16 : 8);
     }
     ImGui::SetNextItemWidth(160);
     ImGui::Combo("##size", &es.sizeMode, "Original size\0Long edge\0Percent\0");

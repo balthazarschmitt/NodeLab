@@ -8,7 +8,7 @@ glitch/experimental looks.
 
 Requires CMake ≥ 3.24 and a C++20 compiler. CLion's bundled MinGW toolchain works out of the box:
 open the folder in CLion, pick the `NodeLab` target, Run. Dependencies (GLFW, Dear ImGui, imnodes,
-nlohmann/json, stb, tinyexpr, LibRaw, doctest) are downloaded by CMake on first configure.
+nlohmann/json, stb, tinyexpr, LibRaw, zlib, doctest) are downloaded by CMake on first configure.
 
 LibRaw (camera RAW decoding) is used under its CDDL 1.0 licence option
 (https://github.com/LibRaw/LibRaw/blob/master/LICENSE.CDDL). It is built with OpenMP and linked
@@ -40,9 +40,10 @@ running copy is renamed to `NodeLab.old-*.exe` and deleted by a later build once
 Version: `NodeLab.exe --version` (also in the window title, Help menu and the exe's Properties).
 See [CHANGELOG.md](CHANGELOG.md).
 
-Headless render: `NodeLab.exe --render project.nlproj out.png`
-Headless batch: `NodeLab.exe --batch project.nlproj outDir [--jpg] a.jpg b.jpg ...` (each source goes
-into the project's first Image Input and is saved as `outDir\<name>_edit.png`)
+Headless render: `NodeLab.exe --render project.nlproj out.png [--depth 16]` (the extension picks
+PNG, JPEG, TIFF or OpenEXR; `--depth 32` for full-float EXR)
+Headless batch: `NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr] [--depth N] a.jpg b.jpg ...`
+(each source goes into the project's first Image Input and is saved as `outDir\<name>_edit.<ext>`)
 Benchmark: `NodeLab.exe --benchmark project.nlproj [--full] [--runs N]` (median ms per node)
 Screenshot of the UI (debug aid): `NodeLab.exe project.nlproj --screenshot shot.png`
 Scripted UI test (feeds input straight to ImGui, ignores the real mouse; see `src/ui/UiScript.h`):
@@ -93,7 +94,7 @@ dark sky (see Help > Guide > Recipes).
 | Histogram / clipping | Result toolbar, or H / J with the mouse over the Result: RGB histogram, and clipped highlights in red and crushed shadows in blue |
 | On-image controls | Select a Crop, gradient, shape or Brush Mask node and edit it on the Result: drag handles; Crop shows the whole frame (drag outside to straighten); Brush paints, Alt erases, `[` `]` size; O toggles the red mask overlay |
 | Import image | File > Import Image, or drop a file on the window |
-| Export | File > Export (Ctrl+E) opens the Export window: renders in the background with a progress bar and Cancel. Format (PNG/JPEG + quality), size (original, long edge, percent) |
+| Export | File > Export (Ctrl+E) opens the Export window: renders in the background with a progress bar and Cancel. Format (PNG/TIFF 8 or 16 bit, JPEG + quality with EXIF, OpenEXR half/full float scene-linear), size (original, long edge, percent; Lanczos in linear light) |
 | Batch | Export window → Batch: add files or a folder (or drop them on the window), pick the Image Input they feed and an output folder; each result is saved as `<name><suffix>` |
 
 **Wire types**
@@ -123,7 +124,7 @@ layout is saved per user in `%APPDATA%\NodeLab\layout.ini`.
 | Transform | Transform, Flip, Crop (straighten, aspect presets, on-image frame), Lens Correction (distortion, fringing, vignetting), Lens Distortion (with chromatic dispersion), Displace, Map UV, Corner Pin |
 | Matte | Box Mask, Ellipse Mask, Radial Gradient, Linear Gradient, Brush Mask (painted on the Result), Channel Key, Luminance Key, Difference Key, Distance Key, Chroma Key, Color Spill, Double Edge Mask |
 | Texture | Noise, Voronoi, Gradient, Wave, Checker, White Noise |
-| Utility | Reroute, Switch, Split (compare), Image Info, File Output (written on single Export / File > Write File Outputs / --render) |
+| Utility | Reroute, Switch, Split (compare), Image Info, File Output (PNG/JPEG/TIFF/OpenEXR; written on single Export / File > Write File Outputs / --render) |
 | Group | Groups (Ctrl+G) with Group Input / Group Output inside |
 
 Sizes in pixels (blur radius, offsets, glare size) refer to the full-resolution image; the preview

@@ -13,6 +13,7 @@
 #include "graph/NodeRegistry.h"
 #include "nodes/group/GroupNodes.h"
 #include "io/ImageIO.h"
+#include "io/ImageWrite.h"
 #include "io/Paths.h"
 #include "ui/ColorDisplay.h"
 #include "ui/Eyedropper.h"
@@ -586,8 +587,12 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
             std::string path = n.paramS(i);
             std::string label = path.empty() ? "Save as..." : pathToU8(u8ToPath(path).filename());
             if (canInteract && button()) {
-                if (auto p = saveFileDialog("File Output", "PNG image|*.png|JPEG image|*.jpg", "png")) {
+                if (auto p = saveFileDialog("File Output", kSaveImageFilter, "png")) {
                     n.params[i] = *p;
+                    // File Output: the type picked in the dialog sets the Format.
+                    const auto& descs = n.info().params;
+                    if (size_t(i) + 1 < descs.size() && descs[i + 1].name == "Format")
+                        n.params[i + 1] = int(formatFromPath(*p));
                     changed = true;
                 }
             }

@@ -4,57 +4,174 @@
 #include <fstream>
 #include <vector>
 
+#include <algorithm>
+#include <cmath>
+#include <ctime>
+
 #include "core/Parallel.h"
+#include "core/Version.h"
 #include "io/Paths.h"
+#include "io/RawDecode.h"
+#include "io/Tiff.h"
 
 namespace exif {
 
 namespace {
 
-// Orientation from a TIFF block (the payload of the Exif APP1 segment after "Exif\0\0").
-int tiffOrientation(const uint8_t* t, size_t n) {
-    if (n < 8) return 1;
-    const bool le = t[0] == 'I' && t[1] == 'I';
-    if (!le && !(t[0] == 'M' && t[1] == 'M')) return 1;
-    auto u16 = [&](size_t o) -> unsigned { return le ? t[o] | t[o + 1] << 8 : t[o] << 8 | t[o + 1]; };
-    auto u32 = [&](size_t o) -> uint32_t {
+// Reads and patches a TIFF block (the payload of the Exif APP1 segment after "Exif\0\0") in
+// either byte order.
+struct TiffView {
+    uint8_t* t;
+    size_t n;
+    bool le = true;
+
+    bool valid() {
+        if (n < 8) return false;
+        le = t[0] == 'I' && t[1] == 'I';
+        return le || (t[0] == 'M' && t[1] == 'M');
+    }
+    unsigned u16(size_t o) const { return le ? t[o] | t[o + 1] << 8 : t[o] << 8 | t[o + 1]; }
+    uint32_t u32(size_t o) const {
         return le ? uint32_t(t[o]) | uint32_t(t[o + 1]) << 8 | uint32_t(t[o + 2]) << 16 | uint32_t(t[o + 3]) << 24
                   : uint32_t(t[o]) << 24 | uint32_t(t[o + 1]) << 16 | uint32_t(t[o + 2]) << 8 | uint32_t(t[o + 3]);
-    };
-    const size_t ifd = u32(4);
-    if (ifd + 2 > n) return 1;
-    const unsigned count = u16(ifd);
-    for (unsigned i = 0; i < count; ++i) {
-        const size_t e = ifd + 2 + size_t(i) * 12;
-        if (e + 12 > n) break;
-        if (u16(e) == 0x0112) {  // Orientation, SHORT
-            const unsigned v = u16(e + 8);
-            return v >= 1 && v <= 8 ? int(v) : 1;
+    }
+    void set16(size_t o, unsigned v) {
+        t[o + (le ? 0 : 1)] = uint8_t(v);
+        t[o + (le ? 1 : 0)] = uint8_t(v >> 8);
+    }
+    void set32(size_t o, uint32_t v) {
+        for (int i = 0; i < 4; ++i) t[o + (le ? i : 3 - i)] = uint8_t(v >> (8 * i));
+    }
+    // Calls f(entryOffset, tag) for each entry of the IFD at `ifd`; returns the offset of its
+    // next-IFD pointer, or 0 when the IFD runs off the block.
+    template <class F>
+    size_t eachEntry(size_t ifd, F&& f) {
+        if (ifd < 8 || ifd + 2 > n) return 0;
+        const unsigned count = u16(ifd);
+        if (ifd + 2 + size_t(count) * 12 + 4 > n) return 0;
+        for (unsigned i = 0; i < count; ++i) {
+            const size_t e = ifd + 2 + size_t(i) * 12;
+            f(e, u16(e));
+        }
+        return ifd + 2 + size_t(count) * 12;
+    }
+};
+
+int tiffOrientation(const uint8_t* t, size_t n) {
+    TiffView v{const_cast<uint8_t*>(t), n};
+    if (!v.valid()) return 1;
+    int o = 1;
+    v.eachEntry(v.u32(4), [&](size_t e, unsigned tag) {
+        if (tag == 0x0112) {  // Orientation, SHORT
+            const unsigned x = v.u16(e + 8);
+            o = x >= 1 && x <= 8 ? int(x) : 1;
+        }
+    });
+    return o;
+}
+
+// The Exif APP1 payload of a JPEG (after "Exif\0\0"), or empty.
+std::vector<uint8_t> jpegExif(const std::string& pathU8) {
+    std::ifstream f(u8ToPath(pathU8), std::ios::binary);
+    if (!f) return {};
+    uint8_t soi[2];
+    if (!f.read(reinterpret_cast<char*>(soi), 2) || soi[0] != 0xFF || soi[1] != 0xD8) return {};
+    // Walk the segments before the image data; EXIF is in an APP1 near the start.
+    for (int guard = 0; guard < 64; ++guard) {
+        uint8_t h[4];
+        if (!f.read(reinterpret_cast<char*>(h), 4) || h[0] != 0xFF) return {};
+        const uint8_t marker = h[1];
+        const size_t len = size_t(h[2]) << 8 | h[3];
+        if (marker == 0xDA || marker == 0xD9 || len < 2) return {};  // start of scan: no EXIF
+        std::vector<uint8_t> seg(len - 2);
+        if (!f.read(reinterpret_cast<char*>(seg.data()), std::streamsize(seg.size()))) return {};
+        if (marker == 0xE1 && seg.size() > 6 && std::equal(seg.begin(), seg.begin() + 6, "Exif\0\0"))
+            return std::vector<uint8_t>(seg.begin() + 6, seg.end());
+    }
+    return {};
+}
+
+bool isJpegPath(const std::string& pathU8) {
+    std::string e = pathToU8(u8ToPath(pathU8).extension());
+    std::transform(e.begin(), e.end(), e.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    return e == ".jpg" || e == ".jpeg";
+}
+
+// x as a fraction with denominator `den` (EXIF RATIONAL).
+void rationalOf(tiff::Ifd& ifd, uint16_t tag, double x, uint32_t den) {
+    ifd.rational(tag, uint32_t(std::lround(x * den)), den);
+}
+
+std::vector<uint8_t> fromRaw(const raw::Metadata& m, int w, int h) {
+    tiff::Ifd ifd0, ex;
+    if (!m.make.empty()) ifd0.ascii(0x010F, m.make);
+    if (!m.model.empty()) ifd0.ascii(0x0110, m.model);
+    ifd0.shorts(0x0112, {1});
+    ifd0.ascii(0x0131, std::string("NodeLab ") + kNodeLabVersion);
+    if (m.timestamp > 0) {
+        // LibRaw turns the camera's local "YYYY:MM:DD HH:MM:SS" into a time_t with mktime, so
+        // localtime gives the same wall-clock time back.
+        std::time_t t = std::time_t(m.timestamp);
+        std::tm tm{};
+        if (localtime_s(&tm, &t) == 0) {
+            char buf[20];
+            std::strftime(buf, sizeof buf, "%Y:%m:%d %H:%M:%S", &tm);
+            ifd0.ascii(0x0132, buf);  // DateTime
+            ex.ascii(0x9003, buf);    // DateTimeOriginal
+            ex.ascii(0x9004, buf);    // DateTimeDigitized
         }
     }
-    return 1;
+    if (m.exposureTime > 0) {
+        if (m.exposureTime < 1.0f) ex.rational(0x829A, 1, uint32_t(std::lround(1.0 / m.exposureTime)));
+        else rationalOf(ex, 0x829A, m.exposureTime, 10);
+    }
+    if (m.fNumber > 0) rationalOf(ex, 0x829D, m.fNumber, 10);
+    if (m.iso > 0) ex.shorts(0x8827, {uint32_t(std::min(m.iso, 65535.0f))});  // ISOSpeedRatings
+    ex.add(0x9000, tiff::Undefined, 4, {'0', '2', '3', '0'});                   // ExifVersion
+    if (m.focalLength > 0) rationalOf(ex, 0x920A, m.focalLength, 10);
+    ex.shorts(0xA001, {1});  // ColorSpace: sRGB
+    ex.longs(0xA002, {uint32_t(w)});
+    ex.longs(0xA003, {uint32_t(h)});
+    if (!m.lens.empty()) ex.ascii(0xA434, m.lens);  // LensModel
+
+    std::vector<uint8_t> out = tiff::header();
+    const uint32_t exOff = ex.write(out);
+    ifd0.longs(0x8769, {exOff});  // ExifIFD pointer
+    tiff::set32(out, 4, ifd0.write(out));
+    return out;
 }
 
 }  // namespace
 
 int jpegOrientation(const std::string& pathU8) {
-    std::ifstream f(u8ToPath(pathU8), std::ios::binary);
-    if (!f) return 1;
-    uint8_t soi[2];
-    if (!f.read(reinterpret_cast<char*>(soi), 2) || soi[0] != 0xFF || soi[1] != 0xD8) return 1;
-    // Walk the segments before the image data; EXIF is in an APP1 near the start.
-    for (int guard = 0; guard < 64; ++guard) {
-        uint8_t h[4];
-        if (!f.read(reinterpret_cast<char*>(h), 4) || h[0] != 0xFF) return 1;
-        const uint8_t marker = h[1];
-        const size_t len = size_t(h[2]) << 8 | h[3];
-        if (marker == 0xDA || marker == 0xD9 || len < 2) return 1;  // start of scan: no EXIF
-        std::vector<uint8_t> seg(len - 2);
-        if (!f.read(reinterpret_cast<char*>(seg.data()), std::streamsize(seg.size()))) return 1;
-        if (marker == 0xE1 && seg.size() > 6 && std::equal(seg.begin(), seg.begin() + 6, "Exif\0\0"))
-            return tiffOrientation(seg.data() + 6, seg.size() - 6);
+    const std::vector<uint8_t> t = jpegExif(pathU8);
+    return tiffOrientation(t.data(), t.size());
+}
+
+std::vector<uint8_t> exportBlock(const std::string& sourceU8, int w, int h) {
+    if (sourceU8.empty()) return {};
+    if (raw::isRawPath(sourceU8)) {
+        raw::Metadata m;
+        return raw::readMetadata(sourceU8, m) ? fromRaw(m, w, h) : std::vector<uint8_t>{};
     }
-    return 1;
+    if (!isJpegPath(sourceU8)) return {};
+    std::vector<uint8_t> t = jpegExif(sourceU8);
+    TiffView v{t.data(), t.size()};
+    if (!v.valid()) return {};
+    size_t exifIfd = 0;
+    const size_t next = v.eachEntry(v.u32(4), [&](size_t e, unsigned tag) {
+        if (tag == 0x0112 && v.u16(e + 2) == tiff::Short) v.set16(e + 8, 1);  // upright
+        if (tag == 0x8769) exifIfd = v.u32(e + 8);
+    });
+    if (!next) return {};
+    v.set32(next, 0);  // unlink IFD1, the thumbnail
+    v.eachEntry(exifIfd, [&](size_t e, unsigned tag) {
+        if (tag != 0xA002 && tag != 0xA003) return;  // PixelXDimension / PixelYDimension
+        const uint32_t val = uint32_t(tag == 0xA002 ? w : h);
+        if (v.u16(e + 2) == tiff::Long) v.set32(e + 8, val);
+        else if (v.u16(e + 2) == tiff::Short && val <= 0xFFFF) v.set16(e + 8, val);
+    });
+    return t;
 }
 
 std::shared_ptr<Image> applyOrientation(const std::shared_ptr<Image>& img, int o) {
