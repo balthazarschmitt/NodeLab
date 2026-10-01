@@ -83,11 +83,11 @@ public:
         sizes(ctx, fr.fullW, fr.fullH, sx, sy);
         if (auto c = std::get_if<GpuChannelPtr>(&v.v)) {
             auto r = std::make_shared<GpuChannel>();
-            r->tex = gpu::boxBlur((*c)->tex, sx * 0.5f, sy * 0.5f), r->w = w, r->h = h;
+            r->tex = gpu::boxBlur((*c)->texture(), sx * 0.5f, sy * 0.5f), r->w = w, r->h = h;
             out[0] = Value(GpuChannelPtr(r));
         } else if (auto i = std::get_if<GpuImagePtr>(&v.v)) {
             auto r = std::make_shared<GpuImage>();
-            r->tex = gpu::boxBlur((*i)->tex, sx * 0.5f, sy * 0.5f), r->w = w, r->h = h;
+            r->tex = gpu::boxBlur((*i)->texture(), sx * 0.5f, sy * 0.5f), r->w = w, r->h = h;
             out[0] = Value(GpuImagePtr(r));
         }
     }

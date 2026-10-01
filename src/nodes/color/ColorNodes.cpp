@@ -1,4 +1,6 @@
 #include "core/ColorMath.h"
+#include <string>
+
 #include "core/Curve.h"
 #include "gpu/PointOp.h"
 #include "nodes/NodeUtil.h"
@@ -166,6 +168,12 @@ public:
             o[3] = p[3];
         });
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpuSplit(ctx, *this, in, out,
+                 "    vec4 c = img0(p);\n    vec3 v = rgbToLab(clampColor(uLinear, c.rgb), !uLinear);\n"
+                 "    out0 = v.x; out1 = v.y; out2 = v.z; out3 = c.a;");
+    }
 };
 
 class CombineLabNode : public Node {
@@ -181,6 +189,12 @@ public:
         combineImage(*this, ctx, in, out, defs, true, [lin](float l, float a, float b, float* d) {
             labToRgb(l, a, b, d[0], d[1], d[2], !lin);
         });
+    }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>&) const override { return true; }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpuCombine(ctx, *this, in, out,
+                   "    vec3 c = labToRgb(vec3(has0 ? par0(p) : 0.5, par1(p), par2(p)), !uLinear);\n"
+                   "    out0 = vec4(clampColor(uLinear, c), has3 ? clamp01(par3(p)) : 1.0);");
     }
 };
 
@@ -208,6 +222,18 @@ public:
                 default: return luminance(p[0], p[1], p[2]);
             }
         })));
+    }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.functions = "const int METHOD = " + std::to_string(paramI(0)) + ";\n";
+        op.body =
+            "vec4 s = img0(p);\n"
+            "if (METHOD == 1) out0 = (s.r + s.g + s.b) / 3.0;\n"
+            "else if (METHOD == 2) out0 = max(s.r, max(s.g, s.b));\n"
+            "else if (METHOD == 3) out0 = rgbToLab(clampColor(uLinear, s.rgb), !uLinear).x;\n"
+            "else out0 = luminance(s.rgb);\n";
+        gpu::runOver(ctx, *this, op, in, out);
     }
 };
 
@@ -239,6 +265,18 @@ public:
             d[3] = s[3];
         })));
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.defaults = {NAN, 0.0f, 0.0f};
+        op.body =
+            "vec4 s = img0(p);\n"
+            "float c = min(par2(p), 0.999);\n"
+            "float slope = (1.0 + c) / (1.0 - c), b = par1(p);\n"
+            "vec3 d = uLinear ? 0.18 * powPos(max(s.rgb, 0.0) / 0.18, vec3(slope)) + b : (s.rgb - 0.5) * slope + 0.5 + b;\n"
+            "out0 = vec4(clampColor(uLinear, d), s.a);\n";
+        gpu::runOver(ctx, *this, op, in, out);
+    }
 };
 
 class SaturationNode : public Node {
@@ -259,6 +297,16 @@ public:
             for (int k = 0; k < 3; ++k) d[k] = clampColor(lin, l + (s[k] - l) * a);
             d[3] = s[3];
         })));
+    }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.defaults = {NAN, 1.0f};
+        op.body =
+            "vec4 s = img0(p);\n"
+            "float l = luminance(s.rgb);\n"
+            "out0 = vec4(clampColor(uLinear, l + (s.rgb - l) * par1(p)), s.a);\n";
+        gpu::runOver(ctx, *this, op, in, out);
     }
 };
 
@@ -281,6 +329,16 @@ public:
             d[3] = s[3];
         })));
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.defaults = {NAN, 0.0f};
+        op.body =
+            "vec4 s = img0(p);\n"
+            "vec3 hsv = rgbToHsv(clampColor(uLinear, s.rgb));\n"
+            "out0 = vec4(hsvToRgb(vec3(hsv.x + par1(p) / 360.0, hsv.yz)), s.a);\n";
+        gpu::runOver(ctx, *this, op, in, out);
+    }
 };
 
 class GammaNode : public Node {
@@ -300,6 +358,15 @@ public:
             for (int k = 0; k < 3; ++k) d[k] = std::pow(clampColor(lin, s[k]), inv);
             d[3] = s[3];
         })));
+    }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.defaults = {NAN, 1.0f};
+        op.body =
+            "vec4 s = img0(p);\n"
+            "out0 = vec4(powPos(clampColor(uLinear, s.rgb), vec3(1.0 / par1(p))), s.a);\n";
+        gpu::runOver(ctx, *this, op, in, out);
     }
 };
 
@@ -324,6 +391,16 @@ public:
             d[3] = s[3];
         })));
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.defaults = {NAN, 0.0f};
+        op.body =
+            "vec4 s = img0(p);\n"
+            "float m = exp2(par1(p));\n"
+            "out0 = vec4(uLinear ? s.rgb * m : clamp01(linearToSrgb(srgbToLinear(clamp01(s.rgb)) * m)), s.a);\n";
+        gpu::runOver(ctx, *this, op, in, out);
+    }
 };
 
 class InvertNode : public Node {
@@ -345,6 +422,16 @@ public:
             }
             d[3] = s[3];
         })));
+    }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.defaults = {NAN, 1.0f};
+        op.body =
+            "vec4 s = img0(p);\n"
+            "vec3 v = clamp01(s.rgb);\n"
+            "out0 = vec4(v + ((1.0 - v) - v) * par1(p), s.a);\n";
+        gpu::runOver(ctx, *this, op, in, out);
     }
 };
 
@@ -383,6 +470,27 @@ public:
             d[3] = p[3];
         })));
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.defaults = {NAN, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
+        // A channel mask rather than an index: GLSL rejects a constant index of -1 even when unreached.
+        const int only = paramI(5) - 1;
+        op.functions = "const bool ONLY = " + std::string(only >= 0 ? "true" : "false") + ";\nconst vec3 MASK = vec3(" +
+                       std::to_string(only == 0) + ", " + std::to_string(only == 1) + ", " + std::to_string(only == 2) +
+                       ");\n";
+        op.body =
+            "vec4 s = img0(p);\n"
+            "float ib = par1(p), iw = par2(p), gm = par3(p), ob = par4(p), ow = par5(p);\n"
+            "vec3 v = clampColor(uLinear, (s.rgb - ib) / max(iw - ib, 1e-4));\n"
+            "v = clampColor(uLinear, ob + powPos(v, vec3(1.0 / gm)) * (ow - ob));\n"
+            "if (ONLY) {\n"
+            "    vec3 d = mix(s.rgb, v, MASK);\n"
+            "    v = d;\n"
+            "}\n"
+            "out0 = vec4(v, s.a);\n";
+        gpu::runOver(ctx, *this, op, in, out);
+    }
 };
 
 class CurvesNode : public Node {
@@ -411,12 +519,34 @@ public:
             d[3] = s[3];
         })));
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.defaults = {NAN, 1.0f};
+        const nlohmann::json& cj = params[1];
+        // Master, then R, G and B, as one table.
+        for (const char* key : {"master", "r", "g", "b"}) {
+            const std::vector<float> t = curveLut(curveFromJson(cj.is_object() && cj.contains(key) ? cj[key] : nlohmann::json()));
+            op.lut.insert(op.lut.end(), t.begin(), t.end());
+        }
+        op.functions = "const int N = " + std::to_string(op.lut.size() / 4) + ";\n";
+        op.body =
+            "vec4 s = img0(p);\n"
+            "float f = par1(p);\n"
+            "vec3 d;\n"
+            "for (int k = 0; k < 3; ++k) {\n"
+            "    float v = lutLookup(0, N, lutLookup(N * (k + 1), N, clamp01(s[k])));\n"
+            "    d[k] = s[k] + (v - s[k]) * f;\n"
+            "}\n"
+            "out0 = vec4(d, s.a);\n";
+        gpu::runOver(ctx, *this, op, in, out);
+    }
 };
 
 
 // ---------------------------------------------------------------- more color spaces
 
-#define SPLIT3_NODE(Cls, type, title, n0, n1, n2, conv)                                                \
+#define SPLIT3_NODE(Cls, type, title, n0, n1, n2, conv, glsl)                                          \
     class Cls : public Node {                                                                          \
     public:                                                                                            \
         NODELAB_NODE({type, title, "Color", {{"Image", PinType::Image}},                               \
@@ -429,9 +559,17 @@ public:
                 o[3] = p[3];                                                                           \
             });                                                                                        \
         }                                                                                              \
+        bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override {           \
+            return gpu::sizedValue(in[0]);                                                             \
+        }                                                                                              \
+        void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override { \
+            gpuSplit(ctx, *this, in, out,                                                              \
+                     "    vec4 c = img0(p);\n    vec3 v = " glsl "(clampColor(uLinear, c.rgb));\n"        \
+                     "    out0 = v.x; out1 = v.y; out2 = v.z; out3 = c.a;");                           \
+        }                                                                                              \
     };
 
-#define COMBINE3_NODE(Cls, type, title, n0, n1, n2, d0, lo1, hi1, d1, lo2, hi2, d2, conv)               \
+#define COMBINE3_NODE(Cls, type, title, n0, n1, n2, d0, lo1, hi1, d1, lo2, hi2, d2, conv, glsl)         \
     class Cls : public Node {                                                                          \
     public:                                                                                            \
         NODELAB_NODE({type, title, "Color",                                                            \
@@ -445,14 +583,23 @@ public:
                 conv(a, b, c, d[0], d[1], d[2]);                                                       \
             });                                                                                        \
         }                                                                                              \
+        bool gpuSupported(const EvalContext&, const std::vector<Value>&) const override { return true; } \
+        void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override { \
+            gpu::PointOp op;                                                                           \
+            resolveSize(in, ctx, op.w, op.h);                                                          \
+            op.defaults = {d0, d1, d2, 1.0f};                                                          \
+            op.body = "    vec3 c = " glsl "(vec3(par0(p), par1(p), par2(p)));\n"                      \
+                      "    out0 = vec4(clampColor(uLinear, c), clamp01(par3(p)));";                    \
+            gpu::runPoint(ctx, *this, op, in, out);                                                    \
+        }                                                                                              \
     };
 
-SPLIT3_NODE(SplitYCbCrNode, "color.split_ycbcr", "Split YCbCr", "Y", "Cb", "Cr", rgbToYCbCr)
-COMBINE3_NODE(CombineYCbCrNode, "color.combine_ycbcr", "Combine YCbCr", "Y", "Cb", "Cr", 0.5f, 0.0f, 1.0f, 0.5f, 0.0f, 1.0f, 0.5f, yCbCrToRgb)
-SPLIT3_NODE(SplitYUVNode, "color.split_yuv", "Split YUV", "Y", "U", "V", rgbToYuv)
-COMBINE3_NODE(CombineYUVNode, "color.combine_yuv", "Combine YUV", "Y", "U", "V", 0.5f, -0.5f, 0.5f, 0.0f, -0.7f, 0.7f, 0.0f, yuvToRgb)
-SPLIT3_NODE(SplitHSLNode, "color.split_hsl", "Split HSL", "H", "S", "L", rgbToHsl)
-COMBINE3_NODE(CombineHSLNode, "color.combine_hsl", "Combine HSL", "H", "S", "L", 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.5f, hslToRgb)
+SPLIT3_NODE(SplitYCbCrNode, "color.split_ycbcr", "Split YCbCr", "Y", "Cb", "Cr", rgbToYCbCr, "rgbToYCbCr")
+COMBINE3_NODE(CombineYCbCrNode, "color.combine_ycbcr", "Combine YCbCr", "Y", "Cb", "Cr", 0.5f, 0.0f, 1.0f, 0.5f, 0.0f, 1.0f, 0.5f, yCbCrToRgb, "yCbCrToRgb")
+SPLIT3_NODE(SplitYUVNode, "color.split_yuv", "Split YUV", "Y", "U", "V", rgbToYuv, "rgbToYuv")
+COMBINE3_NODE(CombineYUVNode, "color.combine_yuv", "Combine YUV", "Y", "U", "V", 0.5f, -0.5f, 0.5f, 0.0f, -0.7f, 0.7f, 0.0f, yuvToRgb, "yuvToRgb")
+SPLIT3_NODE(SplitHSLNode, "color.split_hsl", "Split HSL", "H", "S", "L", rgbToHsl, "rgbToHsl")
+COMBINE3_NODE(CombineHSLNode, "color.combine_hsl", "Combine HSL", "H", "S", "L", 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.5f, hslToRgb, "hslToRgb")
 
 // ---------------------------------------------------------------- grading
 
@@ -496,6 +643,26 @@ public:
             d[3] = s[3];
         })));
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.defaults = {NAN, 1.0f};
+        const nlohmann::json& cj = params[1];
+        for (const char* key : {"h", "s", "v"}) {
+            const std::vector<float> t = curveLut(curveFromJson(cj.is_object() && cj.contains(key) ? cj[key] : nlohmann::json()));
+            op.lut.insert(op.lut.end(), t.begin(), t.end());
+        }
+        op.functions = "const int N = " + std::to_string(op.lut.size() / 3) + ";\n";
+        op.body =
+            "vec4 s = img0(p);\n"
+            "vec3 hsv = rgbToHsv(clampColor(uLinear, s.rgb));\n"
+            "float hu = hsv.x;\n"
+            "float nh = hu + (lutLookup(0, N, hu) - 0.5);\n"
+            "float ns = clamp01(hsv.y * lutLookup(N, N, hu) * 2.0);\n"
+            "float nv = clampColor(uLinear, hsv.z * lutLookup(2 * N, N, hu) * 2.0);\n"
+            "out0 = vec4(s.rgb + (hsvToRgb(vec3(nh, ns, nv)) - s.rgb) * par1(p), s.a);\n";
+        gpu::runOver(ctx, *this, op, in, out);
+    }
 };
 
 class ColorBalanceNode : public Node {
@@ -531,6 +698,26 @@ public:
             d[3] = s[3];
         })));
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.defaults = {NAN, 1.0f};
+        for (int i = 2; i < 8; ++i) {
+            float c[3];
+            paramC(i, c);
+            op.params.insert(op.params.end(), c, c + 3);
+        }
+        op.functions = std::string("const bool CDL = ") + (paramI(1) == 1 ? "true" : "false") + ";\n";
+        op.body =
+            "vec4 s = img0(p);\n"
+            "vec3 c = clampColor(uLinear, s.rgb), v;\n"
+            "vec3 lift = vec3(P[0], P[1], P[2]), gamma = vec3(P[3], P[4], P[5]), gain = vec3(P[6], P[7], P[8]);\n"
+            "vec3 offset = vec3(P[9], P[10], P[11]), power = vec3(P[12], P[13], P[14]), slope = vec3(P[15], P[16], P[17]);\n"
+            "if (CDL) v = powPos(max(c * slope + offset, 0.0), power);\n"
+            "else v = powPos(max(((c - 1.0) * (2.0 - lift) + 1.0) * gain, 0.0), 1.0 / max(gamma, 1e-3));\n"
+            "out0 = vec4(clampColor(uLinear, c + (v - c) * par1(p)), s.a);\n";
+        gpu::runOver(ctx, *this, op, in, out);
+    }
 };
 
 class ToneMapNode : public Node {
@@ -559,6 +746,19 @@ public:
             d[3] = s[3];
         })));
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.params = {std::exp2(paramF(0)), paramF(1)};
+        op.functions = std::string("const bool ACES = ") + (paramI(2) == 1 ? "true" : "false") + ";\n";
+        op.body =
+            "vec4 s = img0(p);\n"
+            "vec3 x = max(s.rgb, 0.0);\n"
+            "x = (uLinear ? x : srgbToLinear(x)) * P[0];\n"
+            "vec3 v = ACES ? (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14) : x * (1.0 + x / (P[1] * P[1])) / (1.0 + x);\n"
+            "out0 = vec4(uLinear ? clamp01(v) : clamp01(linearToSrgb(clamp01(v))), s.a);\n";
+        gpu::runOver(ctx, *this, op, in, out);
+    }
 };
 
 class ConvertColorspaceNode : public Node {
@@ -583,6 +783,20 @@ public:
             }
             d[3] = s[3];
         })));
+    }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.functions = "const int MODE = " + std::to_string(paramI(0)) + ";\n";
+        op.body =
+            "vec4 s = img0(p);\n"
+            "vec3 c = max(s.rgb, 0.0), d;\n"
+            "if (MODE == 1) d = linearToSrgb(c);\n"
+            "else if (MODE == 2) d = powPos(srgbToLinear(c), vec3(1.0 / 2.2));\n"
+            "else if (MODE == 3) d = linearToSrgb(powPos(c, vec3(2.2)));\n"
+            "else d = srgbToLinear(c);\n"
+            "out0 = vec4(d, s.a);\n";
+        gpu::runOver(ctx, *this, op, in, out);
     }
 };
 

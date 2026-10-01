@@ -49,6 +49,32 @@ float band(float v, float lo, float hi, float soft) {
     return smoothstep(lo - soft, lo, v) * (1.0f - smoothstep(hi, hi + soft, v));
 }
 
+// The GPU versions of the two above.
+const char* const kGlslBand = R"(
+float sstep(float e0, float e1, float x) {
+    if (e1 <= e0) return x < e0 ? 0.0 : 1.0;
+    float t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+float band(float v, float lo, float hi, float soft) { return sstep(lo - soft, lo, v) * (1.0 - sstep(hi, hi + soft, v)); }
+)";
+
+// channelOp on the GPU, sized like it (by the first input with pixels; missing inputs read as
+// `defaults`). Inputs that are all sizeless stay on the CPU, where the result is one number.
+bool gpuChannelOpSupported(const std::vector<Value>& in) {
+    for (const Value& v : in)
+        if (gpu::sizedValue(v)) return true;
+    return false;
+}
+
+void gpuChannelOp(EvalContext& ctx, const Node& node, gpu::PointOp op, std::vector<float> defaults,
+                  const std::vector<Value>& in, std::vector<Value>& out) {
+    for (const Value& v : in)
+        if (gpu::sizedValue(v) && v.size(op.w, op.h)) break;
+    op.defaults = std::move(defaults);
+    gpu::runPoint(ctx, node, op, in, out);
+}
+
 // ---------------------------------------------------------------- ramps / keys
 
 class ColorRampNode : public Node {
@@ -146,6 +172,23 @@ public:
         out[0] = Value(ChannelPtr(mask));
         out[1] = Value(ImagePtr(keyed));
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.params = {paramF(0) / 360.0f, paramF(1) / 360.0f, paramF(2), paramF(3), paramF(4), paramF(5), paramF(6)};
+        op.functions = kGlslBand + std::string("const bool INV = ") + (paramB(7) ? "true" : "false") + ";\n";
+        op.body = R"(
+    vec4 s = img0(p);
+    vec3 hsv = rgbToHsv(clamp01(s.rgb));
+    float dh = abs(hsv.x - P[0]);
+    dh = min(dh, 1.0 - dh);
+    float m = band(hsv.y, P[2], P[3], P[6]) * band(hsv.z, P[4], P[5], P[6]);
+    if (P[1] < 0.5) m *= 1.0 - sstep(P[1], P[1] + P[6] * 0.5, dh);
+    if (INV) m = 1.0 - m;
+    out0 = m;
+    out1 = vec4(s.rgb * m, s.a);)";
+        gpu::runOver(ctx, *this, op, in, out);
+    }
 };
 
 // ---------------------------------------------------------------- scalar math
@@ -175,6 +218,21 @@ public:
             return v[3] + t * (v[4] - v[3]);
         });
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpuChannelOpSupported(in); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.functions = kGlslBand + ("const int INTERP = " + std::to_string(paramI(5)) + ";\nconst bool CLAMP = ") +
+                       (paramB(6) ? "true" : "false") + ";\n";
+        op.body = R"(
+    float v0 = par0(p), v1 = par1(p), v2 = par2(p);
+    float t = (v0 - v1) / (abs(v2 - v1) < 1e-9 ? 1e-9 : (v2 - v1));
+    if (CLAMP) t = clamp(t, 0.0, 1.0);
+    if (INTERP == 1) t = sstep(0.0, 1.0, t);
+    else if (INTERP == 2) t = floor(t * 4.0) / 4.0;
+    else if (INTERP == 3) t = floor(t * 8.0) / 8.0;
+    out0 = par3(p) + t * (par4(p) - par3(p));)";
+        gpuChannelOp(ctx, *this, op, {0.5f, 0, 1, 0, 1}, in, out);
+    }
 };
 
 class ClampNode : public Node {
@@ -191,6 +249,12 @@ public:
             return std::clamp(v[0], std::min(v[1], v[2]), std::max(v[1], v[2]));
         });
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpuChannelOpSupported(in); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.body = "    out0 = clamp(par0(p), min(par1(p), par2(p)), max(par1(p), par2(p)));";
+        gpuChannelOp(ctx, *this, op, {0.5f, 0, 1}, in, out);
+    }
 };
 
 class ThresholdNode : public Node {
@@ -206,6 +270,13 @@ public:
         out[0] = channelOp<3>(*this, in, pins, defs, [](const float* v) {
             return smoothstep(v[1] - v[2], v[1] + v[2], v[0]);
         });
+    }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpuChannelOpSupported(in); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.functions = kGlslBand;
+        op.body = "    out0 = sstep(par1(p) - par2(p), par1(p) + par2(p), par0(p));";
+        gpuChannelOp(ctx, *this, op, {0.5f, 0.5f, 0}, in, out);
     }
 };
 
@@ -261,6 +332,53 @@ public:
             }
             return clampOut ? std::clamp(r, 0.0f, 1.0f) : r;
         });
+    }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpuChannelOpSupported(in); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.functions = "const int OP = " + std::to_string(paramI(2)) + ";\nconst bool CLAMP = " +
+                       (paramB(3) ? "true" : "false") + ";\n";
+        // C's pow (negative bases with integer exponents) and round (halves away from zero), which
+        // GLSL leaves undefined.
+        op.functions += R"(
+float cPow(float a, float b) {
+    if (a >= 0.0) return powPos(a, b);
+    float r = powPos(-a, b);
+    return mod(b, 2.0) == 1.0 ? -r : r;
+}
+)";
+        op.body = R"(
+    float a = par0(p), b = par1(p), r = 0.0;
+    switch (OP) {
+        case 0: r = a + b; break;
+        case 1: r = a - b; break;
+        case 2: r = a * b; break;
+        case 3: r = abs(b) < 1e-9 ? 0.0 : a / b; break;
+        case 4: r = (a < 0.0 && b != floor(b)) ? 0.0 : cPow(a, b); break;
+        case 5: r = (a > 0.0 && b > 0.0 && b != 1.0) ? log(a) / log(b) : 0.0; break;
+        case 6: r = a > 0.0 ? sqrt(a) : 0.0; break;
+        case 7: r = abs(a); break;
+        case 8: r = min(a, b); break;
+        case 9: r = max(a, b); break;
+        case 10: r = a < b ? 1.0 : 0.0; break;
+        case 11: r = a > b ? 1.0 : 0.0; break;
+        case 12: r = abs(b) < 1e-9 ? 0.0 : a - b * floor(a / b); break;
+        case 13: r = floor(a); break;
+        case 14: r = ceil(a); break;
+        case 15: r = a < 0.0 ? -floor(-a + 0.5) : floor(a + 0.5); break;
+        case 16: r = a - floor(a); break;
+        case 17: r = sin(a); break;
+        case 18: r = cos(a); break;
+        case 19: r = abs(b) < 1e-9 ? a : floor(a / b) * b; break;
+        case 20:
+            if (abs(b) >= 1e-9) {
+                float t = a / b - floor(a / b * 0.5) * 2.0;
+                r = (t > 1.0 ? 2.0 - t : t) * b;
+            }
+            break;
+    }
+    out0 = CLAMP ? clamp(r, 0.0, 1.0) : r;)";
+        gpuChannelOp(ctx, *this, op, {0.5f, 0.5f}, in, out);
     }
 };
 

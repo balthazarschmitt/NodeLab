@@ -148,7 +148,8 @@ functions include `sin cos pow sqrt abs floor ceil log exp atan2 min max clamp m
 ```
 src/core    Image/Channel/Value types, conversions, parallelFor
 src/graph   Node model, Graph (links, cycle check, JSON), Evaluator (cached, background thread)
-src/gpu     GPU device (OpenGL 4.3 compute), per-pixel kernels (PointOp), GPU blur
+src/gpu     GPU device (OpenGL 4.3 compute), per-pixel kernels and their fusion (PointOp), GPU blur,
+            reductions (exact percentiles)
 src/nodes   Node implementations by family (io, color, math, converter, group)
 src/io      Image load/save, source image cache, project files
 src/ui      App window, node editor (imnodes), inspector, image views, file dialogs

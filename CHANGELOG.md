@@ -5,6 +5,24 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 ## Unreleased
 
+## 0.14.0 (2026-10-01)
+
+- **Every per-pixel node runs on the GPU:** all Color nodes (including Basic, Color Mixer and
+  Color Grading), Math, Map Range, Clamp, Threshold, Color Key, Float Curve, Wavelength,
+  Blackbody, Set Alpha and Alpha Over join Mix, Blend, the expressions, Blur and Color Ramp.
+  45 node types in all. Basic stays on the CPU while Texture, Clarity or Dehaze is used, and in
+  scene-linear projects while Highlights or Shadows is.
+- **Chains of per-pixel nodes run as one shader** (fusion, like Blender's GPU compositor). A
+  node whose result goes only to the next per-pixel node is compiled into that node's shader, so
+  the chain reads its inputs once and writes one image, at full float precision in between.
+  Node Timings show a fused node's time on the node it ran in.
+- **Normalize finds its percentiles on the GPU** (an exact radix select), so only two numbers come
+  back instead of the whole image: 72 ms → 7 ms on the infrared preset's preview.
+- **Faster GPU → CPU copies** for the viewer and CPU nodes (through a pixel buffer): 19 ms → 5 ms
+  for a 1 MP preview on Intel graphics.
+- On the infrared preset (Intel Iris Plus): preview about 120 ms → 100 ms, full resolution
+  271 ms → 215 ms. GPU renders match the CPU's to within 1/255.
+
 ## 0.13.0 (2026-10-01)
 
 - **GPU compositing, like Blender's compositor Device: GPU.** Nodes run as compute shaders on the

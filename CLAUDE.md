@@ -94,8 +94,9 @@ src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (
               GuideWindow (renders the embedded GUIDE.md), Eyedropper (pick state),
               ParamWidgets (curve/ramp editors), ImageView, DisplayWorker (view transform and
               histograms off the UI thread), FileDialog (Win32), UiScript
-src/gpu       Device (hidden GL 4.3 context, texture pool, programs, timer queries), GL (loader),
-              PointOp (per-pixel nodes as GLSL bodies), Blur
+src/gpu       Device (hidden GL 4.3 context, texture pool, programs, timer queries, PBO downloads),
+              GL (loader), PointOp (per-pixel nodes as GLSL bodies, fused into chains), Blur,
+              Reduce (exact percentiles by radix select)
 ```
 
 ## Conventions
@@ -154,6 +155,12 @@ src/gpu       Device (hidden GL 4.3 context, texture pool, programs, timer queri
     and exports use the CPU unless `--device gpu`.
   - A `gpu::Error` falls back to the CPU. `test_gpu.cpp` compares every GPU node with its CPU
     version (it skips when there's no GPU). Automated UI runs force the CPU device.
+  - **Fusion:** `runPoint` doesn't dispatch. Its outputs are *pending* (`GpuValue::pending`), and a
+    later point op of the same size compiles the pending stage into its own shader. Each stage's
+    names are namespaced with `#define`/`#undef`, so a body and its `functions` use the plain
+    names (`P`, `img0`, `has1`, its consts and helpers). Anything else that needs the pixels calls
+    `texture()`, never `tex` directly. The evaluator materializes a pending input whose node has
+    several wires, so nothing is computed twice.
   - GLSL division is approximate and drivers fold NaN checks: see the `c_*` helpers in
     `Expression.cpp` where exact results matter.
 - **Node state:** `Node::muted`, `collapsed` and `label` persist in JSON. `Graph::cloneNode` copies them.

@@ -59,9 +59,15 @@ marked **GPU**.
 - **GPU compositing:** like Blender's compositor, **View > Compositor > Device** runs nodes on the
   graphics card (GPU, the default when the card supports OpenGL 4.3) or only on the processor
   (CPU).
-  - Mix, Blend, Expression, Image Expression, Blur, Split/Combine RGB and HSV, Color Ramp and
-    Normalize run on the GPU. Other nodes run on the CPU, so a graph made only of GPU nodes gains
-    the most: values stay on the card between them.
+  - Every per-pixel node runs on the GPU: the Color nodes (Basic, Color Mixer and Color Grading
+    too), Mix, Blend, Alpha Over, Math, Map Range, Clamp, Threshold, Color Key, Color Ramp, Float
+    Curve, Wavelength, Blackbody, Set Alpha, the expressions and Normalize, plus Blur. Basic uses
+    the CPU while Texture, Clarity or Dehaze is set (and Highlights or Shadows in scene-linear
+    projects). Other nodes run on the CPU, so a graph made mostly of GPU nodes gains the most:
+    values stay on the card between them.
+  - A chain of per-pixel nodes runs as one program on the card (fusion, as in Blender). A node
+    whose result feeds only the next per-pixel node shows almost no time in Node Timings; its
+    time is counted in the node it was folded into.
   - **Precision:** Auto keeps images in half floats, which is faster and plenty for a preview;
     Full matches the CPU exactly to within float rounding.
   - Zoomed-in detail and exports use the CPU. If a node fails on the GPU (for example when the

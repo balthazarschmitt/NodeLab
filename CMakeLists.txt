@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 # The app version. Bump it (and CHANGELOG.md) when a feature set lands; see CLAUDE.md.
-project(NodeLab VERSION 0.13.0 LANGUAGES C CXX)
+project(NodeLab VERSION 0.14.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -236,6 +236,7 @@ add_library(nodelab_core STATIC
     src/gpu/Device.cpp
     src/gpu/PointOp.cpp
     src/gpu/Blur.cpp
+    src/gpu/Reduce.cpp
     src/core/ColorManagement.cpp
     src/core/ColorScience.cpp
     src/core/Parallel.cpp

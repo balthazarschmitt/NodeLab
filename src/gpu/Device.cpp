@@ -1,6 +1,7 @@
 #include "gpu/Device.h"
 
 #include <atomic>
+#include <cstring>
 #include <map>
 #include <mutex>
 #include <stdexcept>
@@ -31,6 +32,8 @@ size_t g_pooledBytes = 0;
 std::atomic<size_t> g_inUseBytes{0};
 
 std::unordered_map<std::string, unsigned> g_programs;
+unsigned g_packBuffer = 0;  // download staging (pixel pack buffer), grown as needed
+size_t g_packBytes = 0;
 
 gl::GLenum internalFormat(Format f) {
     switch (f) {
@@ -117,6 +120,9 @@ void shutdown() {
         trimPool(0);
         for (auto& [src, p] : g_programs) gl::DeleteProgram(p);
         g_programs.clear();
+        if (g_packBuffer) gl::DeleteBuffers(1, &g_packBuffer);
+        g_packBuffer = 0;
+        g_packBytes = 0;
         std::lock_guard lock(g_poolMutex);
         g_queries.clear();  // deleted with the context
     }
@@ -213,23 +219,44 @@ GpuChannelPtr upload(const Channel& c) {
     return out;
 }
 
+namespace {
+// Reads a texture through a pixel pack buffer: the driver copies it out on the GPU, and the CPU
+// then reads plain memory. glGetTexImage straight into client memory has the driver untile and
+// convert the texture on one core: 19 ms instead of 5 for a 1 MP RGBA16F preview on an iGPU
+// (reading a shader-written buffer is slower still, through uncached memory).
+void readTexture(const Texture& t, int channels, float* dst) {
+    const size_t bytes = size_t(t.w()) * t.h() * size_t(channels) * sizeof(float);
+    if (!g_packBuffer) gl::GenBuffers(1, &g_packBuffer);
+    gl::BindBuffer(gl::PIXEL_PACK_BUFFER, g_packBuffer);
+    if (bytes > g_packBytes) {
+        gl::BufferData(gl::PIXEL_PACK_BUFFER, gl::GLsizeiptr(bytes), nullptr, gl::STREAM_READ);
+        g_packBytes = bytes;
+    }
+    gl::BindTexture(gl::TEXTURE_2D, t.id());
+    gl::PixelStorei(gl::PACK_ALIGNMENT, 4);
+    gl::GetTexImage(gl::TEXTURE_2D, 0, channels == 4 ? gl::RGBA : gl::RED, gl::FLOAT, nullptr);
+    const void* m = gl::MapBufferRange(gl::PIXEL_PACK_BUFFER, 0, gl::GLsizeiptr(bytes), gl::MAP_READ_BIT);
+    if (m) std::memcpy(dst, m, bytes);
+    gl::UnmapBuffer(gl::PIXEL_PACK_BUFFER);
+    gl::BindBuffer(gl::PIXEL_PACK_BUFFER, 0);
+    if (!m) throw Error("GPU: download failed");
+    checkError("download");
+}
+}  // namespace
+
 ImagePtr download(const GpuImage& img) {
     Scope s;
+    const TexturePtr& tex = img.texture();
     auto out = std::make_shared<Image>(img.w, img.h);
-    gl::BindTexture(gl::TEXTURE_2D, img.tex->id());
-    gl::PixelStorei(gl::PACK_ALIGNMENT, 4);
-    gl::GetTexImage(gl::TEXTURE_2D, 0, gl::RGBA, gl::FLOAT, out->px.data());
-    checkError("download");
+    readTexture(*tex, 4, out->px.data());
     return out;
 }
 
 ChannelPtr download(const GpuChannel& c) {
     Scope s;
+    const TexturePtr& tex = c.texture();
     auto out = std::make_shared<Channel>(Channel::makeSized(c.w, c.h));
-    gl::BindTexture(gl::TEXTURE_2D, c.tex->id());
-    gl::PixelStorei(gl::PACK_ALIGNMENT, 4);
-    gl::GetTexImage(gl::TEXTURE_2D, 0, gl::RED, gl::FLOAT, out->data.data());
-    checkError("download");
+    readTexture(*tex, 1, out->data.data());
     return out;
 }
 

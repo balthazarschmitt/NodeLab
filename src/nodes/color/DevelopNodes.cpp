@@ -11,6 +11,7 @@
 
 #include "core/ColorMath.h"
 #include "core/ColorScience.h"
+#include "gpu/PointOp.h"
 #include "nodes/ImageOps.h"
 #include "nodes/NodeUtil.h"
 
@@ -163,6 +164,15 @@ void applyFactor(const Node& node, const Image& src, Image& img, const Value& fa
         }
     });
 }
+
+// The GPU versions of smooth() and applyFactor's blend.
+const char* const kGlslDevelop = R"(
+float smoothT(float e0, float e1, float x) {
+    float t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+vec4 applyFactor(vec4 s, vec3 d, float f) { return vec4(s.rgb + (d - s.rgb) * f, s.a); }
+)";
 
 // ---------------------------------------------------------------- Basic
 
@@ -335,6 +345,117 @@ public:
         });
         applyFactor(*this, *src, *img, in[1]);
         out[0] = Value(ImagePtr(img));
+    }
+
+    // On the GPU when it is per-pixel: Dehaze, Clarity and Texture (and, in scene-linear
+    // projects, the tone equalizer behind Highlights and Shadows) read neighbourhoods.
+    bool gpuSupported(const EvalContext& ctx, const std::vector<Value>& in) const override {
+        if (!gpu::sizedValue(in[0]) || paramF(9) != 0.0f || paramF(10) != 0.0f || paramF(11) != 0.0f) return false;
+        return !ctx.linear() || (paramF(5) == 0.0f && paramF(6) == 0.0f);
+    }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const bool lin = ctx.linear();
+        const float temp = paramF(1) / 100, tint = paramF(2) / 100, stops = paramF(3);
+        gpu::PointOp op;
+        op.defaults = {NAN, 1.0f};
+        // P[0..8]: white balance (a matrix in linear projects, gains in legacy ones), then
+        // contrast, highlights, shadows, whites, blacks, vibrance, saturation at P[9..15].
+        if (lin) {
+            colorsci::Mat3 wb;
+            colorsci::whiteBalanceMatrix(temp, tint, wb);
+            const bool useWb = temp != 0.0f || tint != 0.0f;
+            const float gain = std::exp2(stops);
+            for (int r = 0; r < 3; ++r)
+                for (int c = 0; c < 3; ++c) op.params.push_back(useWb ? wb[r][c] : float(r == c));
+            op.params.push_back(gain);  // P[9] in linear projects; the sliders follow at P[10..16]
+        } else {
+            float gain[3] = {std::exp2(0.7f * temp), std::exp2(-0.5f * tint), std::exp2(-0.7f * temp)};
+            const float norm = std::exp2(stops) / luminance(gain[0], gain[1], gain[2]);
+            for (float g : gain) op.params.push_back(g * norm);
+            op.params.resize(10, 0.0f);
+        }
+        for (int i : {4, 5, 6, 7, 8, 12, 13}) op.params.push_back(paramF(i) / 100);
+        op.functions = kGlslDevelop + std::string(R"(
+const float kMidGreyEv = -2.4739312;
+float sCurve(float x, float p) {
+    float xc = clamp(x, 0.0, 1.0);
+    float y = xc < 0.5 ? 0.5 * powPos(2.0 * xc, p) : 1.0 - 0.5 * powPos(2.0 - 2.0 * xc, p);
+    return y + (x - xc);
+}
+float toneCurve(float v, float highlights, float shadows, float whites, float blacks) {
+    if (highlights != 0.0) {
+        float w = smoothT(0.35, 1.0, v);
+        if (highlights < 0.0) v += highlights * 0.22 * w * max(v, 0.0);
+        else v += highlights * 0.2 * w * clamp(1.25 - v, 0.0, 1.0);
+    }
+    if (shadows != 0.0) {
+        float w = 1.0 - smoothT(0.0, 0.6, v);
+        if (shadows > 0.0) v += shadows * 0.18 * w * smoothT(0.0, 0.2, v);
+        else v += shadows * 0.4 * w * max(v, 0.0);
+    }
+    if (whites != 0.0) {
+        float wp = 1.0 - 0.2 * whites;
+        v += (v / wp - v) * smoothT(0.4, 1.0, v);
+    }
+    if (blacks != 0.0) {
+        float bp = -0.08 * blacks;
+        v += ((v - bp) / (1.0 - bp) - v) * (1.0 - smoothT(0.0, 0.5, v));
+    }
+    return v;
+}
+)") + (lin ? "const bool LIN = true;\n" : "const bool LIN = false;\n");
+        op.body = R"(
+    vec4 s = img0(p);
+    float contrast = P[10], highlights = P[11], shadows = P[12], whites = P[13], blacks = P[14];
+    float vibrance = P[15], saturation = P[16];
+    vec3 d;
+    if (LIN) {
+        d = vec3(P[0] * s.r + P[1] * s.g + P[2] * s.b, P[3] * s.r + P[4] * s.g + P[5] * s.b,
+                 P[6] * s.r + P[7] * s.g + P[8] * s.b) * P[9];
+        if (contrast != 0.0 || whites != 0.0 || blacks != 0.0) {
+            float e = log2(max(luminance(d), 1.0 / 65536.0)), g = 0.0;
+            float slope = 1.0 + contrast * (contrast > 0.0 ? 0.6 : 0.45);
+            if (contrast != 0.0) g += (slope - 1.0) * 3.0 * tanh((e - kMidGreyEv) / 3.0);
+            float ep = e + g;
+            g += whites * smoothT(-1.5, 1.0, ep) + blacks * 1.5 * (1.0 - smoothT(-9.0, -4.5, ep));
+            d *= exp2(g);
+        }
+        if (vibrance != 0.0 || saturation != 0.0) {
+            vec3 lab = rgbToOklab(d);
+            float C = sqrt(lab.y * lab.y + lab.z * lab.z), vib = vibrance;
+            if (vib > 0.0) {
+                float hue = atan2C(lab.z, lab.y) * 57.29578;
+                float skin = 1.0 - 0.5 * smoothT(20.0, 40.0, hue) * (1.0 - smoothT(75.0, 95.0, hue));
+                vib *= (1.0 - smoothT(0.0, 0.2, C)) * skin;
+            }
+            float m = max(0.0, (1.0 + saturation) * (1.0 + vib));
+            d = oklabToRgb(vec3(lab.x, lab.y * m, lab.z * m));
+        }
+        d = compressToGamut(d);
+    } else {
+        d = linearToSrgb(srgbToLinear(max(s.rgb, 0.0)) * vec3(P[0], P[1], P[2]));
+        if (contrast != 0.0) {
+            float pw = 1.0 + contrast * (contrast > 0.0 ? 0.9 : 0.6);
+            d = vec3(sCurve(d.r, pw), sCurve(d.g, pw), sCurve(d.b, pw));
+        }
+        float l = max(luminance(d), 0.0), nl = toneCurve(l, highlights, shadows, whites, blacks);
+        if (l > 1e-3) d *= min(nl / l, 4.0);
+        else d += nl - l;
+        d = clamp01(d);
+        if (vibrance != 0.0 || saturation != 0.0) {
+            vec3 hsv = rgbToHsv(d);
+            float vib = vibrance;
+            if (vib > 0.0) {
+                float skin = 1.0 - 0.5 * smoothT(0.0, 0.04, hsv.x) * (1.0 - smoothT(0.1, 0.16, hsv.x));
+                vib *= (1.0 - hsv.y) * skin;
+            }
+            float m = max(0.0, (1.0 + saturation) * (1.0 + vib));
+            float ll = luminance(d);
+            d = clamp01(ll + (d - ll) * m);
+        }
+    }
+    out0 = applyFactor(s, d, par1(p));)";
+        gpu::runOver(ctx, *this, op, in, out);
     }
 
 private:
@@ -622,6 +743,69 @@ public:
         out[0] = Value(ImagePtr(img));
     }
 
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const bool lin = ctx.linear();
+        float hue[8], sat[8], lum[8];
+        bool any = false;
+        for (int i = 0; i < 8; ++i) {
+            hue[i] = paramF(1 + i) / 100, sat[i] = paramF(9 + i) / 100, lum[i] = paramF(17 + i) / 100;
+            any |= hue[i] != 0.0f || sat[i] != 0.0f || lum[i] != 0.0f;
+        }
+        gpu::PointOp op;
+        op.defaults = {NAN, 1.0f};
+        // P: the band centres, their hue moves, saturation and luminance (8 each).
+        const float* centre = lin ? bandHuesOklch() : kBandHue;
+        op.params.assign(centre, centre + 8);
+        for (int i = 0; i < 8; ++i)
+            op.params.push_back(!lin ? hue[i]
+                                     : hue[i] * 0.5f * (hue[i] > 0 ? hueGap(centre, i, (i + 1) % 8) : hueGap(centre, i, (i + 7) % 8)));
+        op.params.insert(op.params.end(), sat, sat + 8);
+        op.params.insert(op.params.end(), lum, lum + 8);
+        op.functions = kGlslDevelop + std::string(lin ? "const bool LIN = true;\n" : "const bool LIN = false;\n") +
+                       (any ? "const bool ANY = true;\n" : "const bool ANY = false;\n") + R"(
+// bandWeightsAt: the band adjustments for a hue, crossfading between the two neighbouring
+// bands. (With the legacy centres from 0 degrees it is bandWeights.)
+vec3 bandAdjust(float hueDeg) {
+    for (int i = 0; i < 8; ++i) {
+        int j = (i + 1) % 8;
+        float a = P[i], b = P[j];
+        if (b <= a) b += 360.0;
+        float h = hueDeg;
+        if (h < a) h += 360.0;
+        if (h >= a && h < b) {
+            float t = smoothT(0.0, 1.0, (h - a) / (b - a));
+            return vec3(P[8 + i], P[16 + i], P[24 + i]) * (1.0 - t) + vec3(P[8 + j], P[16 + j], P[24 + j]) * t;
+        }
+    }
+    return vec3(P[8], P[16], P[24]);
+}
+)";
+        op.body = R"(
+    vec4 s = img0(p);
+    vec3 d;
+    if (LIN) {
+        if (!ANY) { out0 = s; return; }
+        vec3 lab = rgbToOklab(s.rgb);
+        float C = sqrt(lab.y * lab.y + lab.z * lab.z);
+        float hDeg = atan2C(lab.z, lab.y) * 57.29578;
+        if (hDeg < 0.0) hDeg += 360.0;
+        vec3 adj = bandAdjust(hDeg);
+        float colourful = smoothT(0.0, 0.04, C);
+        float h = (hDeg + adj.x * colourful) * 0.017453293, c = C * max(0.0, 1.0 + adj.y * colourful);
+        d = compressToGamut(oklabToRgb(vec3(lab.x, c * cos(h), c * sin(h))) * exp2(adj.z * colourful));
+    } else {
+        vec3 hsv = rgbToHsv(clamp01(s.rgb));
+        vec3 adj = bandAdjust(mod(mod(hsv.x * 360.0, 360.0) + 360.0, 360.0));
+        float colourful = smoothT(0.0, 0.15, hsv.y * hsv.z);
+        vec3 c = hsvToRgb(vec3(hsv.x + adj.x * colourful * 30.0 / 360.0, hsv.y, hsv.z));
+        float l = luminance(c), m = max(0.0, 1.0 + adj.y * colourful);
+        d = clamp01(linearToSrgb(srgbToLinear(max(l + (c - l) * m, 0.0)) * exp2(adj.z * colourful)));
+    }
+    out0 = applyFactor(s, d, par1(p));)";
+        gpu::runOver(ctx, *this, op, in, out);
+    }
+
 private:
     // The same sliders in Oklch: hue moves along the perceptual hue circle, saturation scales
     // chroma, and luminance is an exposure change of the band (-100 is about one stop down).
@@ -707,6 +891,65 @@ public:
         });
         applyFactor(*this, *src, *img, in[1]);
         out[0] = Value(ImagePtr(img));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const bool lin = ctx.linear();
+        gpu::PointOp op;
+        op.defaults = {NAN, 1.0f};
+        // P: per zone (shadows, midtones, highlights, global) a tint (legacy: RGB; linear: Oklab
+        // a/b direction and amount) and a lift, then the pivot and the zone exponent at P[16..17].
+        bool any = false;
+        op.params.assign(18, 0.0f);
+        for (int z = 0; z < 4; ++z) {
+            float r, g, b;
+            hsvToRgb(paramF(1 + z * 3) / 360.0f, 1.0f, 1.0f, r, g, b);
+            if (lin) {
+                const float h = colorsci::oklabHueOfSrgb(r, g, b) * 0.017453293f;
+                op.params[size_t(z * 3)] = std::cos(h);
+                op.params[size_t(z * 3 + 1)] = std::sin(h);
+                op.params[size_t(z * 3 + 2)] = paramF(2 + z * 3) / 100 * 0.08f;
+                op.params[size_t(12 + z)] = paramF(3 + z * 3) / 100 * 0.2f;
+                any |= op.params[size_t(z * 3 + 2)] != 0.0f || op.params[size_t(12 + z)] != 0.0f;
+            } else {
+                const float l = luminance(r, g, b), amt = paramF(2 + z * 3) / 100 * 0.25f;
+                op.params[size_t(z * 3)] = (r - l) * amt;
+                op.params[size_t(z * 3 + 1)] = (g - l) * amt;
+                op.params[size_t(z * 3 + 2)] = (b - l) * amt;
+                op.params[size_t(12 + z)] = paramF(3 + z * 3) / 100 * 0.25f;
+            }
+        }
+        op.params[16] = 0.5f - paramF(14) / 100 * 0.3f;
+        op.params[17] = 1.0f + 3.0f * (1.0f - paramF(13) / 100);
+        op.functions = kGlslDevelop + std::string(lin ? "const bool LIN = true;\n" : "const bool LIN = false;\n") +
+                       (any ? "const bool ANY = true;\n" : "const bool ANY = false;\n");
+        op.body = R"(
+    vec4 s = img0(p);
+    if (LIN && !ANY) { out0 = s; return; }
+    vec3 lab = LIN ? rgbToOklab(s.rgb) : vec3(0.0);
+    float l = clamp01(LIN ? lab.x : luminance(s.rgb));
+    float wz[4];
+    wz[0] = powPos(1.0 - smoothT(0.0, 2.0 * P[16], l), P[17]);
+    wz[2] = powPos(smoothT(2.0 * P[16] - 1.0, 1.0, l), P[17]);
+    wz[1] = max(0.0, 1.0 - wz[0] - wz[2]);
+    wz[3] = 1.0;
+    vec3 d;
+    if (LIN) {
+        float tintFade = smoothT(0.0, 0.25, l);
+        for (int z = 0; z < 4; ++z) {
+            lab.y += P[z * 3] * P[z * 3 + 2] * wz[z] * tintFade;
+            lab.z += P[z * 3 + 1] * P[z * 3 + 2] * wz[z] * tintFade;
+            lab.x += P[12 + z] * wz[z];
+        }
+        d = compressToGamut(oklabToRgb(vec3(max(lab.x, 0.0), lab.yz)));
+    } else {
+        d = s.rgb;
+        for (int z = 0; z < 4; ++z) d += (vec3(P[z * 3], P[z * 3 + 1], P[z * 3 + 2]) + P[12 + z]) * wz[z];
+        d = clamp01(d);
+    }
+    out0 = applyFactor(s, d, par1(p));)";
+        gpu::runOver(ctx, *this, op, in, out);
     }
 
 private:

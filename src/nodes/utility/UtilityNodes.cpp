@@ -8,6 +8,7 @@
 #include "core/Curve.h"
 #include "gpu/Device.h"
 #include "gpu/PointOp.h"
+#include "gpu/Reduce.h"
 #include "graph/Evaluator.h"
 #include "io/Exif.h"
 #include "io/Export.h"
@@ -63,6 +64,20 @@ public:
                 for (int k = 0; k < 3; ++k) d[k] = srgbToLinear(d[k]);
         }));
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>&) const override { return true; }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        if (!gpu::sizedValue(in[0]) || !in[0].size(op.w, op.h)) resolveSize({}, ctx, op.w, op.h);
+        op.defaults = {550.0f};
+        // The same 1 nm table, one lookup table per channel.
+        op.lut.resize(3 * 471);
+        for (int i = 0; i < 471; ++i) wavelengthToRgb(360.0f + i, op.lut[i], op.lut[471 + i], op.lut[942 + i]);
+        op.body = R"(
+    float f = clamp(par0(p) - 360.0, 0.0, 470.0) / 470.0;
+    vec3 c = vec3(lutLookup(0, 471, f), lutLookup(471, 471, f), lutLookup(942, 471, f));
+    out0 = vec4(uLinear ? srgbToLinear(c) : c, 1.0);)";
+        gpu::runPoint(ctx, *this, op, in, out);
+    }
 };
 
 class BlackbodyNode : public Node {
@@ -91,6 +106,21 @@ public:
                 for (int k = 0; k < 3; ++k) d[k] = srgbToLinear(d[k]);
         }));
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>&) const override { return true; }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        if (!gpu::sizedValue(in[0]) || !in[0].size(op.w, op.h)) resolveSize({}, ctx, op.w, op.h);
+        op.defaults = {3200.0f};
+        // The same table over log(temperature), one lookup table per channel.
+        op.lut.resize(3 * 256);
+        for (int i = 0; i < 256; ++i)
+            blackbodyToRgb(800.0f * std::pow(50.0f, i / 255.0f), op.lut[i], op.lut[256 + i], op.lut[512 + i]);
+        op.body = R"(
+    float f = clamp(log(max(par0(p), 800.0) / 800.0) / log(50.0), 0.0, 1.0);
+    vec3 c = vec3(lutLookup(0, 256, f), lutLookup(256, 256, f), lutLookup(512, 256, f));
+    out0 = vec4(uLinear ? srgbToLinear(c) : c, 1.0);)";
+        gpu::runPoint(ctx, *this, op, in, out);
+    }
 };
 
 // ---------------------------------------------------------------- channel utilities
@@ -103,16 +133,21 @@ public:
                   {ParamDesc::Float("Low %", 0.0f, 0.0f, 100.0f), ParamDesc::Float("High %", 100.0f, 0.0f, 100.0f)}})
     // The range comes from the whole image; a region reuses the preview's (see EvalContext::statsOut).
     int roiPadding(const EvalContext& ctx) const override { return ctx.previewStats ? 0 : kRoiWhole; }
+    // Sorted positions of the Low % and High % values among n.
+    void ranks(size_t n, size_t& lo, size_t& hi) const {
+        auto rank = [&](float p) { return size_t(std::clamp(p / 100.0f, 0.0f, 1.0f) * float(n - 1) + 0.5f); };
+        lo = rank(std::min(paramF(0), paramF(1)));
+        hi = rank(std::max(paramF(0), paramF(1)));
+    }
     // The Low % and High % values of c, recorded for regions.
     void percentiles(EvalContext& ctx, const Channel& c, float& lo, float& hi) const {
         std::vector<float> sorted(c.data);
-        auto pct = [&](float p) {
-            size_t k = size_t(std::clamp(p / 100.0f, 0.0f, 1.0f) * float(sorted.size() - 1) + 0.5f);
-            std::nth_element(sorted.begin(), sorted.begin() + k, sorted.end());
-            return sorted[k];
-        };
-        lo = pct(std::min(paramF(0), paramF(1)));
-        hi = pct(std::max(paramF(0), paramF(1)));
+        size_t klo, khi;
+        ranks(sorted.size(), klo, khi);
+        std::nth_element(sorted.begin(), sorted.begin() + klo, sorted.end());
+        lo = sorted[klo];
+        std::nth_element(sorted.begin(), sorted.begin() + khi, sorted.end());
+        hi = sorted[khi];
         if (ctx.statsOut) *ctx.statsOut = {lo, hi};
     }
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
@@ -136,19 +171,28 @@ public:
         })));
     }
 
-    // The percentiles need the values on the CPU (an exact selection), but only those: the
-    // rescale runs on the device, so the result stays there for the GPU nodes after it.
+    // The percentiles are an exact selection on the device (gpu::select), so only two numbers
+    // come back, and the result stays there for the GPU nodes after it.
     bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
     void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
-        const ChannelPtr c = toChannel(toCpu(in[0]));
-        if (!c || c->constant) throw gpu::Error("GPU: nothing to normalize");
-        float lo, hi;
-        percentiles(ctx, *c, lo, hi);
         gpu::PointOp op;
-        op.w = c->w, op.h = c->h;
-        op.params = {lo, std::max(hi - lo, 1e-9f)};
+        if (!in[0].size(op.w, op.h)) throw gpu::Error("GPU: nothing to normalize");
+        // The channel the CPU would read (an image's luminance), on the device.
+        std::vector<Value> c = {in[0]};
+        if (!std::get_if<GpuChannelPtr>(&in[0].v)) {
+            gpu::PointOp lum;
+            lum.w = op.w, lum.h = op.h;
+            lum.body = "    out0 = ch0(p);";
+            gpu::runPoint(ctx, *this, lum, in, c);
+        }
+        const GpuChannelPtr gc = std::get<GpuChannelPtr>(c[0].v);
+        size_t klo, khi;
+        ranks(size_t(op.w) * op.h, klo, khi);
+        const std::vector<float> v = gpu::select(*gc->texture(), {klo, khi});
+        if (ctx.statsOut) *ctx.statsOut = {v[0], v[1]};
+        op.params = {v[0], std::max(v[1] - v[0], 1e-9f)};
         op.body = "    out0 = (ch0(p) - P[0]) / P[1];";
-        gpu::runPoint(ctx, *this, op, in, out);
+        gpu::runPoint(ctx, *this, op, c, out);
     }
 };
 
@@ -175,6 +219,20 @@ public:
             return a + (lutLookup(lut, a) - a) * sf(x, y);
         })));
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override {
+        return gpu::sizedValue(in[0]) || gpu::sizedValue(in[1]);
+    }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        if (!gpu::sizedValue(in[0]) || !in[0].size(op.w, op.h)) in[1].size(op.w, op.h);
+        const nlohmann::json& cj = params[2];
+        op.lut = curveLut(curveFromJson(cj.is_object() && cj.contains("c") ? cj["c"] : nlohmann::json()));
+        op.defaults = {0.5f, 1.0f};
+        op.functions = "const int N = " + std::to_string(op.lut.size()) + ";\n";
+        // The value isn't clamped to its slider's range (ch0, not par0), as on the CPU.
+        op.body = "    float a = ch0(p);\n    out0 = a + (lutLookup(0, N, a) - a) * par1(p);";
+        gpu::runPoint(ctx, *this, op, in, out);
+    }
 };
 
 class SetAlphaNode : public Node {
@@ -194,6 +252,17 @@ public:
             for (int k = 0; k < 3; ++k) d[k] = apply ? s[k] * al : s[k];
             d[3] = apply ? s[3] * al : al;
         })));
+    }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        op.defaults = {NAN, 1.0f};
+        op.functions = std::string("const bool APPLY = ") + (paramI(1) == 1 ? "true" : "false") + ";\n";
+        op.body = R"(
+    vec4 s = img0(p);
+    float al = par1(p);
+    out0 = APPLY ? s * al : vec4(s.rgb, al);)";
+        gpu::runOver(ctx, *this, op, in, out);
     }
 };
 
@@ -229,6 +298,21 @@ public:
             }
         });
         out[0] = Value(ImagePtr(img));
+    }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>&) const override { return true; }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        if (in[0].empty() && in[1].empty()) return;
+        gpu::PointOp op;
+        resolveSize(in, ctx, op.w, op.h);
+        op.defaults = {NAN, NAN, 1.0f};
+        op.functions = std::string("const bool PREMUL = ") + (paramB(1) ? "true" : "false") + ";\n";
+        op.body = R"(
+    if (!has0) { out0 = img1(p); return; }
+    if (!has1) { out0 = img0(p); return; }
+    vec4 b = img0(p), f = img1(p);
+    float fac = par2(p), a = clamp01(f.a * fac);
+    out0 = vec4(PREMUL ? f.rgb * fac + b.rgb * (1.0 - a) : f.rgb * a + b.rgb * (1.0 - a), clamp01(a + b.a * (1.0 - a)));)";
+        gpu::runPoint(ctx, *this, op, in, out);
     }
 };
 

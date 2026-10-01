@@ -10,6 +10,7 @@
 #endif
 
 #include "gpu/Device.h"
+#include "gpu/PointOp.h"
 #include "io/ImageCache.h"
 #include "nodes/group/GroupNodes.h"
 #include "nodes/io/IONodes.h"
@@ -206,6 +207,22 @@ size_t Evaluator::ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unor
                 inputs[i] = converted(cache[from[i]->fromNode], from[i]->fromPin, gpu, ctx);
             } catch (const gpu::Error&) {
                 // Couldn't upload (out of GPU memory): run(), finding CPU inputs, falls back.
+            }
+        }
+        if (gpu) {
+            // A pending point op result (gpu::runPoint) is fused into the GPU node reading it, unless
+            // other wires read it too: each would compute it again, so it runs once now instead.
+            for (size_t i = 0; i < inputs.size(); ++i) {
+                if (!from[i] || !gpu::pending(inputs[i])) continue;
+                int wires = 0;
+                for (const Link& l : g.links()) wires += l.fromNode == from[i]->fromNode;
+                if (wires < 2) continue;
+                try {
+                    gpu::Scope scope;
+                    gpu::materialize(inputs[i]);
+                } catch (const gpu::Error&) {
+                    // run() falls back to the CPU, which computes it from there.
+                }
             }
         }
         run(g, *n, ctx, inputs, e, sig, gpu);

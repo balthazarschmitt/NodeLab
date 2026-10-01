@@ -7,19 +7,26 @@ enum class PinType { Image, Channel, Number };
 
 namespace gpu {
 class Texture;
+struct Pending;
 }
 
 // An image (RGBA) or channel (one plane) resident on the GPU (gpu/Device.h). Only the evaluator
 // and GPU kernels see these: CPU nodes get their inputs downloaded first, and the conversions
 // below download too.
-struct GpuImage {
-    std::shared_ptr<gpu::Texture> tex;
+//
+// A per-pixel node's result starts out pending (gpu/PointOp.h): its shader hasn't run, so the
+// next per-pixel node can compile it into its own shader (fusion) instead of reading a texture.
+// texture() runs it when something needs the pixels.
+struct GpuValue {
+    mutable std::shared_ptr<gpu::Texture> tex;  // null while pending
+    mutable std::shared_ptr<gpu::Pending> pending;
+    int pendingOut = 0;  // which of the pending op's outputs this is
     int w = 0, h = 0;
+    // The pixels, computing them if pending. Needs the GPU device; throws gpu::Error.
+    const std::shared_ptr<gpu::Texture>& texture() const;
 };
-struct GpuChannel {
-    std::shared_ptr<gpu::Texture> tex;
-    int w = 0, h = 0;
-};
+struct GpuImage : GpuValue {};
+struct GpuChannel : GpuValue {};
 using GpuImagePtr = std::shared_ptr<const GpuImage>;
 using GpuChannelPtr = std::shared_ptr<const GpuChannel>;
 
