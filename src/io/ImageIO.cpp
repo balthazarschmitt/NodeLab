@@ -15,7 +15,9 @@
 
 #include "core/ColorMath.h"
 #include "core/Parallel.h"
+#include "io/Exif.h"
 #include "io/Paths.h"
+#include "io/RawDecode.h"
 
 namespace {
 
@@ -38,9 +40,13 @@ void decodePixels(const T* data, Image& img, int levels, bool srgbToLinear) {
     });
 }
 
-}  // namespace
+std::string lowerExt(const std::string& pathU8) {
+    std::string e = pathToU8(u8ToPath(pathU8).extension());
+    std::transform(e.begin(), e.end(), e.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    return e;
+}
 
-std::shared_ptr<Image> loadImage(const std::string& pathU8, std::string& err, bool srgbToLinear) {
+std::shared_ptr<Image> loadStb(const std::string& pathU8, std::string& err, bool srgbToLinear) {
     int w = 0, h = 0, comp = 0;
     const char* p = pathU8.c_str();
     std::shared_ptr<Image> img;
@@ -63,6 +69,42 @@ std::shared_ptr<Image> loadImage(const std::string& pathU8, std::string& err, bo
         decodePixels(data, *img, 256, srgbToLinear);
         stbi_image_free(data);
     }
+    return img;
+}
+
+}  // namespace
+
+const char* const kImageFileFilter =
+    "Images|*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.cr2;*.cr3;*.crw;*.nef;*.nrw;*.arw;*.srf;*.sr2;*.dng;*.raf;*.orf;"
+    "*.rw2;*.pef;*.srw;*.3fr;*.iiq;*.x3f;*.mos;*.erf;*.kdc;*.mrw;*.raw;*.rwl|All files|*.*";
+
+bool isImageFile(const std::string& pathU8) {
+    const std::string e = lowerExt(pathU8);
+    return e == ".png" || e == ".jpg" || e == ".jpeg" || e == ".bmp" || e == ".tga" || raw::isRawPath(pathU8);
+}
+
+std::shared_ptr<Image> loadImage(const std::string& pathU8, std::string& err, const DecodeOptions& opt, bool preview,
+                                 int* fullW, int* fullH) {
+    if (raw::isRawPath(pathU8)) {
+        auto img = raw::load(pathU8, err, opt.rawHighlights, preview, fullW, fullH);
+        if (img && !opt.sceneLinear) {
+            // Legacy projects work on display-encoded values, so give them what a camera JPEG
+            // would hold: sRGB-encoded and clipped to 0..1.
+            parallelFor(img->h, [&](int y) {
+                float* p = img->pixel(size_t(y) * img->w);
+                for (int i = 0; i < img->w * 4; ++i)
+                    if ((i & 3) != 3) p[i] = float(colormath::linearToSrgb(std::clamp(p[i], 0.0f, 1.0f)));
+            });
+        }
+        return img;
+    }
+    auto img = loadStb(pathU8, err, opt.srgbToLinear);
+    if (img && opt.sceneLinear) {
+        const std::string e = lowerExt(pathU8);
+        if (e == ".jpg" || e == ".jpeg") img = exif::applyOrientation(img, exif::jpegOrientation(pathU8));
+    }
+    if (img && fullW) *fullW = img->w;
+    if (img && fullH) *fullH = img->h;
     return img;
 }
 

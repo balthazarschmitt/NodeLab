@@ -146,13 +146,21 @@ void initContextSize(const Graph& g, EvalContext& ctx) {
     if (!ctx.cache) return;
     for (const auto& [id, n] : g.nodes()) {
         if (n->info().type != ImageInputNode::staticInfo().type) continue;
-        // Same decode as the node's, so the file isn't decoded twice.
+        // Same decode as the node's, so the file isn't decoded twice. Only the size is needed here,
+        // so ask for the (kept) proxy even at full resolution: the full image is cached only while
+        // in use, and a RAW would otherwise be decoded once here and again by the node.
         const auto decode = static_cast<const ImageInputNode&>(*n).decode(ctx.linear());
-        if (ImagePtr img = ctx.cache->get(n->paramS(0), ctx.proxy, nullptr, decode)) {
-            ctx.defaultW = img->w;
-            ctx.defaultH = img->h;
-            int fw, fh;
-            ctx.scale = ctx.proxy && ctx.cache->fullSize(n->paramS(0), fw, fh) && fw > 0 ? float(img->w) / fw : 1.0f;
+        if (ImagePtr img = ctx.cache->get(n->paramS(0), true, nullptr, decode)) {
+            int fw = 0, fh = 0;
+            const bool known = ctx.cache->fullSize(n->paramS(0), fw, fh) && fw > 0;
+            if (ctx.proxy || !known) {
+                ctx.defaultW = img->w;
+                ctx.defaultH = img->h;
+            } else {
+                ctx.defaultW = fw;
+                ctx.defaultH = fh;
+            }
+            ctx.scale = ctx.proxy && known ? float(img->w) / fw : 1.0f;
             return;
         }
     }

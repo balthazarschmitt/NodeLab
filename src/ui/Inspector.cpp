@@ -5,6 +5,7 @@
 
 #include <imgui.h>
 
+#include "io/ImageIO.h"
 #include "io/Paths.h"
 #include "nodes/group/GroupNodes.h"
 #include "ui/ColorDisplay.h"
@@ -14,7 +15,6 @@
 #include "ui/NodeInspectors.h"
 #include "ui/ParamWidgets.h"
 
-static const char* kImageFilter = "Images|*.png;*.jpg;*.jpeg;*.bmp;*.tga|All files|*.*";
 
 bool editParam(Node& node, int i, float width, bool compact) {
     const ParamDesc& d = node.info().params[i];
@@ -66,7 +66,7 @@ bool editParam(Node& node, int i, float width, bool compact) {
             std::string path = node.paramS(i);
             std::string name = path.empty() ? "(none)" : pathToU8(u8ToPath(path).filename());
             if (ImGui::Button("Browse...")) {
-                if (auto p = openFileDialog("Choose image", kImageFilter)) {
+                if (auto p = openFileDialog("Choose image", kImageFileFilter)) {
                     node.params[i] = *p;
                     changed = true;
                 }

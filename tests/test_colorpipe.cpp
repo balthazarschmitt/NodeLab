@@ -164,12 +164,16 @@ TEST_CASE("Image Input linearises sRGB files only in scene-linear projects") {
     Node* n = g.addNode("io.image_input");
     REQUIRE(n);
     const auto& in = static_cast<const ImageInputNode&>(*n);
-    CHECK(in.decode(false) == ImageCache::Decode::AsIs);
-    CHECK(in.decode(true) == ImageCache::Decode::SrgbToLinear);
+    CHECK_FALSE(in.decode(false).srgbToLinear);
+    CHECK_FALSE(in.decode(false).sceneLinear);
+    CHECK(in.decode(true).srgbToLinear);
+    CHECK(in.decode(true).sceneLinear);
     n->params[1] = 1;  // Linear Rec.709
-    CHECK(in.decode(true) == ImageCache::Decode::AsIs);
+    CHECK_FALSE(in.decode(true).srgbToLinear);
     n->params[1] = 2;  // Non-Color
-    CHECK(in.decode(true) == ImageCache::Decode::AsIs);
+    CHECK_FALSE(in.decode(true).srgbToLinear);
+    n->params[2] = 2;  // Reconstruct highlights
+    CHECK(in.decode(true).rawHighlights == 2);
 }
 
 TEST_CASE("Contrast pivots on middle grey and never goes negative in scene-linear projects") {

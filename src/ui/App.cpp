@@ -33,14 +33,9 @@
 namespace fs = std::filesystem;
 
 static const char* kProjectFilter = "NodeLab project (*.nlproj)|*.nlproj|All files|*.*";
-static const char* kImageFilter = "Images|*.png;*.jpg;*.jpeg;*.bmp;*.tga|All files|*.*";
 static const char* kExportFilter = "PNG image|*.png|JPEG image|*.jpg";
 
-static bool isImageFile(const std::filesystem::path& p) {
-    std::string e = pathToU8(p.extension());
-    std::transform(e.begin(), e.end(), e.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-    return e == ".png" || e == ".jpg" || e == ".jpeg" || e == ".bmp" || e == ".tga";
-}
+static bool isImageFile(const std::filesystem::path& p) { return isImageFile(pathToU8(p)); }
 static const char* kDockName = "NodeLabDockSpace";
 
 void dropCallback(GLFWwindow* w, int count, const char** paths) {
@@ -611,7 +606,7 @@ void App::drawMainMenu() {
         if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) saveProject(true);
         ImGui::Separator();
         if (ImGui::MenuItem("Import Image...", "Ctrl+I"))
-            if (auto p = openFileDialog("Import image", kImageFilter)) importImage(*p);
+            if (auto p = openFileDialog("Import image", kImageFileFilter)) importImage(*p);
         if (ImGui::MenuItem("Export...", "Ctrl+E")) openExportWindow();
         if (ImGui::MenuItem("Write File Outputs", nullptr, false, !exporter_.busy())) startExport({{"", ""}}, 0);
         ImGui::Separator();
@@ -704,7 +699,7 @@ void App::handleShortcuts() {
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) saveProject(false);
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S)) saveProject(true);
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_I))
-        if (auto p = openFileDialog("Import image", kImageFilter)) importImage(*p);
+        if (auto p = openFileDialog("Import image", kImageFileFilter)) importImage(*p);
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_E)) openExportWindow();
     if (eyedropper().active() && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) eyedropper().cancel();
     if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) {
@@ -1028,8 +1023,8 @@ bool App::saveProject(bool saveAs) {
 
 void App::importImage(const std::string& path) {
     std::string err;
-    // Decode as the new Image Input will (sRGB, the param's default), so the cache entry is reused.
-    const auto decode = graph_.colorManagement.linear ? ImageCache::Decode::SrgbToLinear : ImageCache::Decode::AsIs;
+    // Decode as the new Image Input will (its default params), so the cache entry is reused.
+    const auto decode = ImageInputNode().decode(graph_.colorManagement.linear);
     if (!cache_.get(path, true, &err, decode)) {
         status_ = "Import failed: " + err;
         return;
@@ -1148,7 +1143,7 @@ void App::drawExportWindow() {
             ImGui::Text("Sources (%d)", int(batchSources_.size()));
             ImGui::SameLine();
             if (ImGui::SmallButton("Add Files..."))
-                for (std::string& f : openFilesDialog("Add source images", kImageFilter))
+                for (std::string& f : openFilesDialog("Add source images", kImageFileFilter))
                     if (std::find(batchSources_.begin(), batchSources_.end(), f) == batchSources_.end())
                         batchSources_.push_back(std::move(f));
             ImGui::SameLine();

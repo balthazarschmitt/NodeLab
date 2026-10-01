@@ -147,14 +147,17 @@ public:
     float paramF(int i) const { return params[i].is_number() ? params[i].get<float>() : 0.0f; }
     int paramI(int i) const { return params[i].is_number() ? params[i].get<int>() : 0; }
     bool paramB(int i) const { return params[i].is_boolean() ? params[i].get<bool>() : false; }
-    // False when the param's ParamDesc::showIf condition hides it (UI only).
+    // False when the param's ParamDesc::showIf condition (or the node's paramHidden) hides it (UI only).
     bool paramVisible(int i) const {
+        if (paramHidden(i)) return false;
         const ParamDesc& d = info().params[i];
         if (d.showIf < 0 || d.showIf >= int(params.size())) return true;
         const nlohmann::json& v = params[d.showIf];
         const int cur = v.is_boolean() ? int(v.get<bool>()) : (v.is_number() ? v.get<int>() : 0);
         return cur == d.showIfValue;
     }
+    // Node-specific hiding for conditions showIf can't express (e.g. Image Input's RAW-only params).
+    virtual bool paramHidden(int) const { return false; }
     std::string paramS(int i) const { return params[i].is_string() ? params[i].get<std::string>() : std::string(); }
     void paramC(int i, float out[3]) const {
         for (int k = 0; k < 3; ++k)

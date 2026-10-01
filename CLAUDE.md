@@ -22,8 +22,13 @@ build\nodelab_tests.exe
     renames the running exe to `NodeLab.old-<timestamp>.exe`, because Windows allows renaming a
     running exe but not overwriting it. The next build deletes old copies that are no longer running.
   - Never kill the user's NodeLab process.
-- **Dependencies:** FetchContent pulls glfw, imgui (v1.91.8-docking), nlohmann/json, stb, tinyexpr and
-  doctest.
+- **Dependencies:** FetchContent pulls glfw, imgui (v1.91.8-docking), nlohmann/json, stb, tinyexpr,
+  LibRaw (0.21.3) and doctest.
+  - LibRaw has no CMake build; `CMakeLists.txt` lists its sources (from its `Makefile.dist`). It is
+    built with OpenMP, forced on with `LIBRAW_FORCE_OPENMP` because LibRaw disables OpenMP for MinGW.
+    `-fopenmp` and the define are PUBLIC because LibRaw's inline allocator differs with OpenMP.
+  - If a reconfigure fails while updating a `GIT_TAG master` dependency (stb, tinyexpr) offline,
+    pass `-DFETCHCONTENT_UPDATES_DISCONNECTED=ON`.
   - `CMakeLists.txt` defaults `CMAKE_TLS_CAINFO` to Git for Windows' CA bundle, because WinLibs'
     CMake has none.
 - **Release linking:** the Release exe links statically (`-static`, `-mwindows`). It needs only
@@ -79,7 +84,8 @@ src/core      Image/Channel/Value types + conversions, ColorMath, ColorScience (
 src/graph     Node (params, flags), Graph (links, frames, JSON), Evaluator (+AsyncEvaluator), NodeRegistry
 src/nodes     one file per family: io, color, math (Mix), converter (+Expression), filter, transform,
               matte, texture, utility, group; ImageOps (sampling, box blur, distance transform)
-src/io        image load/save (stb), ImageCache (proxy only; full-res decoded on demand), project files
+src/io        image load/save (stb), RawDecode (LibRaw), Exif (JPEG orientation), ImageCache (proxy only;
+              full-res decoded on demand; RAW proxies from a half-size decode), project files
 src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (custom canvas), Inspector,
               GuideWindow (renders the embedded GUIDE.md), Eyedropper (pick state),
               ParamWidgets (curve/ramp editors), ImageView, FileDialog (Win32), UiScript

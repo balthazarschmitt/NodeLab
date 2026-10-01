@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 # The app version. Bump it (and CHANGELOG.md) when a feature set lands; see CLAUDE.md.
-project(NodeLab VERSION 0.8.0 LANGUAGES C CXX)
+project(NodeLab VERSION 0.9.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -52,7 +52,15 @@ FetchContent_Declare(tinyexpr
     GIT_SHALLOW TRUE
     SOURCE_SUBDIR _none)
 
-FetchContent_MakeAvailable(glfw json imgui stb tinyexpr)
+# LibRaw decodes camera RAW files. It ships no CMake build, so the library target is defined below
+# from its Makefile.dist object list. Used under its CDDL 1.0 licence option (see README).
+FetchContent_Declare(libraw
+    GIT_REPOSITORY https://github.com/LibRaw/LibRaw.git
+    GIT_TAG 0.21.3
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR _none)
+
+FetchContent_MakeAvailable(glfw json imgui stb tinyexpr libraw)
 
 find_package(OpenGL REQUIRED)
 
@@ -72,6 +80,99 @@ target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
 
 add_library(tinyexpr STATIC ${tinyexpr_SOURCE_DIR}/tinyexpr.c)
 target_include_directories(tinyexpr PUBLIC ${tinyexpr_SOURCE_DIR})
+
+add_library(libraw STATIC
+    ${libraw_SOURCE_DIR}/src/libraw_datastream.cpp
+    ${libraw_SOURCE_DIR}/src/libraw_c_api.cpp
+    ${libraw_SOURCE_DIR}/src/tables/cameralist.cpp
+    ${libraw_SOURCE_DIR}/src/decoders/fuji_compressed.cpp
+    ${libraw_SOURCE_DIR}/src/decoders/crx.cpp
+    ${libraw_SOURCE_DIR}/src/decoders/fp_dng.cpp
+    ${libraw_SOURCE_DIR}/src/decoders/decoders_libraw.cpp
+    ${libraw_SOURCE_DIR}/src/decoders/unpack.cpp
+    ${libraw_SOURCE_DIR}/src/decoders/unpack_thumb.cpp
+    ${libraw_SOURCE_DIR}/src/integration/rawspeed_glue.cpp
+    ${libraw_SOURCE_DIR}/src/integration/dngsdk_glue.cpp
+    ${libraw_SOURCE_DIR}/src/tables/colorconst.cpp
+    ${libraw_SOURCE_DIR}/src/utils/utils_libraw.cpp
+    ${libraw_SOURCE_DIR}/src/utils/init_close_utils.cpp
+    ${libraw_SOURCE_DIR}/src/utils/decoder_info.cpp
+    ${libraw_SOURCE_DIR}/src/utils/open.cpp
+    ${libraw_SOURCE_DIR}/src/utils/phaseone_processing.cpp
+    ${libraw_SOURCE_DIR}/src/utils/thumb_utils.cpp
+    ${libraw_SOURCE_DIR}/src/write/tiff_writer.cpp
+    ${libraw_SOURCE_DIR}/src/preprocessing/subtract_black.cpp
+    ${libraw_SOURCE_DIR}/src/postprocessing/postprocessing_utils.cpp
+    ${libraw_SOURCE_DIR}/src/postprocessing/dcraw_process.cpp
+    ${libraw_SOURCE_DIR}/src/preprocessing/raw2image.cpp
+    ${libraw_SOURCE_DIR}/src/postprocessing/mem_image.cpp
+    ${libraw_SOURCE_DIR}/src/x3f/x3f_utils_patched.cpp
+    ${libraw_SOURCE_DIR}/src/x3f/x3f_parse_process.cpp
+    ${libraw_SOURCE_DIR}/src/utils/read_utils.cpp
+    ${libraw_SOURCE_DIR}/src/utils/curves.cpp
+    ${libraw_SOURCE_DIR}/src/utils/utils_dcraw.cpp
+    ${libraw_SOURCE_DIR}/src/tables/colordata.cpp
+    ${libraw_SOURCE_DIR}/src/decoders/canon_600.cpp
+    ${libraw_SOURCE_DIR}/src/decoders/decoders_dcraw.cpp
+    ${libraw_SOURCE_DIR}/src/decoders/decoders_libraw_dcrdefs.cpp
+    ${libraw_SOURCE_DIR}/src/decoders/generic.cpp
+    ${libraw_SOURCE_DIR}/src/decoders/kodak_decoders.cpp
+    ${libraw_SOURCE_DIR}/src/decoders/dng.cpp
+    ${libraw_SOURCE_DIR}/src/decoders/smal.cpp
+    ${libraw_SOURCE_DIR}/src/decoders/load_mfbacks.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/sony.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/nikon.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/samsung.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/cr3_parser.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/canon.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/epson.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/olympus.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/leica.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/fuji.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/adobepano.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/pentax.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/p1.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/makernotes.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/exif_gps.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/kodak.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/tiff.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/ciff.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/mediumformat.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/minolta.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/identify_tools.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/hasselblad_model.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/normalize_model.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/identify.cpp
+    ${libraw_SOURCE_DIR}/src/metadata/misc_parsers.cpp
+    ${libraw_SOURCE_DIR}/src/tables/wblists.cpp
+    ${libraw_SOURCE_DIR}/src/postprocessing/postprocessing_aux.cpp
+    ${libraw_SOURCE_DIR}/src/postprocessing/postprocessing_utils_dcrdefs.cpp
+    ${libraw_SOURCE_DIR}/src/postprocessing/aspect_ratio.cpp
+    ${libraw_SOURCE_DIR}/src/demosaic/misc_demosaic.cpp
+    ${libraw_SOURCE_DIR}/src/demosaic/xtrans_demosaic.cpp
+    ${libraw_SOURCE_DIR}/src/demosaic/ahd_demosaic.cpp
+    ${libraw_SOURCE_DIR}/src/demosaic/dht_demosaic.cpp
+    ${libraw_SOURCE_DIR}/src/demosaic/aahd_demosaic.cpp
+    ${libraw_SOURCE_DIR}/src/demosaic/dcb_demosaic.cpp
+    ${libraw_SOURCE_DIR}/src/write/file_write.cpp
+    ${libraw_SOURCE_DIR}/src/preprocessing/ext_preprocess.cpp
+    ${libraw_SOURCE_DIR}/src/write/apply_profile.cpp)
+target_include_directories(libraw PUBLIC ${libraw_SOURCE_DIR})
+target_compile_definitions(libraw PUBLIC LIBRAW_NODLL)
+# Third-party code: its warnings aren't ours to fix.
+target_compile_options(libraw PRIVATE -w)
+# dcraw-era code relies on M_PI and friends, which strict -std=c++20 hides.
+set_target_properties(libraw PROPERTIES CXX_EXTENSIONS ON)
+target_compile_definitions(libraw PRIVATE _USE_MATH_DEFINES)
+# Its demosaicers and decoders are OpenMP-parallel, which LibRaw only enables for MinGW when forced.
+# PUBLIC because libraw_alloc.h's inline allocator differs with OpenMP: every file including
+# LibRaw must see the same definition.
+target_compile_definitions(libraw PUBLIC LIBRAW_FORCE_OPENMP)
+target_compile_options(libraw PUBLIC -fopenmp)
+target_link_options(libraw PUBLIC -fopenmp)
+if(WIN32)
+    target_link_libraries(libraw PUBLIC ws2_32)
+endif()
 
 add_library(stb INTERFACE)
 target_include_directories(stb INTERFACE ${stb_SOURCE_DIR})
@@ -119,6 +220,8 @@ add_library(nodelab_core STATIC
     src/graph/NodeRegistry.cpp
     src/graph/Evaluator.cpp
     src/io/ImageIO.cpp
+    src/io/RawDecode.cpp
+    src/io/Exif.cpp
     src/io/ImageCache.cpp
     src/io/ProjectFile.cpp
     src/io/Export.cpp
@@ -137,7 +240,7 @@ add_library(nodelab_core STATIC
     src/nodes/utility/UtilityNodes.cpp)
 target_include_directories(nodelab_core PUBLIC src)
 add_dependencies(nodelab_core nodelab_version)
-target_link_libraries(nodelab_core PUBLIC nlohmann_json::nlohmann_json stb tinyexpr)
+target_link_libraries(nodelab_core PUBLIC nlohmann_json::nlohmann_json stb tinyexpr libraw)
 if(WIN32)
     target_compile_definitions(nodelab_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
@@ -182,7 +285,7 @@ if(NODELAB_BUILD_TESTS)
     FetchContent_MakeAvailable(doctest)
 
     enable_testing()
-    add_executable(nodelab_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp tests/test_groups.cpp tests/test_nodes2.cpp tests/test_version.cpp tests/test_guide.cpp tests/test_layout.cpp tests/test_export.cpp tests/test_develop.cpp tests/test_ir_tools.cpp tests/test_expression_vm.cpp tests/test_parallel.cpp tests/test_colorpipe.cpp tests/test_develop_linear.cpp)
+    add_executable(nodelab_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp tests/test_groups.cpp tests/test_nodes2.cpp tests/test_version.cpp tests/test_guide.cpp tests/test_layout.cpp tests/test_export.cpp tests/test_develop.cpp tests/test_ir_tools.cpp tests/test_expression_vm.cpp tests/test_parallel.cpp tests/test_colorpipe.cpp tests/test_develop_linear.cpp tests/test_raw_exif.cpp)
     target_include_directories(nodelab_tests PRIVATE ${doctest_SOURCE_DIR})
     target_link_libraries(nodelab_tests PRIVATE nodelab_core)
     nodelab_allow_relink(nodelab_tests)

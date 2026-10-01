@@ -5,6 +5,22 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 ## Unreleased
 
+## 0.9.0 (2026-09-30)
+
+- **Camera RAW files** (CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2 and more) via LibRaw:
+  - They load as scene-linear light with the as-shot white balance and the camera's colour
+    matrix, upright. Basic's Temperature and Tint are relative to the as-shot white balance.
+  - **Highlight Reconstruction** on Image Input: Clip, Blend, or Reconstruct (the default).
+    Recovered highlights stay above 1 for Exposure and Highlights to bring back.
+  - A fast half-size decode for the preview; the full decode happens at export and is
+    OpenMP-parallel.
+  - File dialogs, drag and drop and batch export accept RAW files.
+- **EXIF orientation:** JPEGs load upright in scene-linear projects. Legacy projects keep pixels
+  as stored.
+- Image Input hides the params that don't apply: Color Space for RAW files, and Highlight
+  Reconstruction for other images.
+- Rendering and exporting no longer decode the source image twice.
+
 ## 0.8.0 (2026-09-30)
 
 - **Develop maths for scene-linear projects** (Basic, Color Mixer, Color Grading), modelled on

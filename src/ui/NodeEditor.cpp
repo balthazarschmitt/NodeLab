@@ -12,6 +12,7 @@
 #include "graph/Layout.h"
 #include "graph/NodeRegistry.h"
 #include "nodes/group/GroupNodes.h"
+#include "io/ImageIO.h"
 #include "io/Paths.h"
 #include "ui/ColorDisplay.h"
 #include "ui/Eyedropper.h"
@@ -28,7 +29,6 @@ constexpr float kPad = 6.0f;
 constexpr float kPinR = 5.0f;
 constexpr float kMinZoom = 0.25f, kMaxZoom = 2.0f;
 
-const char* kImageFilter = "Images|*.png;*.jpg;*.jpeg;*.bmp;*.tga|All files|*.*";
 
 bool containsNoCase(const std::string& hay, const char* needle) {
     std::string h = hay, n = needle;
@@ -427,7 +427,7 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
             std::string path = n.paramS(i);
             std::string label = path.empty() ? "Choose image..." : pathToU8(u8ToPath(path).filename());
             if (canInteract && button()) {
-                if (auto p = openFileDialog("Choose image", kImageFilter)) {
+                if (auto p = openFileDialog("Choose image", kImageFileFilter)) {
                     n.params[i] = *p;
                     changed = true;
                 }

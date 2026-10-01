@@ -8,7 +8,11 @@ glitch/experimental looks.
 
 Requires CMake ≥ 3.24 and a C++20 compiler. CLion's bundled MinGW toolchain works out of the box:
 open the folder in CLion, pick the `NodeLab` target, Run. Dependencies (GLFW, Dear ImGui, imnodes,
-nlohmann/json, stb, doctest) are downloaded by CMake on first configure.
+nlohmann/json, stb, tinyexpr, LibRaw, doctest) are downloaded by CMake on first configure.
+
+LibRaw (camera RAW decoding) is used under its CDDL 1.0 licence option
+(https://github.com/LibRaw/LibRaw/blob/master/LICENSE.CDDL). It is built with OpenMP and linked
+statically, so the exe still needs only Windows system DLLs.
 
 Command line:
 

@@ -275,12 +275,32 @@ value while nothing is connected.
 ### Input / Output
 
 **Image Input**
-- Loads an image file (PNG, JPEG, BMP or TGA; 8 or 16 bits per channel).
+- Loads an image file: PNG, JPEG, BMP or TGA (8 or 16 bits per channel), or a camera **RAW**
+  file (CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2, PEF and most others, decoded by LibRaw).
 - Output: Image.
 - **Color Space** (as in Blender) says how the file's values are decoded in a scene-linear
   project: **sRGB** (photos and most images) converts to linear light; **Linear Rec.709** and
   **Non-Color** (masks, depth, data) load the values as they are. Legacy projects always load them
-  as they are.
+  as they are. It is hidden for RAW files, which are always linear camera data.
+- In scene-linear projects, JPEGs are turned upright from their EXIF orientation, as cameras and
+  phones expect. Legacy projects keep the pixels as stored, so old edits still line up.
+- **RAW files** load as scene-linear light with the camera's "as shot" white balance, upright,
+  with no tone curve or brightening. They look flatter and darker than the camera's JPEG until you
+  add a Basic node (Exposure, Contrast) or pick the AgX view transform.
+  - Basic's Temperature and Tint are relative to the as-shot white balance, as in Lightroom.
+  - The preview uses a fast half-size decode. The full-size decode (one to three seconds for a
+    20 MP file) happens only when exporting.
+  - In legacy projects a RAW is encoded to sRGB and clipped like a JPEG.
+- **Highlight Reconstruction** (RAW only) handles areas where some of the sensor's colour channels
+  clipped, such as a bright sky or a sunset:
+  - **Clip** cuts every channel at white. Pulled-down highlights turn flat grey, or shift colour
+    where one channel clipped first.
+  - **Blend** mixes the clipped channels with the unclipped ones. This keeps detail but tends
+    toward pink or grey.
+  - **Reconstruct** (the default) rebuilds the missing colour from neighbouring pixels, so a
+    sunset stays orange as you lower Exposure or Highlights.
+  - Blend and Reconstruct keep the recovered highlights above 1, so Exposure or Highlights can
+    bring them back.
 - The first Image Input in the graph sets the project's working size and is shown in the Original
   panel. You can have as many as you like, for example to blend two photos or to load a mask.
 
