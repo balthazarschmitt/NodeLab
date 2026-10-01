@@ -8,6 +8,10 @@
 struct ImDrawList;
 struct ImVec2;
 
+// What GLTexture::upload/uploadTint send to the GPU: 8-bit RGBA.
+std::vector<unsigned char> displayBytes(const Image& img, bool clipping);
+std::vector<unsigned char> tintBytes(const Image& img, float r, float g, float b, float opacity);
+
 // An OpenGL texture mirroring an Image (converted to 8-bit for display).
 class GLTexture {
 public:
@@ -22,13 +26,14 @@ public:
     // Mask display: a flat colour whose opacity follows the image's red channel.
     void uploadTint(const Image& img, float r, float g, float b, float opacity);
     void reset();
+    // Bytes from displayBytes/tintBytes (made off the UI thread by DisplayWorker).
+    void uploadBytes(const std::vector<unsigned char>& bytes, int w, int h);
     bool valid() const { return id_ != 0 && w_ > 0; }
     uint32_t id() const { return id_; }
     int width() const { return w_; }
     int height() const { return h_; }
 
 private:
-    void uploadBytes(const std::vector<unsigned char>& bytes, int w, int h);
     uint32_t id_ = 0;
     int w_ = 0, h_ = 0;
 };

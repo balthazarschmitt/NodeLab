@@ -2,6 +2,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -13,6 +14,10 @@
 
 #include "core/Parallel.h"  // EvalCancelled
 #include "graph/Graph.h"
+
+namespace gpu {
+class Timer;
+}
 
 // Pull-based graph evaluator with a per-node output cache. A node is recomputed only when
 // its signature (type + params + upstream signatures + resolution mode) changes.
@@ -64,6 +69,10 @@ public:
     bool releaseIntermediates = false;
 
     int recomputeCount = 0;  // nodes actually evaluated (for tests / stats)
+    // GPU compositing (EvalContext::gpu): nodes run on the GPU, and ones that failed there (out of
+    // GPU memory, a driver rejecting a shader) and ran on the CPU instead, with the last reason.
+    int gpuRuns = 0, gpuFallbacks = 0;
+    std::string lastGpuError;
 
     // Milliseconds the node's own evaluate() took when it last ran (upstream work excluded), like
     // Blender's compositor Node Timings. -1 if the node has no cached result.
@@ -71,6 +80,8 @@ public:
     // Timings of every cached node in the graph last evaluated (top level only; a group's time
     // includes its inner nodes).
     std::unordered_map<int, double> timings() const;
+    // Which of those ran on the GPU.
+    std::unordered_map<int, bool> gpuNodes() const;
 
 private:
     struct Entry {
@@ -78,10 +89,20 @@ private:
         std::vector<Value> outs;
         double ms = 0;
         std::vector<float> stats;  // global statistics recorded by a preview run (EvalContext::statsOut)
+        // outs moved to the other device (uploaded for GPU nodes, downloaded for CPU ones), made
+        // once however many nodes read them.
+        std::vector<Value> alt;
+        bool gpu = false;  // ran on the GPU
+        std::shared_ptr<gpu::Timer> timer;  // its device time (GPU nodes)
+        double time() const;                 // ms, or the device time if longer
     };
+    // Whether nodes may run on the GPU at this level (whole images only; regions stay on the CPU).
+    bool gpuLevel(const EvalContext& ctx) const;
+    // Output `pin` of `up` on the GPU or CPU, from its alt cache.
+    Value converted(Entry& up, int pin, bool toGpu, const EvalContext& ctx);
     size_t ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unordered_map<int, size_t>& pass);
     // Runs a node (or its bypass when muted) and stores the result in e.
-    void run(const Graph& g, Node& n, EvalContext& ctx, const std::vector<Value>& inputs, Entry& e, size_t sig);
+    void run(const Graph& g, Node& n, EvalContext& ctx, std::vector<Value>& inputs, Entry& e, size_t sig, bool gpu);
     std::string baseKey(const Node& n, const EvalContext& ctx) const;
 
     Level level_ = Preview;
@@ -116,6 +137,9 @@ public:
         // slow graph, refined by the next full submission (progressive refinement).
         bool draft = false;
         std::vector<Detail> details;  // evaluated after the preview (not for drafts)
+        // Blender's compositor Device and Precision (EvalContext::gpu, gpuHalf).
+        bool gpu = false;
+        bool gpuHalf = true;
     };
     struct Tile {
         int tag = 0;        // Detail::tag
@@ -129,6 +153,9 @@ public:
         uint64_t generation = 0;
         bool draft = false;
         std::unordered_map<int, double> nodeMs;  // top-level node timings (see Evaluator::timings)
+        std::unordered_map<int, bool> nodeGpu;   // top-level nodes that ran on the GPU
+        int gpuFallbacks = 0;                    // nodes so far that failed on the GPU (Evaluator::gpuFallbacks)
+        std::string gpuError;                    // the last reason
         // Details, delivered after the images (merged into them if those weren't polled yet).
         std::vector<Tile> tiles;
         bool tilesDone = false;

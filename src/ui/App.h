@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -8,6 +9,7 @@
 #include "graph/Graph.h"
 #include "io/Export.h"
 #include "io/ImageCache.h"
+#include "ui/DisplayWorker.h"
 #include "ui/ImageView.h"
 #include "ui/NodeEditor.h"
 #include "ui/ViewerOverlay.h"
@@ -45,6 +47,7 @@ private:
         ViewDetail detail;
         GLTexture detailTex;
         ImagePtr detailShown;  // scene values of detailTex
+        ViewDetail pendingDetail;  // where detailShown goes, once its texture is ready
         ViewInfo info;         // what the view showed last frame
     };
 
@@ -58,12 +61,21 @@ private:
     void drawColorMenu();
     void refreshDisplay(Viewer& v, bool main);
     void refreshDetail(Viewer& v, bool main);
+    void dropDetail(Viewer& v);
+    // Textures are prepared by display_ (DisplayWorker) and uploaded when ready; slots name them,
+    // and a slot's sequence number drops results that were superseded meanwhile.
+    static constexpr int kSlotLeft = 1, kSlotLeftDetail = 2, kSlotMask = 3;
+    int detailSlot(const Viewer& v) const { return &v == &left_ ? kSlotLeftDetail : 101 + 2 * v.id; }
+    static int mainSlot(const Viewer& v) { return 100 + 2 * v.id; }
+    void requestDisplay(int slot, const ImagePtr& scene, bool clipping, bool histogram, bool tint = false);
+    void dropDisplay(int slot) { ++displaySeq_[slot]; }
+    void applyDisplays();
     // Detail requests for the zoomed-in views, and the proxy size the views call for.
     std::vector<AsyncEvaluator::Detail> wantedDetails();
     int wantedProxyEdge() const;
     // Nothing evaluating or about to be (scripts and screenshots wait for it).
     bool idle() const {
-        return !eval_->busy() && !evalDirty_ && !refineAfterGesture_ && (lastWanted_.empty() || sameDetails(lastWanted_, details_));
+        return !eval_->busy() && !display_.busy() && !evalDirty_ && !refineAfterGesture_ && (lastWanted_.empty() || sameDetails(lastWanted_, details_));
     }
     std::vector<Viewer*> detailViews();  // the Original's (left_) and the viewers
     static bool sameDetails(const std::vector<AsyncEvaluator::Detail>& a, const std::vector<AsyncEvaluator::Detail>& b);
@@ -146,6 +158,8 @@ private:
     bool maskWanted_ = false;   // a mask node is selected and the overlay is on
     bool maskOverlay_ = true, showHistogram_ = false, clipping_ = false;
     Histogram histogram_;
+    DisplayWorker display_;
+    std::map<int, uint64_t> displaySeq_;
 
     int selected_ = 0;       // selected node in the current graph
     NodePath previewPath_;   // Ctrl+click preview; empty = Output node
@@ -181,6 +195,14 @@ private:
     std::vector<std::string> exportLog_;
     double evalMs_ = 0;
     std::unordered_map<int, double> nodeMs_;  // top-level node timings from the last evaluation
+    std::unordered_map<int, bool> nodeGpu_;   // ...and which of them ran on the GPU
+    // Blender's Performance > Compositor settings, kept per user (preferences.json) since they
+    // depend on the machine: Device GPU or CPU, Precision Auto (half floats on the GPU) or Full.
+    bool gpuDevice_ = true, gpuFull_ = false;
+    int gpuFallbacks_ = 0;
+    std::string gpuError_;  // why the GPU is unavailable, or the last node that fell back
+    void loadPreferences();
+    void savePreferences() const;
 
     // panels / layout
     bool showOriginal_ = true, showEditor_ = true, showInspector_ = true, showResult_ = true;
@@ -200,4 +222,8 @@ private:
 
     friend void dropCallback(GLFWwindow*, int, const char**);
     friend void closeCallback(GLFWwindow*);
+    friend void refreshCallback(GLFWwindow*);
+    // Draws and presents one frame outside the main loop (see refreshCallback); null in tests.
+    std::function<void()> redraw_;
+    bool inFrame_ = false;
 };

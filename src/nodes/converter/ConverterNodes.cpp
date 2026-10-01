@@ -2,6 +2,7 @@
 
 #include "core/ColorMath.h"
 #include "core/Ramp.h"
+#include "gpu/PointOp.h"
 #include "nodes/NodeUtil.h"
 
 using namespace nodeutil;
@@ -75,6 +76,41 @@ public:
         });
         out[0] = Value(ImagePtr(img));
         out[1] = Value(ChannelPtr(alpha));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>&) const override { return true; }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const ColorRamp ramp = rampFromJson(params[1]);
+        gpu::PointOp op;
+        if (!in[0].size(op.w, op.h)) op.w = ctx.defaultW, op.h = ctx.defaultH;
+        // The stops as params (position, RGBA); their count and the interpolation compiled in.
+        for (const RampStop& s : ramp.stops) op.params.insert(op.params.end(), {s.pos, s.c[0], s.c[1], s.c[2], s.c[3]});
+        op.functions = "const int N = " + std::to_string(ramp.stops.size()) + ", INTERP = " + std::to_string(ramp.interp) +
+                       ";\n" + R"(
+// max(): with no stops, N - 1 would be a constant out-of-range index, which fails to compile.
+float stopPos(int i) { return P[max(i, 0) * 5]; }
+vec4 stopColor(int i) { i = max(i, 0); return vec4(P[i * 5 + 1], P[i * 5 + 2], P[i * 5 + 3], P[i * 5 + 4]); }
+// As ColorRamp::eval.
+vec4 ramp(float t) {
+    if (N == 0) return vec4(vec3(t), 1.0);
+    if (t <= stopPos(0)) return stopColor(0);
+    if (t >= stopPos(N - 1)) return stopColor(N - 1);
+    int lo = 0, hi = N - 1;
+    for (int i = 0; i + 1 < N; ++i)
+        if (t >= stopPos(i) && t <= stopPos(i + 1)) {
+            lo = i;
+            hi = i + 1;
+            break;
+        }
+    float f = (t - stopPos(lo)) / max(stopPos(hi) - stopPos(lo), 1e-6);
+    if (INTERP == 1) f = 0.0;
+    else if (INTERP == 2) f = f * f * (3.0 - 2.0 * f);
+    else if (INTERP == 3) f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    return stopColor(lo) + (stopColor(hi) - stopColor(lo)) * f;
+}
+)";
+        op.body = "    vec4 c = ramp(has0 ? par0(p) : 0.5);\n    out0 = vec4(c.rgb, 1.0);\n    out1 = c.a;";
+        gpu::runPoint(ctx, *this, op, in, out);
     }
 };
 

@@ -43,7 +43,11 @@ public:
     void frameAll() { fitFrames_ = 1; }
     // Blender's "Node Timings" overlay: how long each node took when it last ran, drawn above it.
     // Keyed by node id of the graph being drawn; empty hides the labels.
-    void setTimings(std::unordered_map<int, double> t) { timings_ = std::move(t); }
+    // Nodes that ran on the GPU are marked so.
+    void setTimings(std::unordered_map<int, double> t, std::unordered_map<int, bool> gpu = {}) {
+        timings_ = std::move(t);
+        gpuNodes_ = std::move(gpu);
+    }
     void select(int nodeId);
 
     // Places a node so its title bar sits at a screen position (uses the current view).
@@ -81,6 +85,7 @@ public:
 
 private:
     std::unordered_map<int, double> timings_;
+    std::unordered_map<int, bool> gpuNodes_;
     enum class Mode { None, Pan, BoxSelect, PressNode, DragNodes, DragLink, DragFrame, ResizeFrame, Grab, Knife, RerouteCut };
 
     struct PinRef {

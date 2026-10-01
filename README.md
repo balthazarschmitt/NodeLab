@@ -45,6 +45,9 @@ PNG, JPEG, TIFF or OpenEXR; `--depth 32` for full-float EXR)
 Headless batch: `NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr] [--depth N] a.jpg b.jpg ...`
 (each source goes into the project's first Image Input and is saved as `outDir\<name>_edit.<ext>`)
 Benchmark: `NodeLab.exe --benchmark project.nlproj [--full] [--runs N]` (median ms per node)
+GPU compositing: `--device gpu|cpu` and `--precision half|full` for `--render` (CPU by default) and
+`--benchmark` (GPU, half by default); `NodeLab.exe --gpu-info` names the GPU device or says why
+there is none. In the app: View > Compositor.
 Open an image directly (also works with Windows' Open with): `NodeLab.exe photo.CR2` starts a new
 project with it.
 
@@ -145,6 +148,7 @@ functions include `sin cos pow sqrt abs floor ceil log exp atan2 min max clamp m
 ```
 src/core    Image/Channel/Value types, conversions, parallelFor
 src/graph   Node model, Graph (links, cycle check, JSON), Evaluator (cached, background thread)
+src/gpu     GPU device (OpenGL 4.3 compute), per-pixel kernels (PointOp), GPU blur
 src/nodes   Node implementations by family (io, color, math, converter, group)
 src/io      Image load/save, source image cache, project files
 src/ui      App window, node editor (imnodes), inspector, image views, file dialogs

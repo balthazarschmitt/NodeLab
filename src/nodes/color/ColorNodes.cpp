@@ -1,5 +1,6 @@
 #include "core/ColorMath.h"
 #include "core/Curve.h"
+#include "gpu/PointOp.h"
 #include "nodes/NodeUtil.h"
 
 using namespace nodeutil;
@@ -54,6 +55,25 @@ void combineImage(const Node& node, EvalContext& ctx, const std::vector<Value>& 
     out[0] = Value(ImagePtr(img));
 }
 
+// The GPU versions: a split runs over its image (and has nothing to split without one), a
+// combine over the size its inputs resolve to.
+bool gpuSplit(EvalContext& ctx, const Node& node, const std::vector<Value>& in, std::vector<Value>& out,
+              const char* body) {
+    gpu::PointOp op;
+    if (!in[0].size(op.w, op.h)) return false;
+    op.body = body;
+    gpu::runPoint(ctx, node, op, in, out);
+    return true;
+}
+
+void gpuCombine(EvalContext& ctx, const Node& node, const std::vector<Value>& in, std::vector<Value>& out,
+                const char* body) {
+    gpu::PointOp op;
+    resolveSize(in, ctx, op.w, op.h);
+    op.body = body;
+    gpu::runPoint(ctx, node, op, in, out);
+}
+
 class SplitRGBNode : public Node {
 public:
     NODELAB_NODE({"color.split_rgb", "Split RGB", "Color",
@@ -64,6 +84,10 @@ public:
         splitImage(in[0], out, 4, [](const float* p, float* o) {
             for (int k = 0; k < 4; ++k) o[k] = p[k];
         });
+    }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpuSplit(ctx, *this, in, out, "    vec4 c = img0(p);\n    out0 = c.r; out1 = c.g; out2 = c.b; out3 = c.a;");
     }
 };
 
@@ -81,6 +105,10 @@ public:
             d[0] = r, d[1] = g, d[2] = b;
         });
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>&) const override { return true; }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpuCombine(ctx, *this, in, out, "    out0 = vec4(par0(p), par1(p), par2(p), has3 ? clamp01(par3(p)) : 1.0);");
+    }
 };
 
 class SplitHSVNode : public Node {
@@ -96,6 +124,12 @@ public:
             o[3] = p[3];
         });
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpuSplit(ctx, *this, in, out,
+                 "    vec4 c = img0(p);\n    vec3 hsv = rgbToHsv(clampColor(uLinear, c.rgb));\n"
+                 "    out0 = hsv.x; out1 = hsv.y; out2 = hsv.z; out3 = c.a;");
+    }
 };
 
 class CombineHSVNode : public Node {
@@ -110,6 +144,12 @@ public:
         combineImage(*this, ctx, in, out, defs, true, [](float h, float s, float v, float* d) {
             hsvToRgb(h, s, v, d[0], d[1], d[2]);  // hue wraps, so it is left unclamped
         });
+    }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>&) const override { return true; }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpuCombine(ctx, *this, in, out,
+                   "    vec3 c = hsvToRgb(vec3(par0(p), par1(p), par2(p)));\n"
+                   "    out0 = vec4(clampColor(uLinear, c), has3 ? clamp01(par3(p)) : 1.0);");
     }
 };
 

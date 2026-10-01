@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -15,6 +16,7 @@
 #include "core/ColorManagement.h"
 #include "core/Guide.h"
 #include "core/Version.h"
+#include "gpu/Device.h"
 #include "io/ImageIO.h"
 #include "io/ImageWrite.h"
 #include "io/Paths.h"
@@ -43,6 +45,26 @@ void dropCallback(GLFWwindow* w, int count, const char** paths) {
     for (int i = 0; i < count; ++i) app->drops_.emplace_back(paths[i]);
 }
 
+// Windows runs a modal loop while the main window is resized or moved, and glfwWaitEvents only
+// returns when it ends: frames drawn from here meanwhile keep the window from showing black.
+void refreshCallback(GLFWwindow* w) {
+    auto* app = static_cast<App*>(glfwGetWindowUserPointer(w));
+    if (app->redraw_ && !app->inFrame_) app->redraw_();
+}
+
+namespace {
+// New floating panels (ImGui viewports) are shown once their first frame is drawn: shown at
+// creation, as ImGui does, a window is black until its first swap, which flashed.
+void (*g_showWindow)(ImGuiViewport*) = nullptr;
+std::vector<ImGuiID> g_toShow;
+void deferShowWindow(ImGuiViewport* vp) { g_toShow.push_back(vp->ID); }
+void showDeferredWindows() {
+    for (ImGuiID id : g_toShow)
+        if (ImGuiViewport* vp = ImGui::FindViewportByID(id); vp && vp->PlatformWindowCreated) g_showWindow(vp);
+    g_toShow.clear();
+}
+}  // namespace
+
 void closeCallback(GLFWwindow* w) {
     auto* app = static_cast<App*>(glfwGetWindowUserPointer(w));
     glfwSetWindowShouldClose(w, GLFW_FALSE);
@@ -64,6 +86,25 @@ static fs::path settingsDir() {
 
 App::App() = default;
 App::~App() = default;
+
+void App::loadPreferences() {
+    try {
+        std::ifstream f(settingsDir() / "preferences.json");
+        if (!f) return;
+        const nlohmann::json j = nlohmann::json::parse(f);
+        gpuDevice_ = j.value("compositorDevice", std::string("GPU")) == "GPU";
+        gpuFull_ = j.value("compositorPrecision", std::string("Auto")) == "Full";
+    } catch (const std::exception&) {
+        // A damaged file keeps the defaults; it is rewritten on the next change.
+    }
+}
+
+void App::savePreferences() const {
+    std::ofstream f(settingsDir() / "preferences.json");
+    f << nlohmann::json{{"compositorDevice", gpuDevice_ ? "GPU" : "CPU"},
+                        {"compositorPrecision", gpuFull_ ? "Full" : "Auto"}}
+             .dump(2);
+}
 
 // ---------------------------------------------------------------- main loop
 
@@ -159,6 +200,20 @@ int App::run(const RunOptions& opt) {
     // While a script runs, OS input is not forwarded to ImGui so the real mouse can't interfere.
     ImGui_ImplGlfw_InitForOpenGL(window_, !script.active());
     ImGui_ImplOpenGL3_Init("#version 130");
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+        g_showWindow = pio.Platform_ShowWindow;
+        pio.Platform_ShowWindow = deferShowWindow;
+    }
+
+    // The GPU device: a hidden context sharing nothing with the UI's. Test runs stay on the CPU
+    // so their screenshots don't depend on the machine's GPU.
+    if (automated_) {
+        gpuDevice_ = false;
+    } else {
+        loadPreferences();
+        if (!gpu::init(&gpuError_)) gpuError_ = "GPU unavailable: " + gpuError_;
+    }
 
     eval_ = std::make_unique<AsyncEvaluator>(cache_);
     auto main = std::make_unique<Viewer>();
@@ -173,10 +228,45 @@ int App::run(const RunOptions& opt) {
         newProject();
     }
 
+    auto renderMain = [&] {
+        int fbw, fbh;
+        glfwGetFramebufferSize(window_, &fbw, &fbh);
+        glViewport(0, 0, fbw, fbh);
+        glClearColor(0.08f, 0.08f, 0.09f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    };
+    auto renderPlatformWindows = [&] {
+        // Floating panels live in their own OS windows.
+        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+            GLFWwindow* backup = glfwGetCurrentContext();
+            ImGui::UpdatePlatformWindows();
+            ImGui::RenderPlatformWindowsDefault();
+            glfwMakeContextCurrent(backup);
+            showDeferredWindows();
+        }
+    };
+    if (!automated_) {
+        redraw_ = [&] {
+            inFrame_ = true;
+            ImGui_ImplOpenGL3_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+            ImGui::NewFrame();
+            drawFrame();
+            ImGui::Render();
+            renderMain();
+            renderPlatformWindows();
+            glfwSwapBuffers(window_);
+            inFrame_ = false;
+        };
+        glfwSetWindowRefreshCallback(window_, refreshCallback);
+    }
+
     int frame = 0, settled = 0;
     while (!quit_) {
-        glfwWaitEventsTimeout(eval_->busy() || evalDirty_ || automated_ ? 0.01 : 0.05);
+        glfwWaitEventsTimeout(eval_->busy() || display_.busy() || evalDirty_ || automated_ ? 0.01 : 0.05);
 
+        inFrame_ = true;
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         std::string shotPath;
@@ -184,13 +274,7 @@ int App::run(const RunOptions& opt) {
         ImGui::NewFrame();
         drawFrame();
         ImGui::Render();
-
-        int fbw, fbh;
-        glfwGetFramebufferSize(window_, &fbw, &fbh);
-        glViewport(0, 0, fbw, fbh);
-        glClearColor(0.08f, 0.08f, 0.09f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        renderMain();
 
         if (!opt.screenshot.empty() && !script.active()) {
             // Plain --screenshot: wait for evaluation to settle and layout to stabilize.
@@ -203,17 +287,15 @@ int App::run(const RunOptions& opt) {
         }
         if (!shotPath.empty() && !saveFramebuffer(shotPath)) std::fprintf(stderr, "screenshot failed\n");
 
-        // Floating panels live in their own OS windows.
-        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
-            GLFWwindow* backup = glfwGetCurrentContext();
-            ImGui::UpdatePlatformWindows();
-            ImGui::RenderPlatformWindowsDefault();
-            glfwMakeContextCurrent(backup);
-        }
+        renderPlatformWindows();
         glfwSwapBuffers(window_);
+        inFrame_ = false;
     }
 
+    glfwSetWindowRefreshCallback(window_, nullptr);
+    redraw_ = nullptr;
     eval_.reset();
+    gpu::shutdown();
     leftTex_.reset();
     viewers_.clear();
     ImGui_ImplOpenGL3_Shutdown();
@@ -263,6 +345,7 @@ void App::drawFrame() {
         overlayPath_ = ovPath;
         maskWanted_ = wantMask;
         maskTex_.reset();
+        dropDisplay(kSlotMask);
         evalDirty_ = true;
     }
 
@@ -281,8 +364,7 @@ void App::drawFrame() {
     for (Viewer* v : detailViews()) {
         const int tag = v == &left_ ? -1 : v->id;
         if (std::none_of(wanted.begin(), wanted.end(), [&](const auto& d) { return d.tag == tag; })) {
-            v->detailTex.reset();  // not zoomed in (any more)
-            v->detailShown.reset();
+            dropDetail(*v);  // not zoomed in (any more)
         }
         v->info = ViewInfo{};  // refilled when the view is drawn next frame
     }
@@ -328,6 +410,8 @@ void App::drawFrame() {
         // A slow graph shows a half-size draft while dragging (progressive refinement), and
         // details wait for the gesture to end.
         opt.draft = gesture && previewMs_ > kDraftAfterMs;
+        opt.gpu = gpuDevice_ && gpu::available();
+        opt.gpuHalf = !gpuFull_;
         if (!gesture) {
             opt.details = wanted;
             details_ = wanted;
@@ -420,7 +504,8 @@ void App::drawEditorWindow() {
             preview = previewPath_.back();
         const int previewBefore = preview;
         // Timings are for the top-level graph; ids inside a group mean different nodes.
-        editor_.setTimings(groupPath_.empty() ? nodeMs_ : std::unordered_map<int, double>{});
+        editor_.setTimings(groupPath_.empty() ? nodeMs_ : std::unordered_map<int, double>{},
+                           groupPath_.empty() ? nodeGpu_ : std::unordered_map<int, bool>{});
         NodeEditor::Result r = editor_.draw(g, selected_, preview, previewPin_);
         if (preview != previewBefore || r.previewChanged) {
             previewPath_.clear();
@@ -541,7 +626,7 @@ void App::drawViewerWindow(Viewer& v, bool isMain) {
                 drawHistogram(ImGui::GetWindowDrawList(), ImVec2(viewMax.x - size.x - 8.0f, viewMin.y + 8.0f), size,
                               histogram_, clipping_)) {
                 clipping_ = !clipping_;
-                if (v.display) v.tex.upload(*v.display, clipping_);
+                refreshDisplay(v, true);
                 refreshDetail(v, true);
             }
         }
@@ -564,13 +649,15 @@ void App::drawResultToolbar(Node* ov) {
     if (hover && ImGui::IsKeyPressed(ImGuiKey_O, false)) maskOverlay_ = !maskOverlay_;
     if (hover && ImGui::IsKeyPressed(ImGuiKey_H, false)) showHistogram_ = !showHistogram_;
 
-    if (ImGui::Checkbox("Histogram", &showHistogram_) && showHistogram_ && v.display) histogram_.compute(*v.display);
+    ImGui::Checkbox("Histogram", &showHistogram_);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show the histogram (H)");
     ImGui::SameLine();
     clipToggled |= ImGui::Checkbox("Clipping", &clipping_);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show clipped highlights in red and crushed shadows in blue (J)");
-    if (clipToggled && v.display) v.tex.upload(*v.display, clipping_);
-    if (showHistogram_ && !histogram_.valid && v.display) histogram_.compute(*v.display);
+    if (clipToggled) {
+        refreshDisplay(v, true);
+        refreshDetail(v, true);
+    }
     if (ov && NodeOverlay::isMask(*ov)) {
         ImGui::SameLine();
         ImGui::Checkbox("Mask Overlay", &maskOverlay_);
@@ -596,6 +683,9 @@ void App::drawStatusBar() {
                 st = std::to_string(main.tex.width()) + " x " + std::to_string(main.tex.height()) + " preview  |  " +
                      std::to_string(int(evalMs_)) + " ms";
             if (eval_->busy()) st += "  |  evaluating...";
+            if (gpuFallbacks_)
+                st += "  |  " + std::to_string(gpuFallbacks_) + (gpuFallbacks_ == 1 ? " node" : " nodes") +
+                      " ran on the CPU (" + gpuError_ + ")";
             if (exporter_.busy()) {
                 const Exporter::Progress pr = exporter_.progress();
                 st += "  |  Export " + std::to_string(pr.done) + "/" + std::to_string(pr.total) + ": " + pr.stage;
@@ -711,6 +801,28 @@ void App::drawMainMenu() {
         if (ImGui::MenuItem("Reset Layout")) resetLayout_ = true;
         ImGui::Separator();
         ImGui::MenuItem("Node Timings", nullptr, &editor_.showTimings);
+        if (ImGui::BeginMenu("Compositor")) {
+            // As Blender's Render Properties > Performance > Compositor.
+            bool changed = false;
+            ImGui::TextDisabled("Device");
+            if (ImGui::RadioButton("CPU", !gpuDevice_ || !gpu::available())) changed = gpuDevice_, gpuDevice_ = false;
+            ImGui::BeginDisabled(!gpu::available());
+            if (ImGui::RadioButton("GPU", gpuDevice_ && gpu::available())) changed = !gpuDevice_, gpuDevice_ = true;
+            ImGui::EndDisabled();
+            ImGui::TextDisabled("%s", gpu::available() ? gpu::description().c_str() : gpuError_.c_str());
+            ImGui::Separator();
+            ImGui::TextDisabled("Precision");
+            ImGui::BeginDisabled(!gpuDevice_ || !gpu::available());
+            if (ImGui::RadioButton("Auto", !gpuFull_)) changed |= gpuFull_, gpuFull_ = false;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Half floats on the GPU: half the memory traffic. Exports always use full precision.");
+            if (ImGui::RadioButton("Full", gpuFull_)) changed |= !gpuFull_, gpuFull_ = true;
+            ImGui::EndDisabled();
+            if (changed) {
+                savePreferences();
+                evalDirty_ = true;
+            }
+            ImGui::EndMenu();
+        }
         if (ImGui::MenuItem("Frame All Nodes", "Home")) editor_.frameAll();
         if (ImGui::MenuItem("Reset Image Zoom", "double-click image")) view_.reset();
         if (ImGui::MenuItem("Clear Node Preview", nullptr, false, !previewPath_.empty())) {
@@ -722,6 +834,7 @@ void App::drawMainMenu() {
     drawColorMenu();
     if (ImGui::BeginMenu("Help")) {
         ImGui::TextDisabled("NodeLab %s - node-based image manipulation", versionString().c_str());
+        ImGui::TextDisabled("%s", gpu::available() ? ("GPU: " + gpu::description()).c_str() : gpuError_.c_str());
         ImGui::Separator();
         if (ImGui::MenuItem("Guide", "F1")) openGuide();
         if (const Node* n = currentGraph().find(selected_))
@@ -1421,20 +1534,70 @@ int App::wantedProxyEdge() const {
     return std::clamp(int(std::ceil(edge / 256.0f)) * 256, kMinProxyEdge, kMaxProxyEdge);
 }
 
+void App::requestDisplay(int slot, const ImagePtr& scene, bool clipping, bool histogram, bool tint) {
+    DisplayWorker::Request r;
+    r.slot = slot;
+    r.seq = ++displaySeq_[slot];
+    r.scene = scene;
+    r.cm = graph_.colorManagement;
+    r.clipping = clipping;
+    r.histogram = histogram;
+    r.tint = tint;
+    display_.submit(std::move(r));
+}
+
 void App::refreshDetail(Viewer& v, bool main) {
-    ImagePtr d = colormgmt::displayImage(v.detailShown, graph_.colorManagement);
-    if (!d) {
-        v.detailTex.reset();
+    if (!v.detailShown) {
+        dropDetail(v);
         return;
     }
-    v.detailTex.upload(*d, main && clipping_);
-    v.detail.tex = &v.detailTex;
+    requestDisplay(detailSlot(v), v.detailShown, main && clipping_, false);
+}
+
+void App::dropDetail(Viewer& v) {
+    v.detailTex.reset();
+    v.detailShown.reset();
+    dropDisplay(detailSlot(v));
 }
 
 void App::refreshDisplay(Viewer& v, bool main) {
-    v.display = colormgmt::displayImage(v.shown, graph_.colorManagement);
-    if (v.display) v.tex.upload(*v.display, main && clipping_);
-    else v.tex.reset();
+    // The histogram follows the main Result.
+    if (v.shown) {
+        requestDisplay(mainSlot(v), v.shown, main && clipping_, main);
+        return;
+    }
+    dropDisplay(mainSlot(v));
+    v.display.reset();
+    v.tex.reset();
+    if (main) histogram_.valid = false;
+}
+
+void App::applyDisplays() {
+    for (DisplayWorker::Result& r : display_.poll()) {
+        if (r.seq != displaySeq_[r.slot]) continue;  // superseded while it was prepared
+        auto upload = [&](GLTexture& t) {
+            if (r.bytes.empty()) t.reset();
+            else t.uploadBytes(r.bytes, r.w, r.h);
+        };
+        auto uploadDetail = [&](Viewer& v) {
+            upload(v.detailTex);
+            v.detail = v.pendingDetail;
+            v.detail.tex = &v.detailTex;
+        };
+        if (r.slot == kSlotLeft) upload(leftTex_);
+        else if (r.slot == kSlotMask) upload(maskTex_);
+        else if (r.slot == kSlotLeftDetail) uploadDetail(left_);
+        for (size_t i = 0; i < viewers_.size(); ++i) {
+            Viewer& v = *viewers_[i];
+            if (r.slot == mainSlot(v)) {
+                v.display = r.display;
+                upload(v.tex);
+                if (i == 0) histogram_ = r.histogram;
+            } else if (r.slot == detailSlot(v)) {
+                uploadDetail(v);
+            }
+        }
+    }
 }
 
 void App::updateTextures() {
@@ -1448,7 +1611,8 @@ void App::updateTextures() {
     const ColorManagement& cm = graph_.colorManagement;
     if (src && !src->paramS(0).empty()) {
         const auto& in = static_cast<const ImageInputNode&>(*src);
-        ImagePtr decoded = cache_.get(in.paramS(0), true, nullptr, in.decode(cm.linear), proxyEdge_);
+        // Never decode here: the evaluator does, and the panel fills in once it has.
+        ImagePtr decoded = cache_.cached(in.paramS(0), in.decode(cm.linear), proxyEdge_);
         // The Original shows the node's output (with a RAW's Baseline Exposure), scaled again
         // only when the image or the gain changes.
         const float gain = in.exposureGain();
@@ -1463,14 +1627,15 @@ void App::updateTextures() {
     // Changing the view transform only redraws; the graph's values are unaffected.
     const bool cmChanged = !(cm == shownCm_);
     shownCm_ = cm;
-    if (left != leftShown_) {
-        left_.detailTex.reset();
-        left_.detailShown.reset();
-    }
+    if (left != leftShown_) dropDetail(left_);
     if (left != leftShown_ || cmChanged) {
         leftShown_ = left;
-        if (left) leftTex_.upload(*colormgmt::displayImage(left, cm));
-        else leftTex_.reset();
+        if (left) {
+            requestDisplay(kSlotLeft, left, false, false);
+        } else {
+            dropDisplay(kSlotLeft);
+            leftTex_.reset();
+        }
     }
     if (cmChanged) {
         for (size_t i = 0; i < viewers_.size(); ++i) {
@@ -1478,13 +1643,15 @@ void App::updateTextures() {
             refreshDetail(*viewers_[i], i == 0);
         }
         refreshDetail(left_, false);
-        histogram_.valid = false;
     }
 
     auto res = eval_->poll();
     if (res && !res->images.empty()) {
         evalMs_ = res->ms;
         nodeMs_ = res->nodeMs;
+        nodeGpu_ = res->nodeGpu;
+        gpuFallbacks_ = res->gpuFallbacks;
+        if (res->gpuFallbacks) gpuError_ = res->gpuError;
         if (!res->draft) previewMs_ = res->ms;
         // Results are in submission order; match them to the viewers that still exist.
         const size_t nv = std::min({viewers_.size(), res->images.size(), submittedViewers_});
@@ -1493,19 +1660,13 @@ void App::updateTextures() {
             v.error = res->errors[i];
             // A changed image makes the detail stale; its new one follows (unchanged: the
             // evaluation was only for the view, so the old detail stays until replaced).
-            if (res->images[i] != v.shown) {
-                v.detailTex.reset();
-                v.detailShown.reset();
-            }
+            if (res->images[i] != v.shown) dropDetail(v);
             v.shown = res->images[i];
             refreshDisplay(v, i == 0);
         }
-        // The histogram follows the Result; recomputed only when shown.
-        histogram_.valid = false;
-        if (showHistogram_ && !viewers_.empty() && viewers_[0]->display) histogram_.compute(*viewers_[0]->display);
         // A mask target follows the viewers (see drawFrame).
         if (maskWanted_ && res->images.size() > submittedViewers_ && res->images[submittedViewers_])
-            maskTex_.uploadTint(*res->images[submittedViewers_], 1.0f, 0.25f, 0.2f, 0.45f);
+            requestDisplay(kSlotMask, res->images[submittedViewers_], false, false, true);
     }
     if (res && res->tilesDone) {
         for (const AsyncEvaluator::Tile& t : res->tiles) {
@@ -1514,10 +1675,11 @@ void App::updateTextures() {
                 if ((c == &left_ ? -1 : c->id) == t.tag) v = c;
             if (!v) continue;
             v->detailShown = t.image;
-            v->detail = ViewDetail{nullptr, t.u0, t.v0, t.u1, t.v1};
+            v->pendingDetail = ViewDetail{nullptr, t.u0, t.v0, t.u1, t.v1};
             refreshDetail(*v, v != &left_ && v->id == 0);
         }
     }
+    applyDisplays();
 }
 
 bool App::saveFramebuffer(const std::string& path) {

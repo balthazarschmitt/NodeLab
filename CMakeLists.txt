@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 # The app version. Bump it (and CHANGELOG.md) when a feature set lands; see CLAUDE.md.
-project(NodeLab VERSION 0.12.1 LANGUAGES C CXX)
+project(NodeLab VERSION 0.13.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -232,6 +232,10 @@ add_library(nodelab_core STATIC
     ${NODELAB_VERSION_CPP}
     ${NODELAB_GUIDE_CPP}
     src/core/Value.cpp
+    src/gpu/GL.cpp
+    src/gpu/Device.cpp
+    src/gpu/PointOp.cpp
+    src/gpu/Blur.cpp
     src/core/ColorManagement.cpp
     src/core/ColorScience.cpp
     src/core/Parallel.cpp
@@ -264,7 +268,7 @@ add_library(nodelab_core STATIC
     src/nodes/utility/UtilityNodes.cpp)
 target_include_directories(nodelab_core PUBLIC src)
 add_dependencies(nodelab_core nodelab_version)
-target_link_libraries(nodelab_core PUBLIC nlohmann_json::nlohmann_json stb tinyexpr libraw zlib)
+target_link_libraries(nodelab_core PUBLIC nlohmann_json::nlohmann_json stb tinyexpr libraw zlib glfw OpenGL::GL)
 if(WIN32)
     target_compile_definitions(nodelab_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
@@ -274,6 +278,7 @@ add_executable(NodeLab
     src/main.cpp
     src/ui/App.cpp
     src/ui/ImageView.cpp
+    src/ui/DisplayWorker.cpp
     src/ui/NodeEditor.cpp
     src/ui/Inspector.cpp
     src/ui/GuideWindow.cpp
@@ -309,7 +314,7 @@ if(NODELAB_BUILD_TESTS)
     FetchContent_MakeAvailable(doctest)
 
     enable_testing()
-    add_executable(nodelab_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp tests/test_groups.cpp tests/test_nodes2.cpp tests/test_version.cpp tests/test_guide.cpp tests/test_layout.cpp tests/test_export.cpp tests/test_develop.cpp tests/test_ir_tools.cpp tests/test_expression_vm.cpp tests/test_parallel.cpp tests/test_colorpipe.cpp tests/test_develop_linear.cpp tests/test_raw_exif.cpp tests/test_image_write.cpp tests/test_roi.cpp tests/test_icc.cpp)
+    add_executable(nodelab_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp tests/test_groups.cpp tests/test_nodes2.cpp tests/test_version.cpp tests/test_guide.cpp tests/test_layout.cpp tests/test_export.cpp tests/test_develop.cpp tests/test_ir_tools.cpp tests/test_expression_vm.cpp tests/test_parallel.cpp tests/test_colorpipe.cpp tests/test_develop_linear.cpp tests/test_raw_exif.cpp tests/test_image_write.cpp tests/test_roi.cpp tests/test_icc.cpp tests/test_gpu.cpp)
     target_include_directories(nodelab_tests PRIVATE ${doctest_SOURCE_DIR})
     target_link_libraries(nodelab_tests PRIVATE nodelab_core)
     nodelab_allow_relink(nodelab_tests)

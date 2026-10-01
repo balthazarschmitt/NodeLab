@@ -6,6 +6,10 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace parallel {
 
 namespace {
@@ -27,7 +31,11 @@ class Pool {
 public:
     Pool() {
         const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-        for (unsigned i = 1; i < hw; ++i) threads_.emplace_back([this] { loop(); });
+        for (unsigned i = 1; i < hw; ++i)
+            threads_.emplace_back([this] {
+                lowerThreadPriority();
+                loop();
+            });
     }
     ~Pool() {
         {
@@ -110,6 +118,12 @@ Pool& pool() {
 }  // namespace
 
 int workerCount() { return pool().size(); }
+
+void lowerThreadPriority() {
+#ifdef _WIN32
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#endif
+}
 
 void run(int count, int chunk, const std::function<void(int, int)>& fn) {
     if (count <= 0) return;

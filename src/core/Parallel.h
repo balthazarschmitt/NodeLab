@@ -24,6 +24,10 @@ void run(int count, int chunk, const std::function<void(int, int)>& fn);
 // helping it). Evaluator sets it around each node, so a long node stops soon after a cancel.
 const std::atomic<bool>* currentCancel();
 
+// Runs the calling thread below normal priority. Image work uses every core; at the same
+// priority as the UI thread it starves it, and the whole window stutters while a graph evaluates.
+void lowerThreadPriority();
+
 class CancelScope {
 public:
     explicit CancelScope(const std::atomic<bool>* flag);

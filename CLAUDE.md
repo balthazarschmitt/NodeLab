@@ -92,7 +92,10 @@ src/io        image load (stb), ImageWrite (PNG/JPEG/TIFF/EXR, ICC, parallel zli
               half-size decode), project files
 src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (custom canvas), Inspector,
               GuideWindow (renders the embedded GUIDE.md), Eyedropper (pick state),
-              ParamWidgets (curve/ramp editors), ImageView, FileDialog (Win32), UiScript
+              ParamWidgets (curve/ramp editors), ImageView, DisplayWorker (view transform and
+              histograms off the UI thread), FileDialog (Win32), UiScript
+src/gpu       Device (hidden GL 4.3 context, texture pool, programs, timer queries), GL (loader),
+              PointOp (per-pixel nodes as GLSL bodies), Blur
 ```
 
 ## Conventions
@@ -144,6 +147,15 @@ src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (
     `ctx.previewStats` in a region (Normalize, Basic's Dehaze).
   - **Test:** `test_roi.cpp` checks that every node's region matches the same part of its whole
     image. Add a variant for any new size- or position-dependent param.
+- **GPU nodes** (Blender's compositor Device: GPU): a node opts in with `gpuSupported` and
+  `evaluateGpu`, usually a `gpu::PointOp` GLSL body that mirrors its C++ loop.
+  - Values on the device are `GpuImagePtr`/`GpuChannelPtr`. The evaluator converts inputs between
+    devices and caches the copies. GPU runs happen only at the Preview and Draft levels; regions
+    and exports use the CPU unless `--device gpu`.
+  - A `gpu::Error` falls back to the CPU. `test_gpu.cpp` compares every GPU node with its CPU
+    version (it skips when there's no GPU). Automated UI runs force the CPU device.
+  - GLSL division is approximate and drivers fold NaN checks: see the `c_*` helpers in
+    `Expression.cpp` where exact results matter.
 - **Node state:** `Node::muted`, `collapsed` and `label` persist in JSON. `Graph::cloneNode` copies them.
 - **Groups:** a `GroupNode` owns an inner `Graph`, and its interface pins are pushed to the inner
   Group Input/Output nodes by `syncInner()`. Use `GroupNode::removePin`/`movePin`/`setPinType`, which

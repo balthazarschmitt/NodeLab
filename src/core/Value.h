@@ -5,21 +5,45 @@
 
 enum class PinType { Image, Channel, Number };
 
+namespace gpu {
+class Texture;
+}
+
+// An image (RGBA) or channel (one plane) resident on the GPU (gpu/Device.h). Only the evaluator
+// and GPU kernels see these: CPU nodes get their inputs downloaded first, and the conversions
+// below download too.
+struct GpuImage {
+    std::shared_ptr<gpu::Texture> tex;
+    int w = 0, h = 0;
+};
+struct GpuChannel {
+    std::shared_ptr<gpu::Texture> tex;
+    int w = 0, h = 0;
+};
+using GpuImagePtr = std::shared_ptr<const GpuImage>;
+using GpuChannelPtr = std::shared_ptr<const GpuChannel>;
+
 const char* pinTypeName(PinType t);
 
 // What travels along a wire. Empty (monostate) means "nothing connected / no data".
 struct Value {
-    std::variant<std::monostate, ImagePtr, ChannelPtr, float> v;
+    std::variant<std::monostate, ImagePtr, ChannelPtr, float, GpuImagePtr, GpuChannelPtr> v;
 
     Value() = default;
     Value(ImagePtr p) : v(std::move(p)) {}
     Value(ChannelPtr p) : v(std::move(p)) {}
     Value(float f) : v(f) {}
+    Value(GpuImagePtr p) : v(std::move(p)) {}
+    Value(GpuChannelPtr p) : v(std::move(p)) {}
 
     bool empty() const;
     // Resolution carried by this value, or false for sizeless values (numbers, constant channels).
     bool size(int& w, int& h) const;
+    bool onGpu() const { return v.index() >= 4; }
 };
+
+// The value with GPU images and channels downloaded (others unchanged).
+Value toCpu(const Value& val);
 
 // Implicit conversions between wire types. Return null / nullopt-like values on empty input.
 //   Image   -> Channel : Rec.709 luminance

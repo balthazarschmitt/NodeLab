@@ -48,8 +48,6 @@ float sampleBilinear(const std::vector<float>& ch, int w, int h, float x, float 
     return top + (bot - top) * fy;
 }
 
-namespace {
-
 // Box radii for three passes approximating a Gaussian of the given sigma.
 std::vector<int> boxRadii(float sigma) {
     if (sigma < 0.3f) return {};
@@ -64,6 +62,8 @@ std::vector<int> boxRadii(float sigma) {
     for (int i = 0; i < n; ++i) r.push_back(((i < m ? wl : wu) - 1) / 2);
     return r;
 }
+
+namespace {
 
 // One edge-clamped box pass along a line of `len` elements, each `n` contiguous floats (the
 // interleaved channels of one pixel, or of a block of pixels). Reads src, writes dst (distinct).

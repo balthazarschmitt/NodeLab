@@ -654,7 +654,9 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
         if (auto t = timings_.find(n.id); t != timings_.end()) {
             // Above the node like Blender's overlay; slow nodes stand out in amber.
             char buf[32];
-            std::snprintf(buf, sizeof buf, t->second < 10.0 ? "%.1f ms" : "%.0f ms", t->second);
+            const auto g = gpuNodes_.find(n.id);
+            const bool onGpu = g != gpuNodes_.end() && g->second;
+            std::snprintf(buf, sizeof buf, t->second < 10.0 ? "%.1f ms%s" : "%.0f ms%s", t->second, onGpu ? "  GPU" : "");
             const float tfs = fs * 0.85f;
             dl->AddText(ImGui::GetFont(), tfs, ImVec2(L.min.x + 4 * z, L.min.y - tfs - 3 * z),
                         t->second >= 50.0 ? IM_COL32(236, 170, 80, 255) : IM_COL32(170, 170, 178, 220), buf);
@@ -1270,6 +1272,19 @@ void NodeEditor::openSwapMenu(const Graph& g) {
 }
 
 void NodeEditor::drawAddMenu(Graph& g, Result& r) {
+    // A fixed size, inside the window it opens in: a popup overhanging its window gets an OS
+    // window of its own, and resizing that as the results changed per keystroke flashed black.
+    {
+        const ImGuiStyle& st = ImGui::GetStyle();
+        const ImGuiViewport* vp = ImGui::GetWindowViewport();
+        const ImVec2 size(ImGui::GetFontSize() * 20.0f, ImGui::GetFrameHeightWithSpacing() * 2 +
+                                                          ImGui::GetTextLineHeightWithSpacing() * 12 + st.WindowPadding.y * 2);
+        ImVec2 pos = menuPos_;
+        pos.x = std::max(vp->Pos.x, std::min(pos.x, vp->Pos.x + vp->Size.x - size.x));
+        pos.y = std::max(vp->Pos.y, std::min(pos.y, vp->Pos.y + vp->Size.y - size.y));
+        ImGui::SetNextWindowPos(pos, ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(size);
+    }
     if (!ImGui::BeginPopup("AddNode")) {
         menuConnect_ = {};
         swapTargets_.clear();
@@ -1295,7 +1310,7 @@ void NodeEditor::drawAddMenu(Graph& g, Result& r) {
     };
 
     if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-    ImGui::SetNextItemWidth(260);
+    ImGui::SetNextItemWidth(-FLT_MIN);
     // Typing goes straight here (focused when the menu opens); empty search shows categories.
     if (ImGui::InputTextWithHint("##search", "Search nodes...", search_, sizeof(search_))) searchSel_ = 0;
 
@@ -1319,8 +1334,7 @@ void NodeEditor::drawAddMenu(Graph& g, Result& r) {
         }
         searchSel_ = n ? std::clamp(searchSel_, 0, n - 1) : 0;
         if (n == 0) ImGui::TextDisabled("No matching nodes");
-        const float rowH = ImGui::GetTextLineHeightWithSpacing();
-        ImGui::BeginChild("##results", ImVec2(300, std::min(n, 14) * rowH + 6), ImGuiChildFlags_None);
+        ImGui::BeginChild("##results", ImVec2(0, 0), ImGuiChildFlags_None);
         for (int i = 0; i < n; ++i) {
             const NodeInfo* inf = reg.find(results[i]);
             ImGui::PushID(i);

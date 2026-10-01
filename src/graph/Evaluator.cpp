@@ -9,6 +9,7 @@
 #include <windows.h>  // GlobalMemoryStatusEx, for the cache budget
 #endif
 
+#include "gpu/Device.h"
 #include "io/ImageCache.h"
 #include "nodes/group/GroupNodes.h"
 #include "nodes/io/IONodes.h"
@@ -37,7 +38,8 @@ PixelRect unite(const PixelRect& a, const PixelRect& b) {
 size_t valueBytes(const Value& v) {
     if (auto p = std::get_if<ImagePtr>(&v.v)) return *p ? (*p)->px.size() * sizeof(float) : 0;
     if (auto p = std::get_if<ChannelPtr>(&v.v)) return *p ? (*p)->data.size() * sizeof(float) : 0;
-    return 0;
+    // An iGPU's textures are system memory too, so they count against the same budget.
+    return gpu::valueBytes(v);
 }
 
 // Nodes upstream of nodeId (inclusive), inputs before the nodes reading them.
@@ -64,10 +66,31 @@ std::string Evaluator::baseKey(const Node& n, const EvalContext& ctx) const {
     key += n.signatureExtra();
     if (n.muted) key += "|muted";
     if (ctx.linear()) key += "|linear";
+    // GPU results differ from the CPU's in the last bits (and more in half precision).
+    if (ctx.gpu) key += ctx.gpuHalf ? "|gpu16" : "|gpu32";
     return key;
 }
 
-void Evaluator::run(const Graph& g, Node& n, EvalContext& ctx, const std::vector<Value>& inputs, Entry& e, size_t sig) {
+bool Evaluator::gpuLevel(const EvalContext& ctx) const {
+    return ctx.gpu && level_ != Region && !ctx.roi && gpu::available();
+}
+
+Value Evaluator::converted(Entry& up, int pin, bool toGpu, const EvalContext& ctx) {
+    if (up.alt.size() != up.outs.size()) up.alt.assign(up.outs.size(), Value());
+    Value& a = up.alt[size_t(pin)];
+    if (a.empty() || a.onGpu() != toGpu) {
+        const Value& v = up.outs[size_t(pin)];
+        if (toGpu) {
+            gpu::Scope scope;
+            a = gpu::toGpu(v, ctx.gpuHalf);
+        } else {
+            a = toCpu(v);
+        }
+    }
+    return a;
+}
+
+void Evaluator::run(const Graph& g, Node& n, EvalContext& ctx, std::vector<Value>& inputs, Entry& e, size_t sig, bool gpu) {
     if (ctx.cancel && ctx.cancel->load()) throw EvalCancelled();
     const NodeInfo& info = n.info();
     std::vector<Value> outs(info.outputs.size());
@@ -96,7 +119,32 @@ void Evaluator::run(const Graph& g, Node& n, EvalContext& ctx, const std::vector
             // Parallel loops inside the node poll this flag between chunks, so a cancel lands
             // mid-node instead of after it.
             parallel::CancelScope scope(ctx.cancel);
-            n.evaluate(ctx, inputs, outs);
+            bool done = false;
+            if (gpu) {
+                try {
+                    gpu::Scope device;
+                    // No waiting for the device after each node: it works through the queue while
+                    // the CPU prepares the next nodes (20% faster on the infrared preset), and a
+                    // timer query measures the node's own device time.
+                    auto timer = std::make_shared<gpu::Timer>();
+                    n.evaluateGpu(ctx, inputs, outs);
+                    timer->stop();
+                    e.timer = std::move(timer);
+                    ++gpuRuns;
+                    done = true;
+                } catch (const gpu::Error& err) {
+                    ++gpuFallbacks;
+                    lastGpuError = err.what();
+                    outs.assign(info.outputs.size(), Value());
+                    stats.clear();
+                }
+            }
+            if (!done) {
+                gpu = false;
+                for (Value& v : inputs)
+                    if (v.onGpu()) v = toCpu(v);
+                n.evaluate(ctx, inputs, outs);
+            }
         } catch (...) {
             ctx.statsOut = savedStats;
             throw;
@@ -105,8 +153,11 @@ void Evaluator::run(const Graph& g, Node& n, EvalContext& ctx, const std::vector
     }
     ++recomputeCount;
     e.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    if (!(gpu && !n.muted)) e.timer.reset();
     e.sig = sig;
     e.outs = std::move(outs);
+    e.alt.clear();
+    e.gpu = gpu && !n.muted;
     e.stats = std::move(stats);
 }
 
@@ -124,12 +175,14 @@ size_t Evaluator::ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unor
 
     std::string key = baseKey(*n, ctx);
     std::vector<Value> inputs(info.inputs.size());
+    std::vector<const Link*> from(info.inputs.size(), nullptr);  // linked inputs carrying a value
     for (size_t i = 0; i < info.inputs.size(); ++i) {
         if (const Link* l = g.inputLink(nodeId, int(i))) {
             size_t up = ensure(g, l->fromNode, ctx, pass);
             key += "|L" + std::to_string(up) + ":" + std::to_string(l->fromPin);
             const auto& outs = cache[l->fromNode].outs;
             if (l->fromPin < int(outs.size())) inputs[i] = outs[l->fromPin];
+            if (!inputs[i].empty()) from[i] = l;
             // A wire carrying nothing (e.g. from an image input with no file) acts like no wire.
             if (inputs[i].empty() && info.inputs[i].fallbackParam >= 0)
                 inputs[i] = Value(n->paramF(info.inputs[i].fallbackParam));
@@ -143,7 +196,20 @@ size_t Evaluator::ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unor
     if (sig == 0) sig = 1;
 
     Entry& e = cache[nodeId];
-    if (e.sig != sig) run(g, *n, ctx, inputs, e, sig);
+    if (e.sig != sig) {
+        // The node runs where it can; its inputs move there (each value once, see Entry::alt).
+        const bool gpu = !n->muted && gpuLevel(ctx) && n->gpuSupported(ctx, inputs);
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            int w, h;
+            if (!from[i] || inputs[i].onGpu() == gpu || !inputs[i].size(w, h)) continue;
+            try {
+                inputs[i] = converted(cache[from[i]->fromNode], from[i]->fromPin, gpu, ctx);
+            } catch (const gpu::Error&) {
+                // Couldn't upload (out of GPU memory): run(), finding CPU inputs, falls back.
+            }
+        }
+        run(g, *n, ctx, inputs, e, sig, gpu);
+    }
     if (releaseIntermediates) {
         // This node has read its inputs: drop those no other node still needs.
         inputs.clear();
@@ -154,6 +220,7 @@ size_t Evaluator::ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unor
                     Entry& up = cache[l->fromNode];
                     up.outs.clear();
                     up.outs.shrink_to_fit();
+                    up.alt.clear();
                     up.sig = 0;  // recomputed if asked for again
                 }
             }
@@ -374,6 +441,7 @@ std::optional<Evaluator::RegionResult> Evaluator::evaluateRegion(const Graph& g,
                 if (e.sig != pe.sig) {
                     e.sig = pe.sig;
                     e.outs = pe.outs;
+                    e.alt.clear();
                 }
                 sigs[id] = e.sig;
                 continue;
@@ -415,7 +483,7 @@ std::optional<Evaluator::RegionResult> Evaluator::evaluateRegion(const Graph& g,
                 rctx.roi = &window;
                 rctx.statsOut = nullptr;
                 rctx.previewStats = stats.empty() ? nullptr : &stats;
-                run(g, n, rctx, inputs, e, sig);
+                run(g, n, rctx, inputs, e, sig, false);
                 // Every sized output must cover the window; keep the requested part.
                 for (Value& v : e.outs) {
                     int vw, vh;
@@ -449,13 +517,26 @@ std::optional<Evaluator::RegionResult> Evaluator::evaluateRegion(const Graph& g,
 double Evaluator::nodeMs(int nodeId) const {
     const auto& cache = cache_[level_];
     auto it = cache.find(nodeId);
-    return it == cache.end() || it->second.sig == 0 ? -1.0 : it->second.ms;
+    return it == cache.end() || it->second.sig == 0 ? -1.0 : it->second.time();
+}
+
+double Evaluator::Entry::time() const {
+    // The CPU part (submitting, or the waits and maths of a node that reads values back) or the
+    // device's, whichever is longer.
+    return timer ? std::max(ms, timer->ms()) : ms;
 }
 
 std::unordered_map<int, double> Evaluator::timings() const {
     std::unordered_map<int, double> t;
     for (const auto& [id, e] : cache_[level_])
-        if (e.sig) t[id] = e.ms;
+        if (e.sig) t[id] = e.time();
+    return t;
+}
+
+std::unordered_map<int, bool> Evaluator::gpuNodes() const {
+    std::unordered_map<int, bool> t;
+    for (const auto& [id, e] : cache_[level_])
+        if (e.sig) t[id] = e.gpu;
     return t;
 }
 
@@ -466,7 +547,8 @@ void Evaluator::prune(const Graph& g) {
 size_t Evaluator::bytes(Level l) const {
     size_t b = 0;
     for (const auto& [id, e] : cache_[l])
-        for (const Value& v : e.outs) b += valueBytes(v);
+        for (const auto* vs : {&e.outs, &e.alt})
+            for (const Value& v : *vs) b += valueBytes(v);
     return b;
 }
 
@@ -554,6 +636,7 @@ std::optional<AsyncEvaluator::Result> AsyncEvaluator::poll() {
 }
 
 void AsyncEvaluator::run() {
+    parallel::lowerThreadPriority();
     for (;;) {
         Job job;
         {
@@ -575,6 +658,10 @@ void AsyncEvaluator::run() {
         auto t0 = std::chrono::steady_clock::now();
         Graph g;
         EvalContext ctx;
+        // The device stays current for the whole job rather than per node (switching contexts
+        // costs time on some drivers).
+        std::optional<gpu::Scope> device;
+        evaluator_.gpuFallbacks = 0;  // reported per job
         try {
             g.fromJson(job.graph);
             ctx.proxy = true;
@@ -583,6 +670,9 @@ void AsyncEvaluator::run() {
             ctx.proxyEdge = std::max(64, job.options.draft ? job.options.proxyEdge / 2 : job.options.proxyEdge);
             evaluator_.setLevel(job.options.draft ? Evaluator::Draft : Evaluator::Preview);
             initContextSize(g, ctx);
+            ctx.gpu = job.options.gpu && gpu::available();
+            ctx.gpuHalf = job.options.gpuHalf;
+            if (ctx.gpu) device.emplace();
             for (size_t t = 0; t < job.targets.size(); ++t) {
                 try {
                     res.images[t] = evaluator_.evaluateDisplayPath(g, job.targets[t], ctx, job.pins[t]);
@@ -594,12 +684,16 @@ void AsyncEvaluator::run() {
             }
             evaluator_.prune(g);
             res.nodeMs = evaluator_.timings();
+            res.nodeGpu = evaluator_.gpuNodes();
         } catch (const EvalCancelled&) {
             cancelled = true;
         } catch (const std::exception& e) {
             for (auto& err : res.errors) err = e.what();
         }
         res.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        device.reset();
+        res.gpuFallbacks = evaluator_.gpuFallbacks;
+        res.gpuError = evaluator_.lastGpuError;
 
         const bool details = !cancelled && !job.options.draft && !job.options.details.empty();
         bool inDetails;
@@ -702,5 +796,10 @@ void AsyncEvaluator::trimCache() {
         const size_t b = evaluator_.bytes(l);
         if (total + b > budget) evaluator_.clearLevel(l);
         else total += b;
+    }
+    // Freed textures are kept for reuse, up to a little more than a few images' worth.
+    if (gpu::available() && gpu::bytesPooled() > (size_t(256) << 20)) {
+        gpu::Scope device;
+        gpu::trimPool(size_t(128) << 20);
     }
 }

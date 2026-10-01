@@ -6,6 +6,8 @@
 
 #include "core/ColorMath.h"
 #include "core/Curve.h"
+#include "gpu/Device.h"
+#include "gpu/PointOp.h"
 #include "graph/Evaluator.h"
 #include "io/Exif.h"
 #include "io/Export.h"
@@ -101,6 +103,18 @@ public:
                   {ParamDesc::Float("Low %", 0.0f, 0.0f, 100.0f), ParamDesc::Float("High %", 100.0f, 0.0f, 100.0f)}})
     // The range comes from the whole image; a region reuses the preview's (see EvalContext::statsOut).
     int roiPadding(const EvalContext& ctx) const override { return ctx.previewStats ? 0 : kRoiWhole; }
+    // The Low % and High % values of c, recorded for regions.
+    void percentiles(EvalContext& ctx, const Channel& c, float& lo, float& hi) const {
+        std::vector<float> sorted(c.data);
+        auto pct = [&](float p) {
+            size_t k = size_t(std::clamp(p / 100.0f, 0.0f, 1.0f) * float(sorted.size() - 1) + 0.5f);
+            std::nth_element(sorted.begin(), sorted.begin() + k, sorted.end());
+            return sorted[k];
+        };
+        lo = pct(std::min(paramF(0), paramF(1)));
+        hi = pct(std::max(paramF(0), paramF(1)));
+        if (ctx.statsOut) *ctx.statsOut = {lo, hi};
+    }
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         ChannelPtr c = toChannel(in[0]);
         if (!c || c->constant) {
@@ -114,20 +128,27 @@ public:
             lo = (*ctx.previewStats)[0];
             hi = (*ctx.previewStats)[1];
         } else {
-            std::vector<float> sorted(c->data);
-            auto pct = [&](float p) {
-                size_t k = size_t(std::clamp(p / 100.0f, 0.0f, 1.0f) * float(sorted.size() - 1) + 0.5f);
-                std::nth_element(sorted.begin(), sorted.begin() + k, sorted.end());
-                return sorted[k];
-            };
-            lo = pct(std::min(paramF(0), paramF(1)));
-            hi = pct(std::max(paramF(0), paramF(1)));
-            if (ctx.statsOut) *ctx.statsOut = {lo, hi};
+            percentiles(ctx, *c, lo, hi);
         }
         const float range = std::max(hi - lo, 1e-9f);
         out[0] = Value(ChannelPtr(makeChannel(c->w, c->h, [&](int x, int y) {
             return (c->data[size_t(y) * c->w + x] - lo) / range;
         })));
+    }
+
+    // The percentiles need the values on the CPU (an exact selection), but only those: the
+    // rescale runs on the device, so the result stays there for the GPU nodes after it.
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const ChannelPtr c = toChannel(toCpu(in[0]));
+        if (!c || c->constant) throw gpu::Error("GPU: nothing to normalize");
+        float lo, hi;
+        percentiles(ctx, *c, lo, hi);
+        gpu::PointOp op;
+        op.w = c->w, op.h = c->h;
+        op.params = {lo, std::max(hi - lo, 1e-9f)};
+        op.body = "    out0 = (ch0(p) - P[0]) / P[1];";
+        gpu::runPoint(ctx, *this, op, in, out);
     }
 };
 

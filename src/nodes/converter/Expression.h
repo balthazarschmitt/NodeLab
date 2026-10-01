@@ -48,6 +48,11 @@ public:
     // Runs n <= kSpan values; returns the result array (valid until the next run).
     const double* run(Workspace& ws, int n) const;
 
+    // The program as GLSL statements (float registers named prefix + number; variable v read as
+    // vars[v]) leaving its value in `result`; false if it calls a function GLSL lacks (fac, ncr,
+    // npr). The helpers it calls are in kGlsl.
+    bool glsl(std::string& code, std::string& result, const char* const vars[kVarCount], const std::string& prefix) const;
+
 private:
     bool ok_ = false;
     int errPos_ = 0;
@@ -57,6 +62,10 @@ private:
     std::vector<std::pair<int, double>> consts_;
     std::vector<Instr> code_;
 };
+
+// GLSL helpers with C's results where GLSL leaves them undefined (pow and logs of negatives,
+// division by zero, fmod...), so the GPU computes what the CPU does, in float precision.
+extern const char* const kGlsl;
 
 // Reference: tinyexpr's own evaluation, for tests.
 double interpret(const std::string& src, const double vars[kVarCount]);

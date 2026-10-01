@@ -8,6 +8,8 @@
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 
+#include "core/Parallel.h"
+
 #ifndef GL_CLAMP_TO_EDGE
 #define GL_CLAMP_TO_EDGE 0x812F
 #endif
@@ -23,23 +25,40 @@ void GLTexture::reset() {
     w_ = h_ = 0;
 }
 
+std::vector<unsigned char> displayBytes(const Image& img, bool clipping) {
+    std::vector<unsigned char> bytes(img.px.size());
+    parallelFor(img.h, [&](int y) {
+        const size_t end = size_t(y + 1) * img.w * 4;
+        for (size_t i = size_t(y) * img.w * 4; i < end; i += 4) {
+            for (int k = 0; k < 3; ++k)
+                bytes[i + k] = static_cast<unsigned char>(std::lround(std::clamp(img.px[i + k], 0.0f, 1.0f) * 255.0f));
+            bytes[i + 3] = 255;  // show alpha as opaque; transparency display comes later
+            if (clipping) {
+                const unsigned char mx = std::max({bytes[i], bytes[i + 1], bytes[i + 2]});
+                if (mx == 255) bytes[i] = 255, bytes[i + 1] = 0, bytes[i + 2] = 0;
+                else if (mx == 0) bytes[i] = 0, bytes[i + 1] = 90, bytes[i + 2] = 255;
+            }
+        }
+    });
+    return bytes;
+}
+
+std::vector<unsigned char> tintBytes(const Image& img, float r, float g, float b, float opacity) {
+    std::vector<unsigned char> bytes(img.px.size());
+    const auto c8 = [](float v) { return static_cast<unsigned char>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+    for (size_t i = 0; i < bytes.size(); i += 4) {
+        bytes[i] = c8(r), bytes[i + 1] = c8(g), bytes[i + 2] = c8(b);
+        bytes[i + 3] = c8(img.px[i] * opacity);
+    }
+    return bytes;
+}
+
 void GLTexture::upload(const Image& img, bool clipping) {
     if (img.empty()) {
         reset();
         return;
     }
-    std::vector<unsigned char> bytes(img.px.size());
-    for (size_t i = 0; i < bytes.size(); i += 4) {
-        for (int k = 0; k < 3; ++k)
-            bytes[i + k] = static_cast<unsigned char>(std::lround(std::clamp(img.px[i + k], 0.0f, 1.0f) * 255.0f));
-        bytes[i + 3] = 255;  // show alpha as opaque; transparency display comes later
-        if (clipping) {
-            const unsigned char mx = std::max({bytes[i], bytes[i + 1], bytes[i + 2]});
-            if (mx == 255) bytes[i] = 255, bytes[i + 1] = 0, bytes[i + 2] = 0;
-            else if (mx == 0) bytes[i] = 0, bytes[i + 1] = 90, bytes[i + 2] = 255;
-        }
-    }
-    uploadBytes(bytes, img.w, img.h);
+    uploadBytes(displayBytes(img, clipping), img.w, img.h);
 }
 
 void GLTexture::uploadTint(const Image& img, float r, float g, float b, float opacity) {
@@ -47,13 +66,7 @@ void GLTexture::uploadTint(const Image& img, float r, float g, float b, float op
         reset();
         return;
     }
-    std::vector<unsigned char> bytes(img.px.size());
-    const auto c8 = [](float v) { return static_cast<unsigned char>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
-    for (size_t i = 0; i < bytes.size(); i += 4) {
-        bytes[i] = c8(r), bytes[i + 1] = c8(g), bytes[i + 2] = c8(b);
-        bytes[i + 3] = c8(img.px[i] * opacity);
-    }
-    uploadBytes(bytes, img.w, img.h);
+    uploadBytes(tintBytes(img, r, g, b, opacity), img.w, img.h);
 }
 
 void GLTexture::uploadBytes(const std::vector<unsigned char>& bytes, int w, int h) {

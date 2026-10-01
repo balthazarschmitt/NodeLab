@@ -153,6 +153,12 @@ struct EvalContext {
     // zoomed-in region looks the same as the whole image and needn't be computed in full.
     std::vector<float>* statsOut = nullptr;
     const std::vector<float>* previewStats = nullptr;
+
+    // GPU compositing (gpu/Device.h), like Blender's compositor Device and Precision: nodes with
+    // a GPU version run there and their results stay on the GPU. gpuHalf stores images in half
+    // floats (Precision: Auto), which halves the memory traffic per-pixel nodes are bound by.
+    bool gpu = false;
+    bool gpuHalf = false;
 };
 
 class Node {
@@ -194,6 +200,13 @@ public:
     }
     // Full size of a source's image (Image Input) at the region's scale; false for other nodes.
     virtual bool roiSourceSize(const EvalContext&, int& /*w*/, int& /*h*/) const { return false; }
+
+    // ---- GPU (see gpu/Device.h and gpu/PointOp.h). A node with a GPU version says which inputs
+    // it handles (what they are, not where they are). The evaluator then uploads its sized inputs
+    // (numbers and constant channels stay as they are) and calls evaluateGpu, whose outputs may
+    // stay on the GPU. Otherwise evaluate() runs on CPU copies of the inputs.
+    virtual bool gpuSupported(const EvalContext&, const std::vector<Value>& /*in*/) const { return false; }
+    virtual void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) { evaluate(ctx, in, out); }
 
     void initParams() {
         params.clear();

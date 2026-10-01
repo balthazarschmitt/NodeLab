@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "core/Parallel.h"
+#include "gpu/Device.h"
 
 const char* pinTypeName(PinType t) {
     switch (t) {
@@ -17,6 +18,8 @@ bool Value::empty() const {
     if (std::holds_alternative<std::monostate>(v)) return true;
     if (auto p = std::get_if<ImagePtr>(&v)) return !*p;
     if (auto p = std::get_if<ChannelPtr>(&v)) return !*p;
+    if (auto p = std::get_if<GpuImagePtr>(&v)) return !*p;
+    if (auto p = std::get_if<GpuChannelPtr>(&v)) return !*p;
     return false;
 }
 
@@ -31,10 +34,27 @@ bool Value::size(int& w, int& h) const {
         h = (*p)->h;
         return true;
     }
+    if (auto p = std::get_if<GpuImagePtr>(&v); p && *p) {
+        w = (*p)->w;
+        h = (*p)->h;
+        return true;
+    }
+    if (auto p = std::get_if<GpuChannelPtr>(&v); p && *p) {
+        w = (*p)->w;
+        h = (*p)->h;
+        return true;
+    }
     return false;
 }
 
+Value toCpu(const Value& val) {
+    if (auto p = std::get_if<GpuImagePtr>(&val.v)) return *p ? Value(gpu::download(**p)) : Value();
+    if (auto p = std::get_if<GpuChannelPtr>(&val.v)) return *p ? Value(gpu::download(**p)) : Value();
+    return val;
+}
+
 ChannelPtr toChannel(const Value& val) {
+    if (val.onGpu()) return toChannel(toCpu(val));
     if (auto p = std::get_if<ChannelPtr>(&val.v)) return *p;
     if (auto p = std::get_if<float>(&val.v)) return std::make_shared<Channel>(Channel::makeConstant(*p));
     if (auto p = std::get_if<ImagePtr>(&val.v); p && *p) {
@@ -53,6 +73,7 @@ ChannelPtr toChannel(const Value& val) {
 }
 
 ImagePtr toImage(const Value& val, int w, int h) {
+    if (val.onGpu()) return toImage(toCpu(val), w, h);
     if (auto p = std::get_if<ImagePtr>(&val.v)) return *p;
     ChannelPtr c = toChannel(val);
     if (!c) return nullptr;
@@ -102,6 +123,7 @@ ImagePtr cropImage(const Image& src, int x0, int y0, int w, int h) {
 Value cropValue(const Value& v, int x0, int y0, int w, int h) {
     int vw, vh;
     if (!v.size(vw, vh) || (x0 == 0 && y0 == 0 && w == vw && h == vh)) return v;
+    if (v.onGpu()) return cropValue(toCpu(v), x0, y0, w, h);
     if (auto p = std::get_if<ImagePtr>(&v.v)) return Value(cropImage(**p, x0, y0, w, h));
     const Channel& c = *std::get<ChannelPtr>(v.v);
     auto out = std::make_shared<Channel>(Channel::makeSized(w, h));
@@ -115,6 +137,7 @@ Value cropValue(const Value& v, int x0, int y0, int w, int h) {
 Value resampleValue(const Value& v, int w, int h) {
     int vw, vh;
     if (!v.size(vw, vh) || (vw == w && vh == h)) return v;
+    if (v.onGpu()) return resampleValue(toCpu(v), w, h);
     // Nearest neighbour, as nodes sample inputs of another size (nodeutil::ImageSampler).
     auto sx = [&](int x) { return std::min(vw - 1, x * vw / std::max(1, w)); };
     auto sy = [&](int y) { return std::min(vh - 1, y * vh / std::max(1, h)); };

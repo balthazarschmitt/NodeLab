@@ -1,4 +1,5 @@
 #include "core/ColorMath.h"
+#include "gpu/PointOp.h"
 #include "nodes/NodeUtil.h"
 
 using namespace nodeutil;
@@ -33,6 +34,20 @@ public:
             }
         });
         out[0] = Value(ImagePtr(img));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>&) const override { return true; }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        if (in[0].empty() && in[1].empty()) return;
+        gpu::PointOp op;
+        resolveSize(in, ctx, op.w, op.h);
+        op.body = R"(
+    if (!has0) { out0 = img1(p); return; }
+    if (!has1) { out0 = img0(p); return; }
+    vec4 a = img0(p), b = img1(p);
+    float f = par2(p);
+    out0 = vec4(clampColor(uLinear, a.rgb + (b.rgb - a.rgb) * f), clamp01(a.a + (b.a - a.a) * f));)";
+        gpu::runPoint(ctx, *this, op, in, out);
     }
 };
 
@@ -121,6 +136,54 @@ public:
             }
         });
         out[0] = Value(ImagePtr(img));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>&) const override { return true; }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        if (in[0].empty() && in[1].empty()) return;
+        gpu::PointOp op;
+        resolveSize(in, ctx, op.w, op.h);
+        // Mode and Clamp are compiled in, so each mode's shader holds only its own maths.
+        op.functions = "const int MODE = " + std::to_string(paramI(1)) + ";\nconst bool CLAMP_OUT = " +
+                       (paramB(2) ? "true" : "false") + ";\n" + R"(
+float blendChannel(float a, float b) {
+    switch (MODE) {
+        case 1: return min(a, b);
+        case 2: return a * b;
+        case 3: return b <= 0.0 ? 0.0 : 1.0 - min(1.0, (1.0 - a) / b);
+        case 4: return max(a, b);
+        case 5: return 1.0 - (1.0 - a) * (1.0 - b);
+        case 6: return b >= 1.0 ? 1.0 : min(1.0, a / (1.0 - b));
+        case 7: return a + b;
+        case 8: return a < 0.5 ? 2.0 * a * b : 1.0 - 2.0 * (1.0 - a) * (1.0 - b);
+        case 9: return (1.0 - 2.0 * b) * a * a + 2.0 * b * a;
+        case 10: return a + 2.0 * b - 1.0;
+        case 11: return abs(a - b);
+        case 12: return a + b - 2.0 * a * b;
+        case 13: return a - b;
+        case 14: return b <= 1e-6 ? a : a / b;
+        default: return b;
+    }
+}
+vec3 blendPixel(vec3 a, vec3 b) {
+    if (MODE >= 15) {  // HSV component swaps
+        vec3 ha = rgbToHsv(clampColor(uLinear, a)), hb = rgbToHsv(clampColor(uLinear, b));
+        if (MODE == 15) return hsvToRgb(vec3(hb.x, ha.y, ha.z));
+        if (MODE == 16) return hsvToRgb(vec3(ha.x, hb.y, ha.z));
+        if (MODE == 17) return hsvToRgb(vec3(hb.x, hb.y, ha.z));
+        return hsvToRgb(vec3(ha.x, ha.y, hb.z));
+    }
+    return vec3(blendChannel(a.r, b.r), blendChannel(a.g, b.g), blendChannel(a.b, b.b));
+}
+)";
+        op.body = R"(
+    if (!has0) { out0 = img1(p); return; }
+    if (!has1) { out0 = img0(p); return; }
+    vec4 a = img0(p), b = img1(p);
+    float f = par2(p) * b.a;  // B's alpha limits its influence
+    vec3 d = a.rgb + (blendPixel(a.rgb, b.rgb) - a.rgb) * f;
+    out0 = vec4(CLAMP_OUT ? clamp01(d) : d, a.a);)";
+        gpu::runPoint(ctx, *this, op, in, out);
     }
 };
 

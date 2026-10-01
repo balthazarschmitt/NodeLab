@@ -5,7 +5,10 @@
 #include <string>
 #include <vector>
 
+#include <GLFW/glfw3.h>
+
 #include "core/Version.h"
+#include "gpu/Device.h"
 #include "graph/Evaluator.h"
 #include "graph/NodeRegistry.h"
 #include "io/Exif.h"
@@ -22,10 +25,48 @@
 #include <windows.h>
 #endif
 
-// NodeLab.exe --render project.nlproj out.png [--depth N] : evaluate at full resolution without a
-// window. The extension picks the format (.png, .jpg, .tif, .exr); --depth 16 for 16-bit PNG/TIFF,
+// --device gpu for the command-line modes: GLFW started only for the GPU device (its context lives
+// on a hidden window). Falls back to the CPU, saying why, when there is no usable GPU.
+struct HeadlessDevice {
+    bool gpu = false;
+    bool half = false;
+    explicit HeadlessDevice(int argc, char** argv, bool halfByDefault) {
+        bool want = false;
+        half = halfByDefault;
+        for (int i = 1; i + 1 < argc; ++i) {
+            const std::string a = argv[i], b = argv[i + 1];
+            if (a == "--device") want = b == "gpu";
+            if (a == "--precision") half = b != "full";
+        }
+        if (!want) return;
+        if (!glfwInit()) {
+            std::fprintf(stderr, "GPU unavailable (GLFW failed to start); using the CPU\n");
+            return;
+        }
+        started_ = true;
+        std::string why;
+        gpu = gpu::init(&why);
+        if (!gpu) std::fprintf(stderr, "GPU unavailable (%s); using the CPU\n", why.c_str());
+    }
+    ~HeadlessDevice() {
+        if (!started_) return;
+        gpu::shutdown();
+        glfwTerminate();
+    }
+    void apply(EvalContext& ctx) const {
+        ctx.gpu = gpu;
+        ctx.gpuHalf = half;
+    }
+    std::string name() const { return gpu ? std::string("GPU (") + (half ? "half" : "full") + ")" : "CPU"; }
+
+private:
+    bool started_ = false;
+};
+
+// NodeLab.exe --render project.nlproj out.png [--depth N] [--device gpu [--precision half]] :
+// evaluate at full resolution without a window. The extension picks the format (.png, .jpg, .tif, .exr); --depth 16 for 16-bit PNG/TIFF,
 // 32 for full-float EXR.
-static int renderHeadless(const std::string& project, const std::string& outPath, int depth) {
+static int renderHeadless(const std::string& project, const std::string& outPath, int depth, const HeadlessDevice& dev) {
     Graph g;
     nlohmann::json ui;
     std::string err;
@@ -43,9 +84,11 @@ static int renderHeadless(const std::string& project, const std::string& outPath
     ctx.proxy = false;
     ctx.cache = &cache;
     initContextSize(g, ctx);
+    dev.apply(ctx);
     try {
         Evaluator ev;
         ImagePtr img = ev.evaluateDisplay(g, outId, ctx);
+        if (ev.gpuFallbacks) std::fprintf(stderr, "%d nodes ran on the CPU instead: %s\n", ev.gpuFallbacks, ev.lastGpuError.c_str());
         if (!img) {
             std::fprintf(stderr, "Output node produced no image\n");
             return 1;
@@ -68,8 +111,9 @@ static int renderHeadless(const std::string& project, const std::string& outPath
 
 // NodeLab.exe --benchmark project.nlproj [--full] [--runs N] : evaluates the Output node from an
 // empty cache N times (after one warm-up run that also loads the images) and prints per-node and
-// total median milliseconds. Proxy resolution unless --full.
-static int benchmarkHeadless(const std::string& project, bool full, int runs) {
+// total median milliseconds. Proxy resolution unless --full. --device gpu runs GPU nodes there
+// (marked "gpu"), with --precision full or half (the default, like Precision: Auto).
+static int benchmarkHeadless(const std::string& project, bool full, int runs, const HeadlessDevice& dev) {
     Graph g;
     nlohmann::json ui;
     std::string err;
@@ -87,7 +131,11 @@ static int benchmarkHeadless(const std::string& project, bool full, int runs) {
     ctx.proxy = !full;
     ctx.cache = &cache;
     initContextSize(g, ctx);
+    dev.apply(ctx);
     std::unordered_map<int, std::vector<double>> per;
+    std::unordered_map<int, bool> onGpu;
+    int fallbacks = 0;
+    std::string fallbackWhy;
     std::vector<double> totals;
     try {
         for (int r = 0; r <= runs; ++r) {
@@ -98,6 +146,9 @@ static int benchmarkHeadless(const std::string& project, bool full, int runs) {
             if (r == 0) continue;  // warm-up: image decoding
             totals.push_back(ms);
             for (const auto& [id, t] : ev.timings()) per[id].push_back(t);
+            onGpu = ev.gpuNodes();
+            fallbacks = ev.gpuFallbacks;
+            fallbackWhy = ev.lastGpuError;
         }
     } catch (const std::exception& e) {
         std::fprintf(stderr, "evaluation failed: %s\n", e.what());
@@ -110,12 +161,14 @@ static int benchmarkHeadless(const std::string& project, bool full, int runs) {
     std::vector<std::pair<double, int>> rows;
     for (const auto& [id, v] : per) rows.push_back({median(v), id});
     std::sort(rows.rbegin(), rows.rend());
-    std::printf("%s  %dx%d  %s\n", project.c_str(), ctx.defaultW, ctx.defaultH, full ? "full" : "proxy");
+    std::printf("%s  %dx%d  %s  %s\n", project.c_str(), ctx.defaultW, ctx.defaultH, full ? "full" : "proxy",
+                dev.name().c_str());
     for (const auto& [ms, id] : rows) {
         const Node* n = g.find(id);
         std::string name = n->label.empty() ? n->info().displayName : n->label;
-        std::printf("%9.2f ms  %-6d %-28s %s\n", ms, id, name.c_str(), n->info().type.c_str());
+        std::printf("%9.2f ms  %-6d %-28s %-3s %s\n", ms, id, name.c_str(), onGpu[id] ? "gpu" : "", n->info().type.c_str());
     }
+    if (fallbacks) std::printf("%d GPU nodes ran on the CPU instead: %s\n", fallbacks, fallbackWhy.c_str());
     std::printf("%9.2f ms  total (median of %d)\n", median(totals), runs);
     return 0;
 }
@@ -209,7 +262,8 @@ int main(int argc, char** argv) {
         int depth = 8;
         for (int i = 4; i + 1 < argc; ++i)
             if (std::string(argv[i]) == "--depth") depth = std::atoi(argv[i + 1]);
-        return renderHeadless(argv[2], argv[3], depth);
+        HeadlessDevice dev(argc, argv, false);
+        return renderHeadless(argv[2], argv[3], depth, dev);
     }
 
     if (argc >= 3 && std::string(argv[1]) == "--benchmark") {
@@ -221,7 +275,18 @@ int main(int argc, char** argv) {
             if (a == "--full") full = true;
             else if (a == "--runs" && i + 1 < argc) runs = std::max(1, std::atoi(argv[++i]));
         }
-        return benchmarkHeadless(argv[2], full, runs);
+        HeadlessDevice dev(argc, argv, true);
+        return benchmarkHeadless(argv[2], full, runs, dev);
+    }
+
+    // NodeLab.exe --gpu-info : the GPU device NodeLab would use, or why there is none.
+    if (argc >= 2 && std::string(argv[1]) == "--gpu-info") {
+        attachParentConsole();
+        char gpuArg[] = "gpu", devArg[] = "--device";
+        char* args[] = {argv[0], devArg, gpuArg};
+        HeadlessDevice dev(3, args, true);
+        std::printf("%s\n", gpu::description().c_str());
+        return dev.gpu ? 0 : 1;
     }
 
     if (argc >= 5 && std::string(argv[1]) == "--batch") {

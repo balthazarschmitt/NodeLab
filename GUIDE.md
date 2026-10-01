@@ -22,7 +22,8 @@ Every panel is a tab that can be dragged. Drop it on the edge of another panel t
 or outside the window to float it. **View > Reset Layout** puts everything back.
 **View > New Viewer** opens an extra image panel that can show any node (see Viewing Intermediate
 Results below). **View > Node Timings** shows how long each node took above it (amber when it is
-50 ms or more), so you can see what slows a graph down.
+50 ms or more), so you can see what slows a graph down. Nodes that ran on the graphics card are
+marked **GPU**.
 
 ### A First Graph
 
@@ -55,6 +56,16 @@ Results below). **View > Node Timings** shows how long each node took above it (
     a graph with one of these, a zoomed-in view keeps showing the preview.
 - **Slow graphs:** when a preview takes longer than 100 ms, dragging a slider shows a half-size
   draft that refines when you let go.
+- **GPU compositing:** like Blender's compositor, **View > Compositor > Device** runs nodes on the
+  graphics card (GPU, the default when the card supports OpenGL 4.3) or only on the processor
+  (CPU).
+  - Mix, Blend, Expression, Image Expression, Blur, Split/Combine RGB and HSV, Color Ramp and
+    Normalize run on the GPU. Other nodes run on the CPU, so a graph made only of GPU nodes gains
+    the most: values stay on the card between them.
+  - **Precision:** Auto keeps images in half floats, which is faster and plenty for a preview;
+    Full matches the CPU exactly to within float rounding.
+  - Zoomed-in detail and exports use the CPU. If a node fails on the GPU (for example when the
+    card runs out of memory) it runs on the CPU instead, and the status bar says so.
 
 ### Viewing Intermediate Results
 
@@ -947,6 +958,7 @@ The settings and folders are saved with the project. From the command line,
 `NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr] [--depth N] a.jpg b.jpg ...`
 does the same batch without the window, and `NodeLab.exe --render project.nlproj out.tif
 [--depth 16]` renders one image (the extension picks the format; `--depth 32` for full-float EXR).
+Add `--device gpu` to render on the graphics card (`--precision half` for speed, full by default).
 
 ## Recipes
 

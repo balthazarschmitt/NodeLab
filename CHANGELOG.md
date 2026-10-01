@@ -5,6 +5,28 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 ## Unreleased
 
+## 0.13.0 (2026-10-01)
+
+- **GPU compositing, like Blender's compositor Device: GPU.** Nodes run as compute shaders on the
+  graphics card (OpenGL 4.3, including Intel and AMD integrated graphics), and results stay on the
+  card between GPU nodes.
+  - On the GPU: Mix, Blend, Expression, Image Expression, Blur, Split/Combine RGB and HSV, Color
+    Ramp and Normalize. Other nodes run on the CPU as before, with their inputs copied across.
+  - **View > Compositor > Device** (GPU or CPU) and **Precision** (Auto stores images as half
+    floats, which is faster; Full matches the CPU's floats). Saved as preferences, not in projects.
+  - On the infrared preset: 846 ms → 271 ms at full resolution, 184 ms → about 120 ms for the
+    preview, on Intel Iris Plus graphics.
+  - Results match the CPU to within 1/255 in exported images. Exports and `--render` use the CPU
+    unless you pass `--device gpu` (with `--precision half|full`); `--gpu-info` names the GPU.
+  - A node that fails on the GPU (out of memory, a driver bug) runs on the CPU instead, and the
+    status bar says so. Node Timings mark GPU nodes.
+- **The window no longer freezes while a big graph updates.** Viewer images are prepared (view
+  transform, clipping warnings, histogram) on a background thread instead of the UI thread, the
+  image cache no longer holds its lock while decoding, and evaluation runs at a lower priority
+  than the UI.
+- Fixed: the window flashed black while moving or resizing panels and windows, and while typing
+  in the Shift+A search.
+
 ## 0.12.1 (2026-09-30)
 
 - **Embedded colour profiles on input:** JPEGs and PNGs with an ICC profile other than sRGB

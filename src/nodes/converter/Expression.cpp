@@ -11,6 +11,7 @@
 #include "nodes/converter/Expression.h"
 
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -21,6 +22,8 @@ extern "C" {
 #include <tinyexpr.h>
 }
 
+#include "gpu/Device.h"
+#include "gpu/PointOp.h"
 #include "nodes/NodeUtil.h"
 
 using namespace nodeutil;
@@ -71,6 +74,7 @@ using exprvm::Op;
 // tinyexpr's operators are private functions; compiling "x+y" etc. reveals their addresses.
 struct OpTable {
     std::map<const void*, Op> ops;
+    std::map<const void*, std::string> glsl;  // tinyexpr's other functions -> GLSL (kGlsl helpers)
     OpTable() {
         double slots[exprvm::kVarCount] = {};
         const std::pair<const char*, Op> probes[] = {
@@ -92,6 +96,17 @@ struct OpTable {
         ops[(const void*)fnStep] = Op::Step;
         ops[(const void*)fnSmoothstep] = Op::Smoothstep;
         ops[(const void*)fnFract] = Op::Fract;
+        const std::pair<const char*, const char*> fns[] = {
+            {"acos(x)", "c_acos"}, {"asin(x)", "c_asin"}, {"atan(x)", "atan"}, {"atan2(x,y)", "c_atan2"},
+            {"cos(x)", "cos"}, {"cosh(x)", "cosh"}, {"exp(x)", "exp"}, {"ln(x)", "c_ln"}, {"log10(x)", "c_log10"},
+            {"pow(x,y)", "c_pow"}, {"x%y", "c_fmod"}, {"sin(x)", "sin"}, {"sinh(x)", "sinh"}, {"tan(x)", "tan"},
+            {"tanh(x)", "c_tanh"},
+        };
+        for (const auto& [src, name] : fns) {
+            te_expr* e = teCompile(src, slots, nullptr);
+            if (e && (e->type & (TE_FUNCTION0 | TE_CLOSURE0))) glsl.emplace(e->function, name);
+            te_free(e);
+        }
     }
 };
 
@@ -239,6 +254,133 @@ const double* Program::run(Workspace& ws, int n) const {
     return reg(result_);
 }
 
+const char* const kGlsl = R"GLSL(
+const float kInf = uintBitsToFloat(0x7F800000u);
+// By the bits: drivers may compile x != x and isnan() assuming floats are never NaN.
+bool c_isnan(float v) { return (floatBitsToUint(v) & 0x7FFFFFFFu) > 0x7F800000u; }
+bool c_finite(float v) { return (floatBitsToUint(v) & 0x7F800000u) != 0x7F800000u; }
+bool c_signbit(float v) { return floatBitsToUint(v) >= 0x80000000u; }
+// Comparisons false with a NaN (and != true), as in C.
+bool c_lt(float a, float b) { return !c_isnan(a) && !c_isnan(b) && a < b; }
+bool c_le(float a, float b) { return !c_isnan(a) && !c_isnan(b) && a <= b; }
+bool c_gt(float a, float b) { return !c_isnan(a) && !c_isnan(b) && a > b; }
+bool c_ge(float a, float b) { return !c_isnan(a) && !c_isnan(b) && a >= b; }
+bool c_eq(float a, float b) { return !c_isnan(a) && !c_isnan(b) && a == b; }
+bool c_nz(float a) { return c_isnan(a) || a != 0.0; }  // true for logic (NaN is true in C)
+// GPU division is approximate (6 / 3 may give 1.9999999, and floor() of it 1): one correction
+// step makes the quotient correctly rounded, as the CPU's is.
+float c_div(float a, float b) {
+    if (b == 0.0) {
+        if (a == 0.0 || c_isnan(a)) return kNaN;
+        return c_signbit(a) != c_signbit(b) ? -kInf : kInf;
+    }
+    float q = a / b;
+    if (!c_finite(q) || !c_finite(b)) return q;
+    precise float r = fma(-q, b, a);
+    return q + r / b;
+}
+float c_sqrt(float a) { return a < 0.0 ? kNaN : sqrt(a); }
+float c_ln(float a) { return a < 0.0 ? kNaN : a == 0.0 ? -kInf : log(a); }
+float c_log10(float a) { return a < 0.0 ? kNaN : a == 0.0 ? -kInf : log(a) * 0.4342944819; }
+float c_asin(float a) { return abs(a) > 1.0 ? kNaN : asin(a); }
+float c_acos(float a) { return abs(a) > 1.0 ? kNaN : acos(a); }
+float c_atan2(float y, float x) {
+    if (x == 0.0 && y == 0.0) return c_signbit(x) ? (c_signbit(y) ? -3.14159265 : 3.14159265) : y;
+    return atan(y, x);
+}
+float c_tanh(float a) { return abs(a) > 10.0 ? sign(a) : tanh(a); }
+float c_fmod(float a, float b) { return b == 0.0 ? kNaN : a - b * trunc(c_div(a, b)); }
+float c_pow(float a, float b) {
+    if (b == 0.0 || a == 1.0) return 1.0;
+    if (b == 1.0) return a;
+    if (b == 2.0) return a * a;
+    if (a == 0.0) return b > 0.0 ? 0.0 : kInf;
+    if (a < 0.0) {
+        if (b != floor(b)) return kNaN;
+        float r = pow(-a, b);
+        return mod(b, 2.0) == 1.0 ? -r : r;
+    }
+    return pow(a, b);
+}
+float c_smoothstep(float e0, float e1, float x) {
+    if (c_le(e1, e0)) return c_lt(x, e0) ? 0.0 : 1.0;
+    float t = c_div(x - e0, e1 - e0);
+    t = c_lt(t, 0.0) ? 0.0 : (c_gt(t, 1.0) ? 1.0 : t);
+    return t * t * (3.0 - 2.0 * t);
+}
+)GLSL";
+
+bool Program::glsl(std::string& code, std::string& result, const char* const vars[kVarCount], const std::string& prefix) const {
+    if (!ok_) return false;
+    const OpTable& table = opTable();
+    std::vector<std::string> names(size_t(std::max(1, regs_)));
+    for (int v = 0; v < kVarCount; ++v)
+        if (varReg_[v] >= 0) names[size_t(varReg_[v])] = vars[v];
+    for (const auto& [r, value] : consts_) {
+        if (std::isnan(value)) names[size_t(r)] = "kNaN";
+        else if (std::isinf(value)) names[size_t(r)] = value > 0 ? "kInf" : "(-kInf)";
+        else {
+            char b[40];
+            std::snprintf(b, sizeof b, "%.9g", value);
+            std::string s = b;
+            if (s.find_first_of(".e") == std::string::npos) s += ".0";
+            names[size_t(r)] = "(" + s + ")";
+        }
+    }
+    code.clear();
+    for (const Instr& in : code_) {
+        const std::string a = in.arity > 0 ? names[size_t(in.args[0])] : "", b = in.arity > 1 ? names[size_t(in.args[1])] : "",
+                          c = in.arity > 2 ? names[size_t(in.args[2])] : "";
+        std::string e;
+        switch (in.op) {
+            case Op::Add: e = a + " + " + b; break;
+            case Op::Sub: e = a + " - " + b; break;
+            case Op::Mul: e = a + " * " + b; break;
+            case Op::Div: e = "c_div(" + a + ", " + b + ")"; break;
+            case Op::Neg: e = "-" + a; break;
+            case Op::Lt: e = "float(c_lt(" + a + ", " + b + "))"; break;
+            case Op::Le: e = "float(c_le(" + a + ", " + b + "))"; break;
+            case Op::Gt: e = "float(c_gt(" + a + ", " + b + "))"; break;
+            case Op::Ge: e = "float(c_ge(" + a + ", " + b + "))"; break;
+            case Op::Eq: e = "float(c_eq(" + a + ", " + b + "))"; break;
+            case Op::Ne: e = "float(!c_eq(" + a + ", " + b + "))"; break;
+            case Op::And: e = "float(c_nz(" + a + ") && c_nz(" + b + "))"; break;
+            case Op::Or: e = "float(c_nz(" + a + ") || c_nz(" + b + "))"; break;
+            case Op::Not: e = "float(!c_nz(" + a + "))"; break;
+            case Op::NotNot: e = "float(c_nz(" + a + "))"; break;
+            case Op::NegNot: e = "-float(!c_nz(" + a + "))"; break;
+            case Op::NegNotNot: e = "-float(c_nz(" + a + "))"; break;
+            case Op::Abs: e = "abs(" + a + ")"; break;
+            case Op::Floor: e = "floor(" + a + ")"; break;
+            case Op::Ceil: e = "ceil(" + a + ")"; break;
+            case Op::Sqrt: e = "c_sqrt(" + a + ")"; break;
+            case Op::Min: e = "c_lt(" + a + ", " + b + ") ? " + a + " : " + b; break;
+            case Op::Max: e = "c_gt(" + a + ", " + b + ") ? " + a + " : " + b; break;
+            case Op::Clamp:
+                e = "c_lt(" + a + ", " + b + ") ? " + b + " : (c_gt(" + a + ", " + c + ") ? " + c + " : " + a + ")";
+                break;
+            case Op::Mix: e = a + " + (" + b + " - " + a + ") * " + c; break;
+            case Op::Step: e = "c_lt(" + b + ", " + a + ") ? 0.0 : 1.0"; break;
+            case Op::Smoothstep: e = "c_smoothstep(" + a + ", " + b + ", " + c + ")"; break;
+            case Op::Fract: e = a + " - floor(" + a + ")"; break;
+            case Op::Comma: break;
+            case Op::Call: {
+                auto f = table.glsl.find(in.fn);
+                if (f == table.glsl.end()) return false;
+                e = f->second + "(";
+                for (int k = 0; k < in.arity; ++k) e += (k ? ", " : "") + names[size_t(in.args[k])];
+                e += ")";
+                break;
+            }
+        }
+        const std::string d = prefix + std::to_string(in.dst);
+        names[size_t(in.dst)] = d;
+        code += "    float " + d + " = " + e + ";\n";
+    }
+    result = names[size_t(result_)];
+    return true;
+}
+
 double interpret(const std::string& src, const double vars[kVarCount]) {
     double slots[kVarCount];
     std::copy(vars, vars + kVarCount, slots);
@@ -309,6 +451,43 @@ void runExpressions(const Node& node, const EvalContext& ctx, const std::vector<
 
 inline float finite(double r) { return std::isfinite(r) ? float(r) : 0.0f; }
 
+// The expression variables on the GPU, as runExpressions fills them (pins: 0 Image, 1 In1, 2 In2).
+const char* const kGlslVars[exprvm::kVarCount] = {"vR", "vG", "vB", "vA", "vIn1", "vIn2", "vX", "vY", "vU", "vV", "vW", "vH"};
+const char* const kGlslVarDecls = R"(
+    vec4 px = img0(p);
+    float vR = px.r, vG = px.g, vB = px.b, vA = has0 ? px.a : 1.0;  // no image: 0 0 0 1
+    float vIn1 = par1(p), vIn2 = par2(p);
+    float vX = float(p.x + uOrigin.x), vY = float(p.y + uOrigin.y);
+    float vU = c_div(vX + 0.5, float(uFull.x)), vV = c_div(vY + 0.5, float(uFull.y));
+    float vW = float(uFull.x), vH = float(uFull.y);
+)";
+
+bool gpuExpressions(const std::vector<std::string>& sources) {
+    std::string code, res;
+    for (size_t i = 0; i < sources.size(); ++i)
+        if (!Program(sources[i]).glsl(code, res, kGlslVars, "t")) return false;
+    return true;
+}
+
+// The GPU kernel: each program's statements, then `assign` with the results named in order.
+gpu::PointOp expressionOp(const std::vector<std::string>& sources, const std::vector<std::string>& labels,
+                          std::string (*assign)(const std::vector<std::string>&, const void*), const void* user) {
+    gpu::PointOp op;
+    op.functions = exprvm::kGlsl;
+    op.body = kGlslVarDecls;
+    std::vector<std::string> results;
+    for (size_t i = 0; i < sources.size(); ++i) {
+        const Program prog(sources[i]);
+        validate(labels[i], prog, sources[i]);
+        std::string code, res;
+        if (!prog.glsl(code, res, kGlslVars, "e" + std::to_string(i) + "_")) throw gpu::Error("GPU: unsupported function");
+        op.body += code;
+        results.push_back("finiteOr0(" + res + ")");
+    }
+    op.body += assign(results, user);
+    return op;
+}
+
 class ExpressionNode : public Node {
 public:
     NODELAB_NODE({"conv.expression", "Expression", "Converter",
@@ -327,6 +506,15 @@ public:
             for (int i = 0; i < n; ++i) ch->data[i0 + size_t(i)] = finite(res[0][i]);
         });
         out[0] = Value(ChannelPtr(ch));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>&) const override { return gpuExpressions({paramS(0)}); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op = expressionOp({paramS(0)}, {"Expression"},
+                                       [](const std::vector<std::string>& r, const void*) { return "    out0 = " + r[0] + ";"; },
+                                       nullptr);
+        resolveSize(in, ctx, op.w, op.h);
+        gpu::runPoint(ctx, *this, op, in, out);
     }
 };
 
@@ -358,6 +546,26 @@ public:
             }
         });
         out[0] = Value(ImagePtr(img));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>&) const override {
+        return gpuExpressions({paramS(0), paramS(1), paramS(2)});
+    }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        int w, h;
+        resolveSize(in, ctx, w, h);
+        // Alpha passes through from an image of the output's size (others are opaque, as on the CPU).
+        int sw = 0, sh = 0;
+        const bool keepAlpha = in[0].size(sw, sh) && sw == w && sh == h;
+        gpu::PointOp op = expressionOp(
+            {paramS(0), paramS(1), paramS(2)}, {"R", "G", "B"},
+            [](const std::vector<std::string>& r, const void* keep) {
+                return "    out0 = vec4(" + r[0] + ", " + r[1] + ", " + r[2] + ", " +
+                       (*static_cast<const bool*>(keep) ? "px.a" : "1.0") + ");";
+            },
+            &keepAlpha);
+        op.w = w, op.h = h;
+        gpu::runPoint(ctx, *this, op, in, out);
     }
 };
 

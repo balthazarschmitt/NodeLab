@@ -2,6 +2,8 @@
 // Sizes are in full-resolution pixels; ctx.scale converts them for the preview proxy.
 #include <cmath>
 
+#include "gpu/Blur.h"
+#include "gpu/PointOp.h"
 #include "nodes/ImageOps.h"
 #include "nodes/NodeUtil.h"
 
@@ -68,6 +70,26 @@ public:
         auto img = copyOf(*src);
         blurImage(*img, sx * 0.5f, sy * 0.5f);
         out[0] = Value(ImagePtr(img));
+    }
+
+    // Images and sized channels (numbers and flat channels have nothing to blur).
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const Value v = in[0].onGpu() ? in[0] : gpu::toGpu(in[0], ctx.gpuHalf);
+        int w, h;
+        v.size(w, h);
+        const PixelFrame fr = frameOf(ctx, w, h);
+        float sx, sy;
+        sizes(ctx, fr.fullW, fr.fullH, sx, sy);
+        if (auto c = std::get_if<GpuChannelPtr>(&v.v)) {
+            auto r = std::make_shared<GpuChannel>();
+            r->tex = gpu::boxBlur((*c)->tex, sx * 0.5f, sy * 0.5f), r->w = w, r->h = h;
+            out[0] = Value(GpuChannelPtr(r));
+        } else if (auto i = std::get_if<GpuImagePtr>(&v.v)) {
+            auto r = std::make_shared<GpuImage>();
+            r->tex = gpu::boxBlur((*i)->tex, sx * 0.5f, sy * 0.5f), r->w = w, r->h = h;
+            out[0] = Value(GpuImagePtr(r));
+        }
     }
 };
 

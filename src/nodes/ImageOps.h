@@ -15,6 +15,8 @@ float sampleBilinear(const std::vector<float>& ch, int w, int h, float x, float 
 // Gaussian blur approximated by three box blurs (cost independent of radius). sigma in pixels.
 void blurImage(Image& img, float sigmaX, float sigmaY);
 void blurChannel(std::vector<float>& ch, int w, int h, float sigmaX, float sigmaY);
+// The box radii of those three passes (fewer for tiny sigmas); the GPU blur uses the same.
+std::vector<int> boxRadii(float sigma);
 // How far (pixels) the blur of a given sigma reads from each pixel: the region padding it needs.
 int blurReach(float sigma);
 
