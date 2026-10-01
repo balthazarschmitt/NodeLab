@@ -165,7 +165,13 @@ int App::run(const RunOptions& opt) {
     main->id = 0;
     viewers_.push_back(std::move(main));
 
-    if (opt.project.empty() || !openProject(opt.project)) newProject();
+    // An image instead of a project (NodeLab.exe photo.CR2, or Open with): a new project with it.
+    if (!opt.project.empty() && isImageFile(u8ToPath(opt.project))) {
+        newProject();
+        importImage(opt.project);
+    } else if (opt.project.empty() || !openProject(opt.project)) {
+        newProject();
+    }
 
     int frame = 0, settled = 0;
     while (!quit_) {
@@ -333,6 +339,7 @@ void App::drawFrame() {
     // A drag just ended: its last value is queued behind an intermediate one; skip the latter.
     if (gestureWas_ && !gesture) eval_->preempt();
     gestureWas_ = gesture;
+    applyRawLook();
     updateTextures();
     updateTitle();
 
@@ -1065,11 +1072,27 @@ bool App::saveProject(bool saveAs) {
     return true;
 }
 
+void App::applyRawLook() {
+    if (!takeRawChosen()) return;
+    // Only a fresh scene-linear project whose one image is this RAW: an edited look stays put.
+    ColorManagement& cm = graph_.colorManagement;
+    int images = 0;
+    for (const auto& [id, n] : graph_.nodes())
+        if (n->info().type == ImageInputNode::staticInfo().type && !n->paramS(0).empty()) ++images;
+    if (!cm.linear || images != 1 || !(cm == ColorManagement::sceneLinear())) return;
+    // AgX rolls off the highlights a RAW keeps above 1, which Standard would clip.
+    cm.view = ColorManagement::AgX;
+    status_ = "View transform set to AgX for the RAW";
+    markChanged(false);
+}
+
 void App::importImage(const std::string& path) {
     std::string err;
     // Decode as the new Image Input will (its default params), so the cache entry is reused.
-    const auto decode = ImageInputNode().decode(graph_.colorManagement.linear);
-    if (!cache_.get(path, true, &err, decode)) {
+    // (A bare node has no params until initParams.)
+    ImageInputNode probe;
+    probe.initParams();
+    if (!cache_.get(path, true, &err, probe.decode(graph_.colorManagement.linear), proxyEdge_)) {
         status_ = "Import failed: " + err;
         return;
     }
@@ -1085,7 +1108,7 @@ void App::importImage(const std::string& path) {
         target = g.addNode(ImageInputNode::staticInfo().type);
         editor_.placeAtScreen(*target, editor_.canvasCenter());
     }
-    target->params[0] = path;
+    chooseImageFile(*target, 0, path);
     editor_.select(target->id);
     status_ = "Imported " + pathToU8(u8ToPath(path).filename());
     markChanged(true);
@@ -1423,9 +1446,19 @@ void App::updateTextures() {
         src = graph_.find(graph_.firstOfType(ImageInputNode::staticInfo().type));
     ImagePtr left;
     const ColorManagement& cm = graph_.colorManagement;
-    if (src && !src->paramS(0).empty())
-        left = cache_.get(src->paramS(0), true, nullptr, static_cast<const ImageInputNode&>(*src).decode(cm.linear),
-                          proxyEdge_);
+    if (src && !src->paramS(0).empty()) {
+        const auto& in = static_cast<const ImageInputNode&>(*src);
+        ImagePtr decoded = cache_.get(in.paramS(0), true, nullptr, in.decode(cm.linear), proxyEdge_);
+        // The Original shows the node's output (with a RAW's Baseline Exposure), scaled again
+        // only when the image or the gain changes.
+        const float gain = in.exposureGain();
+        if (decoded != leftDecoded_ || gain != leftGain_) {
+            leftDecoded_ = decoded;
+            leftGain_ = gain;
+            leftExposed_ = in.applyExposure(decoded);
+        }
+        left = leftExposed_;
+    }
     leftNode_ = src && graph_.find(src->id) == src ? src->id : 0;
     // Changing the view transform only redraws; the graph's values are unaffected.
     const bool cmChanged = !(cm == shownCm_);

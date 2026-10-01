@@ -273,7 +273,8 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
             if (batch) {
                 Node* in = g.find(inputNode);
                 if (!in) throw std::runtime_error("the batch Image Input node is gone");
-                in->params[0] = item.source;
+                // As if chosen in the UI: a RAW batch from a JPEG project gets the RAW defaults.
+                static_cast<ImageInputNode&>(*in).chooseFile(item.source);
                 setStage("Loading " + pathToU8(u8ToPath(item.source).filename()));
                 std::string err;
                 ImagePtr src = cache.get(item.source, false, &err,

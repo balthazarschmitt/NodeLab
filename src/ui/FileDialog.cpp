@@ -1,5 +1,9 @@
 #include "ui/FileDialog.h"
 
+#include <utility>
+
+#include "nodes/io/IONodes.h"
+
 #ifdef _WIN32
 #include <windows.h>
 #include <commdlg.h>
@@ -122,3 +126,17 @@ std::optional<std::string> saveFileDialog(const char*, const char*, const char*)
 std::vector<std::string> openFilesDialog(const char*, const char*) { return {}; }
 std::optional<std::string> folderDialog(const char*) { return std::nullopt; }
 #endif
+
+namespace {
+bool rawChosen = false;  // UI thread only
+}
+
+void chooseImageFile(Node& n, int param, const std::string& pathU8) {
+    if (param == 0 && n.info().type == ImageInputNode::staticInfo().type) {
+        if (static_cast<ImageInputNode&>(n).chooseFile(pathU8)) rawChosen = true;
+        return;
+    }
+    n.params[param] = pathU8;
+}
+
+bool takeRawChosen() { return std::exchange(rawChosen, false); }

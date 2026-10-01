@@ -68,7 +68,7 @@ bool editParam(Node& node, int i, float width, bool compact) {
             std::string name = path.empty() ? "(none)" : pathToU8(u8ToPath(path).filename());
             if (ImGui::Button("Browse...")) {
                 if (auto p = openFileDialog("Choose image", kImageFileFilter)) {
-                    node.params[i] = *p;
+                    chooseImageFile(node, i, *p);
                     changed = true;
                 }
             }

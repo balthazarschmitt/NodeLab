@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <fstream>
+#include <map>
+#include <mutex>
 #include <vector>
 
 #include <libraw/libraw.h>
@@ -98,12 +101,33 @@ std::shared_ptr<Image> load(const std::string& pathU8, std::string& err, int hig
     return img;
 }
 
+namespace {
+
+// LibRaw doesn't keep the EXIF ExposureBiasValue, so catch it as its EXIF parser passes by.
+void exifTag(void* context, int tag, int type, int len, unsigned int order, void* ifp, INT64) {
+    if (tag != 0x9204 || type != 10 || len < 1) return;  // ExposureBiasValue, an SRATIONAL
+    unsigned char b[8];
+    if (static_cast<LibRaw_abstract_datastream*>(ifp)->read(b, 1, 8) != 8) return;
+    auto i32 = [&](const unsigned char* p) {
+        const uint32_t u = order == 0x4949 ? uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24
+                                           : uint32_t(p[3]) | uint32_t(p[2]) << 8 | uint32_t(p[1]) << 16 | uint32_t(p[0]) << 24;
+        return int32_t(u);
+    };
+    const int32_t num = i32(b), den = i32(b + 4);
+    if (den != 0) *static_cast<float*>(context) = float(num) / float(den);
+}
+
+}  // namespace
+
 bool readMetadata(const std::string& pathU8, Metadata& out) {
     std::ifstream f(u8ToPath(pathU8), std::ios::binary);
     if (!f) return false;
     std::vector<char> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     auto lr = std::make_unique<LibRaw>();
+    float bias = 0.0f;
+    lr->set_exifparser_handler(exifTag, &bias);
     if (lr->open_buffer(bytes.data(), bytes.size()) != LIBRAW_SUCCESS) return false;
+    out.exposureBias = std::clamp(bias, -10.0f, 10.0f);  // a corrupt tag shouldn't blow the image out
     const auto& d = lr->imgdata;
     out.make = d.idata.make;
     out.model = d.idata.model;
@@ -114,6 +138,21 @@ bool readMetadata(const std::string& pathU8, Metadata& out) {
     out.focalLength = d.other.focal_len;
     out.timestamp = static_cast<long long>(d.other.timestamp);
     return true;
+}
+
+float exposureBias(const std::string& pathU8) {
+    // Image Input asks on every evaluation; reading the file once per path is enough.
+    static std::mutex mutex;
+    static std::map<std::string, float> cache;
+    {
+        std::lock_guard lock(mutex);
+        if (auto it = cache.find(pathU8); it != cache.end()) return it->second;
+    }
+    Metadata m;
+    const float bias = readMetadata(pathU8, m) ? m.exposureBias : 0.0f;
+    std::lock_guard lock(mutex);
+    cache[pathU8] = bias;
+    return bias;
 }
 
 }  // namespace raw

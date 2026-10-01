@@ -5,6 +5,23 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 ## Unreleased
 
+## 0.12.0 (2026-09-30)
+
+- **RAW default look, like darktable:** RAWs looked flat and about a stop darker than the camera's
+  JPEG.
+  - Choosing a RAW for an Image Input now sets **Baseline Exposure** to +0.7 EV and turns on
+    **Compensate Camera Exposure**, which undoes the camera's exposure compensation (read from the
+    EXIF). Both are visible, editable params.
+  - A new project whose first image is a RAW switches its view transform to **AgX**, so the
+    highlights a RAW keeps above 1 roll off instead of clipping.
+  - Existing projects are unchanged: the new params default to 0 / off, and only choosing a file
+    sets them.
+  - The Original panel includes the Baseline Exposure.
+- **Open an image from the command line:** `NodeLab.exe photo.CR2` (or Windows' Open with) starts a
+  new project with it.
+- Fixed: importing an image read the Image Input's params before they existed (worked by luck;
+  crashed once the compiler inlined it).
+
 ## 0.11.0 (2026-09-30)
 
 - **Full-resolution viewing:** zoom in past the preview and the Original and Result panels sharpen

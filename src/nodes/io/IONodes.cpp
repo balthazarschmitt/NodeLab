@@ -1,6 +1,9 @@
 #include "nodes/io/IONodes.h"
 
+#include <cmath>
 #include <stdexcept>
+
+#include "core/Parallel.h"
 
 #include "io/ImageCache.h"
 
@@ -20,7 +23,36 @@ void ImageInputNode::evaluate(EvalContext& ctx, const std::vector<Value>&, std::
             throw std::runtime_error("Image Input: region does not match the image");
         img = cropImage(*img, r.x, r.y, r.w, r.h);
     }
-    out[0] = Value(img);
+    out[0] = Value(applyExposure(std::move(img)));
+}
+
+bool ImageInputNode::chooseFile(const std::string& pathU8) {
+    const bool wasRaw = raw::isRawPath(paramS(0));
+    params[0] = pathU8;
+    if (wasRaw || !raw::isRawPath(pathU8)) return false;
+    params[3] = kRawBaselineEV;
+    params[4] = true;
+    return true;
+}
+
+float ImageInputNode::exposureGain() const {
+    const std::string& path = paramS(0);
+    if (path.empty() || !raw::isRawPath(path)) return 1.0f;
+    float ev = paramF(3);
+    if (paramB(4)) ev -= raw::exposureBias(path);
+    return std::exp2(ev);
+}
+
+ImagePtr ImageInputNode::applyExposure(ImagePtr img) const {
+    const float gain = exposureGain();
+    if (!img || gain == 1.0f) return img;
+    auto out = std::make_shared<Image>(*img);
+    parallelFor(out->h, [&](int y) {
+        float* p = out->pixel(size_t(y) * out->w);
+        for (int x = 0; x < out->w; ++x, p += 4)
+            for (int c = 0; c < 3; ++c) p[c] *= gain;
+    });
+    return out;
 }
 
 bool ImageInputNode::roiSourceSize(const EvalContext& ctx, int& w, int& h) const {

@@ -295,9 +295,22 @@ value while nothing is connected.
 - In scene-linear projects, JPEGs are turned upright from their EXIF orientation, as cameras and
   phones expect. Legacy projects keep the pixels as stored, so old edits still line up.
 - **RAW files** load as scene-linear light with the camera's "as shot" white balance, upright,
-  with no tone curve or brightening. They look flatter and darker than the camera's JPEG until you
-  add a Basic node (Exposure, Contrast) or pick the AgX view transform.
+  with no tone curve.
   - Basic's Temperature and Tint are relative to the as-shot white balance, as in Lightroom.
+  - **Default look:** cameras expose to protect highlights, so the sensor data looks about a stop
+    darker than the camera's JPEG. Choosing a RAW (File > Import, Browse, dropping it on the
+    window, or a RAW batch) sets two params, as darktable does:
+    - **Baseline Exposure** +0.7 EV.
+    - **Compensate Camera Exposure** on. This undoes the exposure compensation set on the camera,
+      so a shot taken at -1 EV to save the sky comes in at normal brightness.
+  - Both are ordinary params you can change; set them to 0 / off for the data exactly as shot.
+    Switching from one RAW to another keeps them. Projects saved before 0.12 have them at 0 / off,
+    so they render as before.
+  - The Original panel shows the RAW with these applied, as Image Input outputs it.
+  - **View transform:** when a RAW is the first image of a new project, the view switches to
+    **AgX**, which rolls off the highlights a RAW keeps above 1 instead of clipping them (in the Color
+    menu; its Punchy look adds contrast back). A project whose view settings you have
+    changed keeps them.
   - The preview uses a fast half-size decode. The full-size decode (one to three seconds for a
     20 MP file) happens only when exporting.
   - In legacy projects a RAW is encoded to sRGB and clipped like a JPEG.

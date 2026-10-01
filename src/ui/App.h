@@ -53,6 +53,8 @@ private:
     bool openProject(const std::string& path);
     bool saveProject(bool saveAs);
     void importImage(const std::string& path);
+    // After a RAW was chosen for an Image Input: a fresh project switches its view to AgX.
+    void applyRawLook();
     void drawColorMenu();
     void refreshDisplay(Viewer& v, bool main);
     void refreshDetail(Viewer& v, bool main);
@@ -126,6 +128,8 @@ private:
 
     GLTexture leftTex_;
     ImagePtr leftShown_;    // scene values, for the eyedropper
+    ImagePtr leftDecoded_, leftExposed_;  // the decoded file, and with the Baseline Exposure applied
+    float leftGain_ = 1.0f;
     int leftNode_ = 0;      // the Image Input it shows, if in the root graph (for its detail)
     Viewer left_;           // the Original's detail and view info (its tex is leftTex_)
     ColorManagement shownCm_;  // the colour management the textures were made with

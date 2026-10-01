@@ -1,6 +1,7 @@
 // RAW detection and failure handling, EXIF orientation for JPEGs, and Image Input's RAW params.
 #include <doctest/doctest.h>
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -148,4 +149,45 @@ TEST_CASE("Image Input shows Highlight Reconstruction for RAW files and Color Sp
     CHECK_FALSE(n->paramVisible(1));
     CHECK(n->paramVisible(2));
     CHECK(static_cast<const ImageInputNode&>(*n).decode(true).rawHighlights == raw::Reconstruct);
+}
+
+TEST_CASE("Choosing a RAW sets darktable-style Baseline Exposure defaults that old projects don't get") {
+    Graph g;
+    auto& in = static_cast<ImageInputNode&>(*g.addNode("io.image_input"));
+    // Defaults (and so projects saved before the params existed) change nothing.
+    CHECK(in.paramF(3) == 0.0f);
+    CHECK_FALSE(in.paramB(4));
+    in.params[0] = "old.CR2";
+    CHECK(in.exposureGain() == 1.0f);
+
+    in.params[0] = "";
+    CHECK(in.chooseFile("photo.CR2"));
+    CHECK(in.paramF(3) == doctest::Approx(ImageInputNode::kRawBaselineEV));
+    CHECK(in.paramB(4));
+    CHECK(in.paramVisible(3));
+    CHECK(in.paramVisible(4));
+    // A missing file has no exposure bias, so the gain is just the baseline.
+    CHECK(in.exposureGain() == doctest::Approx(std::exp2(ImageInputNode::kRawBaselineEV)));
+
+    // RAW to RAW keeps the user's settings; JPEGs ignore them.
+    in.params[3] = -0.5f;
+    CHECK_FALSE(in.chooseFile("other.NEF"));
+    CHECK(in.paramF(3) == doctest::Approx(-0.5f));
+    CHECK_FALSE(in.chooseFile("photo.jpg"));
+    CHECK_FALSE(in.paramVisible(3));
+    CHECK(in.exposureGain() == 1.0f);
+
+    // The gain scales colour, not alpha.
+    in.params[0] = "photo.dng";
+    in.params[3] = 1.0f;
+    in.params[4] = false;
+    auto img = std::make_shared<Image>(1, 1);
+    float* p = img->pixel(0);
+    p[0] = 0.25f, p[1] = 0.5f, p[2] = 1.5f, p[3] = 0.75f;
+    ImagePtr out = in.applyExposure(img);
+    REQUIRE(out != img);
+    CHECK(out->pixel(0)[0] == doctest::Approx(0.5f));
+    CHECK(out->pixel(0)[2] == doctest::Approx(3.0f));
+    CHECK(out->pixel(0)[3] == doctest::Approx(0.75f));
+    CHECK(img->pixel(0)[0] == 0.25f);  // the cached source is untouched
 }

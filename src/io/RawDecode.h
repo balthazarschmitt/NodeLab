@@ -24,9 +24,12 @@ std::shared_ptr<Image> load(const std::string& pathU8, std::string& err, int hig
 struct Metadata {
     std::string make, model, lens;
     float exposureTime = 0, fNumber = 0, iso = 0, focalLength = 0;  // seconds, f/, ISO, mm
+    float exposureBias = 0;                                          // the camera's exposure compensation, EV
     long long timestamp = 0;                                         // capture time (time_t)
 };
 // Reads only the metadata (no decoding). False when the file can't be opened as a RAW.
 bool readMetadata(const std::string& pathU8, Metadata& out);
+// Metadata::exposureBias of a RAW file, read once per path; 0 when it has none or can't be read.
+float exposureBias(const std::string& pathU8);
 
 }  // namespace raw

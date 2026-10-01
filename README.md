@@ -45,6 +45,9 @@ PNG, JPEG, TIFF or OpenEXR; `--depth 32` for full-float EXR)
 Headless batch: `NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr] [--depth N] a.jpg b.jpg ...`
 (each source goes into the project's first Image Input and is saved as `outDir\<name>_edit.<ext>`)
 Benchmark: `NodeLab.exe --benchmark project.nlproj [--full] [--runs N]` (median ms per node)
+Open an image directly (also works with Windows' Open with): `NodeLab.exe photo.CR2` starts a new
+project with it.
+
 Screenshot of the UI (debug aid): `NodeLab.exe project.nlproj --screenshot shot.png`
 Scripted UI test (feeds input straight to ImGui, ignores the real mouse; see `src/ui/UiScript.h`):
 `NodeLab.exe examples\demo.nlproj --script tests\ui\fanout_addnode.txt`

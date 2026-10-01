@@ -429,7 +429,7 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
             std::string label = path.empty() ? "Choose image..." : pathToU8(u8ToPath(path).filename());
             if (canInteract && button()) {
                 if (auto p = openFileDialog("Choose image", kImageFileFilter)) {
-                    n.params[i] = *p;
+                    chooseImageFile(n, i, *p);
                     changed = true;
                 }
             }
