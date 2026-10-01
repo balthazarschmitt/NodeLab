@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <optional>
 
 #include "core/ColorMath.h"
 #include "core/Parallel.h"
+#include "gpu/Device.h"
 #include "graph/Evaluator.h"
 #include "graph/Graph.h"
 #include "io/Exif.h"
@@ -209,7 +211,8 @@ Exporter::~Exporter() {
     if (thread_.joinable()) thread_.join();
 }
 
-void Exporter::start(const nlohmann::json& graph, std::vector<ExportItem> items, int inputNode, const ExportSettings& s) {
+void Exporter::start(const nlohmann::json& graph, std::vector<ExportItem> items, int inputNode, const ExportSettings& s,
+                     bool gpu) {
     if (thread_.joinable()) thread_.join();  // a finished job's thread
     cancel_ = false;
     busy_ = true;
@@ -218,8 +221,8 @@ void Exporter::start(const nlohmann::json& graph, std::vector<ExportItem> items,
         progress_ = {};
         progress_.total = int(items.size());
     }
-    thread_ = std::thread([this, graph, items = std::move(items), inputNode, s]() mutable {
-        run(std::move(graph), std::move(items), inputNode, std::move(s));
+    thread_ = std::thread([this, graph, items = std::move(items), inputNode, s, gpu]() mutable {
+        run(std::move(graph), std::move(items), inputNode, std::move(s), gpu);
     });
 }
 
@@ -247,7 +250,7 @@ void Exporter::log(const std::string& line) {
     log_.push_back(line);
 }
 
-void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int inputNode, ExportSettings s) {
+void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int inputNode, ExportSettings s, bool gpu) {
     Graph g;
     try {
         g.fromJson(graphJson);
@@ -269,6 +272,8 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
         ctx.cache = &cache;
         ctx.cancel = &cancel_;
         ctx.colorManagement = g.colorManagement;
+        ctx.gpu = gpu && gpu::available();
+        ctx.gpuHalf = false;
         try {
             if (batch) {
                 Node* in = g.find(inputNode);
@@ -296,7 +301,14 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
             ev.releaseIntermediates = !fileOutputs;
             if (!item.output.empty()) {
                 setStage("Rendering " + outName);
-                ImagePtr img = outId ? ev.evaluateDisplay(g, outId, ctx) : nullptr;
+                ImagePtr img;
+                if (outId) {
+                    // The device is held while evaluating only (the previews wait meanwhile), not
+                    // while resizing and saving.
+                    std::optional<gpu::Scope> device;
+                    if (ctx.gpu) device.emplace();
+                    img = ev.evaluateDisplay(g, outId, ctx);
+                }
                 if (!img) throw std::runtime_error("the Output node has no input");
                 // Before the view transform: resampling in scene light.
                 img = resizeForExport(img, s, !ctx.linear());
@@ -311,11 +323,18 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
                 setStage("Writing File Outputs");
                 for (const std::string& line : writeFileOutputs(g, ev, ctx)) log(line);
             }
+            if (ev.gpuFallbacks)
+                log(std::to_string(ev.gpuFallbacks) + " nodes ran on the CPU instead: " + ev.lastGpuError);
         } catch (const EvalCancelled&) {
             break;
         } catch (const std::exception& e) {
             ++failed;
             log("Failed " + (batch ? item.source : outName) + ": " + e.what());
+        }
+        if (ctx.gpu) {
+            // A full-resolution image's textures are hundreds of MB: keep only a preview's worth.
+            gpu::Scope device;
+            gpu::trimPool(size_t(128) << 20);
         }
         std::lock_guard lock(mutex_);
         progress_.done = int(i + 1);

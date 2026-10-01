@@ -7,9 +7,17 @@
 #include <algorithm>
 #include <cmath>
 
+#include <filesystem>
 #include "graph/Evaluator.h"
+#include "io/Export.h"
+#include "io/ImageIO.h"
+#include "io/Paths.h"
 #include "graph/NodeRegistry.h"
+#include "core/ColorManagement.h"
 #include "gpu/Device.h"
+#include "gpu/Blur.h"
+#include "gpu/Display.h"
+#include "nodes/ImageOps.h"
 #include "gpu/PointOp.h"
 
 namespace {
@@ -109,6 +117,8 @@ float difference(const Value& a, const Value& b) {
 }
 
 }  // namespace
+
+bool gpuTestDevice() { return gpuReady(); }
 
 TEST_CASE("GPU nodes match their CPU versions") {
     if (!gpuReady()) return;
@@ -695,4 +705,160 @@ TEST_CASE("GPU values pass through Reroute and Switch on the device") {
     Evaluator ev2;
     ev2.evaluateOutput(g, sw->id, 0, ctx);
     CHECK_FALSE(ev2.gpuNodes()[r->id]);
+}
+
+TEST_CASE("GPU display matches the CPU view transform, bytes and histogram") {
+    if (!gpuReady()) return;
+    // 211x97 with values from below 0 to well above 1, so every view's clipping and the AgX
+    // shoulder are crossed.
+    const int w = 211, h = 97;
+    auto img = std::make_shared<Image>(w, h);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            float* p = img->pixel(size_t(y) * w + x);
+            const float u = float(x) / w, v = float(y) / h;
+            p[0] = 4.0f * u * u - 0.05f, p[1] = 1.5f * v * (0.5f + 0.5f * std::sin(u * 11)), p[2] = 0.3f + 2.0f * u * v;
+            p[3] = 1.0f;
+        }
+    std::vector<ColorManagement> cms(6, ColorManagement::sceneLinear());
+    cms[0].linear = false;
+    cms[2].view = ColorManagement::AgX;
+    cms[3].view = ColorManagement::AgX, cms[3].look = ColorManagement::Punchy, cms[3].exposure = 0.7f;
+    cms[4].view = ColorManagement::AgX, cms[4].look = ColorManagement::Greyscale, cms[4].gamma = 1.4f;
+    cms[5].view = ColorManagement::Raw, cms[5].exposure = -1.3f, cms[5].gamma = 0.8f;
+    auto byte = [](float v) { return int(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+    for (size_t ci = 0; ci < cms.size(); ++ci)
+        for (bool clipping : {false, true}) {
+            CAPTURE(ci);
+            CAPTURE(clipping);
+            gpu::DisplayResult r;
+            {
+                gpu::Scope scope;
+                r = gpu::display(Value(img), cms[ci], clipping, true);
+            }
+            REQUIRE(r.bytes.size() == size_t(w) * h * 4);
+            REQUIRE(r.histogram.size() == 1026);
+            const ImagePtr disp = colormgmt::displayImage(img, cms[ci]);
+            std::vector<uint32_t> hist(1026, 0);
+            int worst = 0, off = 0;
+            for (size_t i = 0; i < size_t(w) * h; ++i) {
+                const float* d = disp->pixel(i);
+                int b[3] = {byte(d[0]), byte(d[1]), byte(d[2])};
+                ++hist[size_t(b[0])], ++hist[256 + size_t(b[1])], ++hist[512 + size_t(b[2])];
+                ++hist[768 + size_t(byte(0.2126f * d[0] + 0.7152f * d[1] + 0.0722f * d[2]))];
+                if (b[0] == 255 || b[1] == 255 || b[2] == 255) hist[1024] = 1;
+                if (b[0] == 0 && b[1] == 0 && b[2] == 0) hist[1025] = 1;
+                if (clipping) {
+                    const int mx = std::max({b[0], b[1], b[2]});
+                    if (mx == 255) b[0] = 255, b[1] = 0, b[2] = 0;
+                    else if (mx == 0) b[0] = 0, b[1] = 90, b[2] = 255;
+                }
+                for (int k = 0; k < 3; ++k) {
+                    const int dk = std::abs(b[k] - int(r.bytes[i * 4 + size_t(k)]));
+                    worst = std::max(worst, dk);
+                    off += dk != 0;
+                }
+                CHECK(r.bytes[i * 4 + 3] == 255);
+            }
+            // Float pow/log2 on the GPU can round a value to the neighbouring byte, and a
+            // clipping colour can flip on a value that rounds to 0 or 255 on one side only.
+            CHECK(off <= w * h / 200);
+            if (!clipping) CHECK(worst <= 1);
+            size_t binDiff = 0;
+            for (size_t k = 0; k < 1024; ++k) binDiff += size_t(std::abs(int(hist[k]) - int(r.histogram[k])));
+            CHECK(binDiff <= size_t(w * h / 50));
+            if (ci == 0) {
+                // Legacy values pass through, so everything is exact.
+                CHECK(off == 0);
+                CHECK(binDiff == 0);
+            }
+            CHECK(hist[1024] == r.histogram[1024]);
+            CHECK(hist[1025] == r.histogram[1025]);
+        }
+}
+
+TEST_CASE("GPU blur matches the CPU on long lines") {
+    if (!gpuReady()) return;
+    // Long lines along both axes, with radii from a pixel to a sizeable part of the line, so
+    // windows clamp at both ends.
+    for (auto [w, h] : {std::pair{2100, 37}, std::pair{37, 2100}})
+        for (float sigma : {1.0f, 9.0f, 60.0f, 160.0f})
+            for (bool channel : {false, true}) {
+                CAPTURE(w);
+                CAPTURE(sigma);
+                CAPTURE(channel);
+                auto img = std::make_shared<Image>(w, h);
+                for (int y = 0; y < h; ++y)
+                    for (int x = 0; x < w; ++x) {
+                        float* p = img->pixel(size_t(y) * w + x);
+                        p[0] = float((x * 7 + y * 13) % 97) / 40.0f;  // rough, so every tap matters
+                        p[1] = 0.5f + 0.5f * std::sin(x * 0.01f + y * 0.3f);
+                        p[2] = float(x % 2), p[3] = 1.0f;
+                    }
+                const float sx = w > h ? sigma : 0.6f * sigma, sy = w > h ? 0.6f * sigma : sigma;
+                Value got;
+                Value want;
+                if (channel) {
+                    auto c = toChannel(Value(img));
+                    std::vector<float> data = c->data;
+                    imageops::blurChannel(data, w, h, sx, sy);
+                    auto wc = std::make_shared<Channel>(*c);
+                    wc->data = data;
+                    want = Value(ChannelPtr(wc));
+                    gpu::Scope scope;
+                    auto up = gpu::upload(*c);
+                    auto r = std::make_shared<GpuChannel>();
+                    r->w = w, r->h = h, r->tex = gpu::boxBlur(up->texture(), sx, sy);
+                    got = toCpu(Value(GpuChannelPtr(r)));
+                } else {
+                    auto cpu = std::make_shared<Image>(*img);
+                    imageops::blurImage(*cpu, sx, sy);
+                    want = Value(ImagePtr(cpu));
+                    gpu::Scope scope;
+                    auto up = gpu::upload(*img, gpu::Format::RGBA32F);
+                    auto r = std::make_shared<GpuImage>();
+                    r->w = w, r->h = h, r->tex = gpu::boxBlur(up->texture(), sx, sy);
+                    got = toCpu(Value(GpuImagePtr(r)));
+                }
+                CHECK(difference(want, got) < 2e-4f);
+            }
+}
+
+// File > Export with the GPU device on: a full-resolution render on the device, at Full
+// precision, writes what the CPU writes.
+TEST_CASE("GPU export matches the CPU export") {
+    if (!gpuReady()) return;
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "nodelab_gpu_export";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    Graph g;
+    Node* src = source(g);
+    Node* basic = g.addNode("color.basic");
+    basic->params[9] = 50.0f;
+    basic->params[10] = 60.0f;
+    Node* blur = g.addNode("filter.blur");
+    Node* out = g.addNode("io.output");
+    g.connect(src->id, 0, basic->id, 0);
+    g.connect(basic->id, 0, blur->id, 0);
+    g.connect(blur->id, 0, out->id, 0);
+    ExportSettings s;
+    s.depth = 16;
+    s.fileOutputs = false;
+    std::string err;
+    ImagePtr res[2];
+    for (int k = 0; k < 2; ++k) {
+        const std::string path = pathToU8(dir / (k ? "gpu.png" : "cpu.png"));
+        Exporter ex;
+        ex.start(g.toJson(), {ExportItem{"", path}}, 0, s, k == 1);
+        ex.wait();
+        for (const std::string& line : ex.takeLog()) CHECK_MESSAGE(line.find("CPU instead") == std::string::npos, line);
+        CHECK(ex.progress().failed == 0);
+        res[k] = loadImage(path, err);
+        REQUIRE(res[k]);
+    }
+    REQUIRE(res[0]->w == res[1]->w);
+    REQUIRE(res[0]->h == res[1]->h);
+    CHECK(difference(Value(res[0]), Value(res[1])) < 3e-4f);
+    fs::remove_all(dir);
 }

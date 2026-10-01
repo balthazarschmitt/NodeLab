@@ -26,13 +26,15 @@ using NodePath = std::vector<int>;  // group ids from the root, then the node id
 class Evaluator {
 public:
     // Like evaluateDisplay, but the node may sit inside (nested) groups.
-    ImagePtr evaluateDisplayPath(const Graph& g, const NodePath& path, EvalContext& ctx, int pin = 0);
+    ImagePtr evaluateDisplayPath(const Graph& g, const NodePath& path, EvalContext& ctx, int pin = 0,
+                                 Value* onGpu = nullptr);
     // Values arriving at a node's inputs (fallback params applied), evaluating upstream as needed.
     std::vector<Value> gatherInputs(const Graph& g, int nodeId, EvalContext& ctx);
 
     // Value a node should show in a preview: for sink nodes (no outputs, e.g. Output) the value
-    // arriving at input 0, otherwise output pin `pin`. Converted to an image.
-    ImagePtr evaluateDisplay(const Graph& g, int nodeId, EvalContext& ctx, int pin = 0);
+    // arriving at input 0, otherwise output pin `pin`. Converted to an image. With `onGpu`, a
+    // value on the GPU device is returned there instead, without a download (the image is null).
+    ImagePtr evaluateDisplay(const Graph& g, int nodeId, EvalContext& ctx, int pin = 0, Value* onGpu = nullptr);
     Value evaluateOutput(const Graph& g, int nodeId, int pin, EvalContext& ctx);
 
     // Cache levels. Each keeps its own results, so moving between them throws no work away: the
@@ -67,6 +69,10 @@ public:
     // One-off renders (exports): drop each node's result once every node reading it has run, so a
     // full-resolution render holds only the images still needed instead of one per node.
     bool releaseIntermediates = false;
+    // Benchmarks: wait for the device before and after each GPU node, so its time is its own.
+    // Without it, a node that reads results back (Normalize) also waits for all the work queued
+    // before it, and some drivers count that wait in its timer query.
+    bool syncTimings = false;
 
     int recomputeCount = 0;  // nodes actually evaluated (for tests / stats)
     // GPU compositing (EvalContext::gpu): nodes run on the GPU, and ones that failed there (out of
@@ -98,6 +104,7 @@ private:
     };
     // Whether nodes may run on the GPU at this level (whole images only; regions stay on the CPU).
     bool gpuLevel(const EvalContext& ctx) const;
+    void materializeShared(const Graph& g, const std::vector<const Link*>& from, std::vector<Value>& inputs);
     // Output `pin` of `up` on the GPU or CPU, from its alt cache.
     Value converted(Entry& up, int pin, bool toGpu, const EvalContext& ctx);
     size_t ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unordered_map<int, size_t>& pass);
@@ -148,6 +155,8 @@ public:
     };
     struct Result {
         std::vector<ImagePtr> images;    // one per submitted target (empty: only tiles)
+        // Targets still on the GPU device, not downloaded (their image is then null).
+        std::vector<Value> gpuImages;
         std::vector<std::string> errors;  // one per submitted target (empty = ok)
         double ms = 0;
         uint64_t generation = 0;

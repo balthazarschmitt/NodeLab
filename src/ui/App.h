@@ -25,6 +25,7 @@ public:
         std::string project;     // .nlproj to open at startup
         std::string screenshot;  // debug: save a frame once evaluation settles, then exit
         std::string script;      // debug: UI automation script (see UiScript.h)
+        bool gpu = false;        // debug: --device gpu, so automated runs use the GPU device too
     };
     int run(const RunOptions& opt);
 
@@ -41,8 +42,16 @@ private:
         ViewState view;
         bool sync = false;  // share zoom/pan with Original and Result
         std::string error;
-        ImagePtr shown;     // the node's output (scene values), for the eyedropper
-        ImagePtr display;   // shown through the view transform: what tex, histogram and clipping use
+        // The node's output (scene values). A result evaluated on the GPU device stays there
+        // (shownGpu) and shown is downloaded only when the eyedropper needs its pixels.
+        ImagePtr shown;
+        Value shownGpu;
+        bool hasShown() const { return shown || !shownGpu.empty(); }
+        int shownWidth() const {
+            int w = shown ? shown->w : 0, h = 0;
+            if (!shown) shownGpu.size(w, h);
+            return w;
+        }
         // Zoomed in: a sharper image of the visible part (AsyncEvaluator::Detail) over tex.
         ViewDetail detail;
         GLTexture detailTex;
@@ -67,7 +76,8 @@ private:
     static constexpr int kSlotLeft = 1, kSlotLeftDetail = 2, kSlotMask = 3;
     int detailSlot(const Viewer& v) const { return &v == &left_ ? kSlotLeftDetail : 101 + 2 * v.id; }
     static int mainSlot(const Viewer& v) { return 100 + 2 * v.id; }
-    void requestDisplay(int slot, const ImagePtr& scene, bool clipping, bool histogram, bool tint = false);
+    void requestDisplay(int slot, const ImagePtr& scene, bool clipping, bool histogram, bool tint = false,
+                        const Value& gpuScene = Value());
     void dropDisplay(int slot) { ++displaySeq_[slot]; }
     void applyDisplays();
     // Detail requests for the zoomed-in views, and the proxy size the views call for.

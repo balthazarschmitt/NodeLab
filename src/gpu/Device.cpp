@@ -40,6 +40,7 @@ gl::GLenum internalFormat(Format f) {
         case Format::RGBA16F: return gl::RGBA16F;
         case Format::RGBA32F: return gl::RGBA32F;
         case Format::R32F: return gl::R32F;
+        case Format::RGBA8: return gl::RGBA8;
     }
     return gl::RGBA32F;
 }
@@ -62,6 +63,7 @@ size_t bytesPerPixel(Format f) {
         case Format::RGBA16F: return 8;
         case Format::RGBA32F: return 16;
         case Format::R32F: return 4;
+        case Format::RGBA8: return 4;
     }
     return 16;
 }
@@ -71,6 +73,7 @@ const char* glslFormat(Format f) {
         case Format::RGBA16F: return "rgba16f";
         case Format::RGBA32F: return "rgba32f";
         case Format::R32F: return "r32f";
+        case Format::RGBA8: return "rgba8";
     }
     return "rgba32f";
 }
@@ -224,8 +227,8 @@ namespace {
 // then reads plain memory. glGetTexImage straight into client memory has the driver untile and
 // convert the texture on one core: 19 ms instead of 5 for a 1 MP RGBA16F preview on an iGPU
 // (reading a shader-written buffer is slower still, through uncached memory).
-void readTexture(const Texture& t, int channels, float* dst) {
-    const size_t bytes = size_t(t.w()) * t.h() * size_t(channels) * sizeof(float);
+void readTexture(const Texture& t, gl::GLenum format, gl::GLenum type, size_t pixelBytes, void* dst) {
+    const size_t bytes = size_t(t.w()) * t.h() * pixelBytes;
     if (!g_packBuffer) gl::GenBuffers(1, &g_packBuffer);
     gl::BindBuffer(gl::PIXEL_PACK_BUFFER, g_packBuffer);
     if (bytes > g_packBytes) {
@@ -234,7 +237,7 @@ void readTexture(const Texture& t, int channels, float* dst) {
     }
     gl::BindTexture(gl::TEXTURE_2D, t.id());
     gl::PixelStorei(gl::PACK_ALIGNMENT, 4);
-    gl::GetTexImage(gl::TEXTURE_2D, 0, channels == 4 ? gl::RGBA : gl::RED, gl::FLOAT, nullptr);
+    gl::GetTexImage(gl::TEXTURE_2D, 0, format, type, nullptr);
     const void* m = gl::MapBufferRange(gl::PIXEL_PACK_BUFFER, 0, gl::GLsizeiptr(bytes), gl::MAP_READ_BIT);
     if (m) std::memcpy(dst, m, bytes);
     gl::UnmapBuffer(gl::PIXEL_PACK_BUFFER);
@@ -248,7 +251,14 @@ ImagePtr download(const GpuImage& img) {
     Scope s;
     const TexturePtr& tex = img.texture();
     auto out = std::make_shared<Image>(img.w, img.h);
-    readTexture(*tex, 4, out->px.data());
+    readTexture(*tex, gl::RGBA, gl::FLOAT, 4 * sizeof(float), out->px.data());
+    return out;
+}
+
+std::vector<unsigned char> downloadBytes(const Texture& t) {
+    Scope s;
+    std::vector<unsigned char> out(size_t(t.w()) * t.h() * 4);
+    readTexture(t, gl::RGBA, gl::UNSIGNED_BYTE, 4, out.data());
     return out;
 }
 
@@ -256,13 +266,29 @@ ChannelPtr download(const GpuChannel& c) {
     Scope s;
     const TexturePtr& tex = c.texture();
     auto out = std::make_shared<Channel>(Channel::makeSized(c.w, c.h));
-    readTexture(*tex, 1, out->data.data());
+    readTexture(*tex, gl::RED, gl::FLOAT, sizeof(float), out->data.data());
     return out;
 }
 
 Value toGpu(const Value& v, bool half) {
     if (auto p = std::get_if<ImagePtr>(&v.v); p && *p) return Value(upload(**p, half ? Format::RGBA16F : Format::RGBA32F));
     if (auto p = std::get_if<ChannelPtr>(&v.v); p && *p && !(*p)->constant) return Value(upload(**p));
+    return v;
+}
+
+Value crop(const Value& v, int x0, int y0, int w, int h) {
+    Scope s;
+    auto copy = [&](const GpuValue& src, auto out) {
+        const TexturePtr& t = src.texture();
+        TexturePtr dst = allocate(w, h, t->format());
+        gl::CopyImageSubData(t->id(), gl::TEXTURE_2D, 0, x0, y0, 0, dst->id(), gl::TEXTURE_2D, 0, 0, 0, 0, w, h, 1);
+        checkError("crop");
+        out->w = w, out->h = h, out->tex = std::move(dst);
+        return out;
+    };
+    if (auto p = std::get_if<GpuImagePtr>(&v.v); p && *p) return Value(GpuImagePtr(copy(**p, std::make_shared<GpuImage>())));
+    if (auto p = std::get_if<GpuChannelPtr>(&v.v); p && *p)
+        return Value(GpuChannelPtr(copy(**p, std::make_shared<GpuChannel>())));
     return v;
 }
 

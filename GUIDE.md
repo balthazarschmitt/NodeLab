@@ -71,8 +71,11 @@ marked **GPU**.
     time is counted in the node it was folded into.
   - **Precision:** Auto keeps images in half floats, which is faster and plenty for a preview;
     Full matches the CPU exactly to within float rounding.
-  - Zoomed-in detail and exports use the CPU. If a node fails on the GPU (for example when the
-    card runs out of memory) it runs on the CPU instead, and the status bar says so.
+  - The viewers also use the GPU: the view transform, clipping warnings and histogram are
+    computed on the card.
+  - Zoomed-in detail and File > Export use the GPU too; exports always use Full precision. If a
+    node fails on the GPU (for example when the card runs out of memory) it runs on the CPU
+    instead, and the status bar (or the export log) says so.
 
 ### Viewing Intermediate Results
 

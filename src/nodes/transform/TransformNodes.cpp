@@ -216,30 +216,39 @@ public:
 
     bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
     void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        // As evaluateRegion: each output pixel's place in the straightened input, then the box. A
+        // region (ctx.roi) is a window of the output reading a window of the input.
         int w, h;
         in[0].size(w, h);
+        int rx = 0, ry = 0, ix = 0, iy = 0;  // output window origin, input buffer origin
+        if (ctx.roi) {
+            w = ctx.roi->inputW, h = ctx.roi->inputH;
+            rx = ctx.roi->rect.x, ry = ctx.roi->rect.y;
+            ix = ctx.roi->input.x, iy = ctx.roi->input.y;
+        }
         int x0, y0, x1, y1;
         box(w, h, x0, y0, x1, y1);
         const bool resize = paramB(crop::ResizeImage);
         float ca = 1, sa = 0, cover = 1;
         const bool rotate = paramF(crop::Angle) != 0.0f;
         if (rotate) straighten(w, h, ca, sa, cover);
-        // As evaluateRegion: each output pixel's place in the straightened input, then the box.
         gpu::PointOp op = gatherOp(in[0], R"(
-    ivec2 q = p + ivec2(P[4] != 0.0 ? vec2(P[0], P[1]) : vec2(0.0));
+    ivec2 q = p + ivec2(P[4], P[5]);
     if (q.x < int(P[0]) || q.x >= int(P[2]) || q.y < int(P[1]) || q.y >= int(P[3])) {
         out0 = vec4(0.0);
-    } else if (P[5] != 0.0) {
-        vec2 c = vec2(size0) * 0.5;
-        vec2 d = (vec2(q) + 0.5 - c) / P[8];
-        out0 = bilinear0(vec2(d.x * P[6] - d.y * P[7], d.x * P[7] + d.y * P[6]) + c, true);
+    } else if (P[6] != 0.0) {
+        vec2 c = vec2(P[10], P[11]);
+        vec2 d = (vec2(q) + 0.5 - c) / P[9];
+        out0 = bilinear0(vec2(d.x * P[7] - d.y * P[8], d.x * P[8] + d.y * P[7]) + c - vec2(P[12], P[13]), true);
     } else {
-        out0 = fetch0(q);
+        out0 = fetch0(q - ivec2(P[12], P[13]));
     }
 )",
-                                   {float(x0), float(y0), float(x1), float(y1), resize ? 1.0f : 0.0f, rotate ? 1.0f : 0.0f, ca, sa,
-                                    cover});
-        if (resize) op.w = x1 - x0, op.h = y1 - y0;
+                                   {float(x0), float(y0), float(x1), float(y1), float(rx + (resize ? x0 : 0)),
+                                    float(ry + (resize ? y0 : 0)), rotate ? 1.0f : 0.0f, ca, sa, cover, w * 0.5f, h * 0.5f,
+                                    float(ix), float(iy)});
+        if (ctx.roi) op.w = ctx.roi->rect.w, op.h = ctx.roi->rect.h;
+        else if (resize) op.w = x1 - x0, op.h = y1 - y0;
         gpu::runPoint(ctx, *this, op, in, out);
     }
 

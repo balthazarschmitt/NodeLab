@@ -12,6 +12,7 @@
 
 #include "core/ColorManagement.h"
 #include "core/Image.h"
+#include "core/Value.h"
 #include "ui/ImageView.h"
 
 class DisplayWorker {
@@ -20,6 +21,12 @@ public:
         int slot = 0;       // the caller's: which texture this is for
         uint64_t seq = 0;   // the caller's, copied to the result (to drop superseded ones)
         ImagePtr scene;     // the node's output
+        // The output while it is still on the GPU device. scene may then be null: a result left
+        // on the device isn't downloaded unless the CPU needs it (a tint, or a device error).
+        Value gpuScene;
+        // Convert on the GPU device (gpu::display): from gpuScene, else from an upload of
+        // scene. Device errors fall back to the CPU.
+        bool gpu = false;
         ColorManagement cm;
         bool clipping = false;
         bool histogram = false;
@@ -29,7 +36,7 @@ public:
     struct Result {
         int slot = 0;
         uint64_t seq = 0;
-        ImagePtr scene, display;
+        ImagePtr scene;
         std::vector<unsigned char> bytes;
         int w = 0, h = 0;
         Histogram histogram;  // valid when requested
@@ -45,9 +52,14 @@ public:
     std::vector<Result> poll();
     // Requests queued, being prepared or not yet polled.
     bool busy() const;
+    // A result left on the GPU device, as an image (null if the device fails). Waits for the
+    // device, which an evaluation may hold.
+    static ImagePtr download(const Value& v);
 
 private:
     void run();
+    // Fills out's bytes and histogram on the GPU device; false to use the CPU instead.
+    static bool gpuDisplay(const Request& r, Result& out);
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;

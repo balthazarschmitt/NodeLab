@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <optional>
 
 #include "core/ColorMath.h"
 #include "core/Curve.h"
@@ -185,10 +186,15 @@ public:
             lum.body = "    out0 = ch0(p);";
             gpu::runPoint(ctx, *this, lum, in, c);
         }
-        const GpuChannelPtr gc = std::get<GpuChannelPtr>(c[0].v);
-        size_t klo, khi;
-        ranks(size_t(op.w) * op.h, klo, khi);
-        const std::vector<float> v = gpu::select(*gc->texture(), {klo, khi});
+        std::vector<float> v;
+        if (ctx.roi && ctx.previewStats && ctx.previewStats->size() == 2) {
+            v = *ctx.previewStats;  // a region: the whole image's range, as on the CPU
+        } else {
+            const GpuChannelPtr gc = std::get<GpuChannelPtr>(c[0].v);
+            size_t klo, khi;
+            ranks(size_t(op.w) * op.h, klo, khi);
+            v = gpu::select(*gc->texture(), {klo, khi});
+        }
         if (ctx.statsOut) *ctx.statsOut = {v[0], v[1]};
         op.params = {v[0], std::max(v[1] - v[0], 1e-9f)};
         op.body = "    out0 = (ch0(p) - P[0]) / P[1];";
@@ -470,7 +476,12 @@ std::vector<std::string> writeFileOutputs(const Graph& g, Evaluator& ev, EvalCon
         p.replace_extension(formatExtension(FileFormat(std::clamp(n->paramI(1), 0, 3))));
         path = pathToU8(p);
         try {
-            ImagePtr img = ev.evaluateDisplay(g, id, ctx);
+            ImagePtr img;
+            {
+                std::optional<gpu::Scope> device;
+                if (ctx.gpu) device.emplace();
+                img = ev.evaluateDisplay(g, id, ctx);
+            }
             std::string err;
             if (!img) report.push_back("File Output: nothing connected (" + path + ")");
             else if (!saveRendered(path, img, ctx.colorManagement,

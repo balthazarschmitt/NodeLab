@@ -103,6 +103,18 @@ void Histogram::compute(const Image& img) {
             if (br == 255 || bg == 255 || bb == 255) clipHigh = true;
             if (br == 0 && bg == 0 && bb == 0) clipLow = true;
         }
+    scalePeak();
+}
+
+void Histogram::setCounts(const uint32_t* counts) {
+    for (int i = 0; i < 256; ++i)
+        r[i] = float(counts[i]), g[i] = float(counts[256 + i]), b[i] = float(counts[512 + i]), l[i] = float(counts[768 + i]);
+    clipHigh = counts[1024] != 0, clipLow = counts[1025] != 0;
+    valid = true;
+    scalePeak();
+}
+
+void Histogram::scalePeak() {
     // Scale to the tallest inner bin: a spike at pure black or white would flatten the rest.
     peak = 1.0f;
     for (int i = 1; i < 255; ++i) peak = std::max({peak, r[i], g[i], b[i], l[i]});

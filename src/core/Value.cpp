@@ -123,7 +123,13 @@ ImagePtr cropImage(const Image& src, int x0, int y0, int w, int h) {
 Value cropValue(const Value& v, int x0, int y0, int w, int h) {
     int vw, vh;
     if (!v.size(vw, vh) || (x0 == 0 && y0 == 0 && w == vw && h == vh)) return v;
-    if (v.onGpu()) return cropValue(toCpu(v), x0, y0, w, h);
+    if (v.onGpu()) {
+        try {
+            return gpu::crop(v, x0, y0, w, h);
+        } catch (const gpu::Error&) {
+            return cropValue(toCpu(v), x0, y0, w, h);
+        }
+    }
     if (auto p = std::get_if<ImagePtr>(&v.v)) return Value(cropImage(**p, x0, y0, w, h));
     const Channel& c = *std::get<ChannelPtr>(v.v);
     auto out = std::make_shared<Channel>(Channel::makeSized(w, h));

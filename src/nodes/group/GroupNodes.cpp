@@ -121,10 +121,11 @@ void GroupNode::evaluate(EvalContext& ctx, const std::vector<Value>& in, std::ve
         if (const Link* l = inner_->inputLink(outNode, int(k))) out[k] = ev.evaluateOutput(*inner_, l->fromNode, l->fromPin, ctx);
 }
 
-ImagePtr GroupNode::previewInner(EvalContext& ctx, const std::vector<Value>& inputs, const std::vector<int>& path, int pin) {
+ImagePtr GroupNode::previewInner(EvalContext& ctx, const std::vector<Value>& inputs, const std::vector<int>& path, int pin,
+                                 Value* onGpu) {
     injectInputs(inputs);
     Evaluator ev;
-    return ev.evaluateDisplayPath(*inner_, path, ctx, pin);
+    return ev.evaluateDisplayPath(*inner_, path, ctx, pin, onGpu);
 }
 
 // ---------------------------------------------------------------- interface editing

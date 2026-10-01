@@ -70,8 +70,10 @@ class Exporter {
 public:
     ~Exporter();
 
-    // inputNode: the Image Input fed each item's source (batch), or 0.
-    void start(const nlohmann::json& graph, std::vector<ExportItem> items, int inputNode, const ExportSettings& s);
+    // inputNode: the Image Input fed each item's source (batch), or 0. gpu: run GPU nodes on the
+    // device (at Full precision: an export is not a preview), as the viewers do.
+    void start(const nlohmann::json& graph, std::vector<ExportItem> items, int inputNode, const ExportSettings& s,
+               bool gpu = false);
     void cancel() { cancel_ = true; }
     bool busy() const { return busy_; }
     // Blocks until the job ends (tests and the command line).
@@ -88,7 +90,7 @@ public:
     std::vector<std::string> takeLog();
 
 private:
-    void run(nlohmann::json graph, std::vector<ExportItem> items, int inputNode, ExportSettings s);
+    void run(nlohmann::json graph, std::vector<ExportItem> items, int inputNode, ExportSettings s, bool gpu);
     void setStage(const std::string& s);
     void log(const std::string& line);
 

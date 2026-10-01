@@ -9,6 +9,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "core/Value.h"
 
@@ -41,8 +42,9 @@ public:
 };
 
 // How values are stored, like Blender's compositor Precision: Half (Auto) halves the memory
-// traffic, which is what per-pixel nodes are limited by; Full matches the CPU's floats.
-enum class Format { RGBA16F, RGBA32F, R32F };
+// traffic, which is what per-pixel nodes are limited by; Full matches the CPU's floats. RGBA8
+// holds display bytes (gpu::display), never node values.
+enum class Format { RGBA16F, RGBA32F, R32F, RGBA8 };
 size_t bytesPerPixel(Format f);
 // The GLSL image format qualifier (rgba16f...).
 const char* glslFormat(Format f);
@@ -73,12 +75,17 @@ GpuImagePtr upload(const Image& img, Format f);
 GpuChannelPtr upload(const Channel& c);  // sized channels only
 ImagePtr download(const GpuImage& img);
 ChannelPtr download(const GpuChannel& c);
+// An RGBA8 texture's bytes, row by row.
+std::vector<unsigned char> downloadBytes(const Texture& t);
 // A compute program compiled from `source` (a full shader), cached by its text. Throws with the
 // compiler's log on errors.
 unsigned program(const std::string& source);
 // The value on the device: images and sized channels uploaded (images as RGBA16F when half,
 // channels always R32F), numbers and constant channels unchanged.
 Value toGpu(const Value& v, bool half);
+// The w x h block at (x0, y0) of a GPU image or channel, which must lie inside it, copied on the
+// device (regions, see cropValue).
+Value crop(const Value& v, int x0, int y0, int w, int h);
 // Bytes a GPU value's texture holds (0 for CPU values).
 size_t valueBytes(const Value& v);
 // Waits for the device to finish the work issued so far (glFinish).

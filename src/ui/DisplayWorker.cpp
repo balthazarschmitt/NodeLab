@@ -2,6 +2,9 @@
 
 #include <algorithm>
 
+#include "gpu/Device.h"
+#include "gpu/Display.h"
+
 DisplayWorker::DisplayWorker() : thread_([this] { run(); }) {}
 
 DisplayWorker::~DisplayWorker() {
@@ -32,6 +35,32 @@ bool DisplayWorker::busy() const {
     return !queue_.empty() || working_ > 0 || !done_.empty();
 }
 
+bool DisplayWorker::gpuDisplay(const Request& r, Result& out) {
+    if (!gpu::available()) return false;
+    try {
+        gpu::Scope scope;
+        gpu::DisplayResult d = gpu::display(r.gpuScene.empty() ? Value(r.scene) : r.gpuScene, r.cm, r.clipping, r.histogram);
+        if (d.w != out.w || d.h != out.h) return false;
+        out.bytes = std::move(d.bytes);
+        if (r.histogram) out.histogram.setCounts(d.histogram.data());
+        return true;
+    } catch (const gpu::Error&) {
+        return false;
+    }
+}
+
+ImagePtr DisplayWorker::download(const Value& v) {
+    try {
+        gpu::Scope scope;
+        const Value cpu = toCpu(v);
+        int w = 0, h = 0;
+        cpu.size(w, h);
+        return toImage(cpu, w, h);
+    } catch (const gpu::Error&) {
+        return nullptr;
+    }
+}
+
 void DisplayWorker::run() {
     for (;;) {
         Request r;
@@ -47,15 +76,17 @@ void DisplayWorker::run() {
         out.slot = r.slot;
         out.seq = r.seq;
         out.scene = r.scene;
-        if (r.scene && !r.scene->empty()) {
-            out.w = r.scene->w;
-            out.h = r.scene->h;
-            if (r.tint) {
+        if (!r.scene && !r.gpuScene.empty()) r.gpuScene.size(out.w, out.h);
+        else if (r.scene) out.w = r.scene->w, out.h = r.scene->h;
+        const bool onDevice = out.w > 0 && out.h > 0 && !r.tint && r.gpu && gpuDisplay(r, out);
+        if (!onDevice && out.w > 0 && out.h > 0) {
+            if (!r.scene) r.scene = download(r.gpuScene);
+            if (r.scene && r.tint) {
                 out.bytes = tintBytes(*r.scene, r.tintColor[0], r.tintColor[1], r.tintColor[2], r.tintColor[3]);
-            } else {
-                out.display = colormgmt::displayImage(r.scene, r.cm);
-                out.bytes = displayBytes(*out.display, r.clipping);
-                if (r.histogram) out.histogram.compute(*out.display);
+            } else if (r.scene) {
+                const ImagePtr display = colormgmt::displayImage(r.scene, r.cm);
+                out.bytes = displayBytes(*display, r.clipping);
+                if (r.histogram) out.histogram.compute(*display);
             }
         }
         std::lock_guard lock(mutex_);

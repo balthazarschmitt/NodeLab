@@ -207,9 +207,9 @@ int App::run(const RunOptions& opt) {
     }
 
     // The GPU device: a hidden context sharing nothing with the UI's. Test runs stay on the CPU
-    // so their screenshots don't depend on the machine's GPU.
+    // so their screenshots don't depend on the machine's GPU, unless given --device gpu.
     if (automated_) {
-        gpuDevice_ = false;
+        gpuDevice_ = opt.gpu && gpu::init(&gpuError_);
     } else {
         loadPreferences();
         if (!gpu::init(&gpuError_)) gpuError_ = "GPU unavailable: " + gpuError_;
@@ -610,6 +610,7 @@ void App::drawViewerWindow(Viewer& v, bool isMain) {
         const char* emptyMsg = !v.error.empty() ? v.error.c_str()
                                : shown.empty() ? "Add an Output node (right-click the canvas)"
                                                : "No output yet - connect this node's inputs";
+        if (eyedropper().active() && !v.shown && !v.shownGpu.empty()) v.shown = DisplayWorker::download(v.shownGpu);
         PickRequest pick{v.shown.get()};
         overlay_.set(ov, maskWanted_ && maskTex_.valid() ? &maskTex_ : nullptr);
         const ImVec2 viewMin = ImGui::GetCursorScreenPos();
@@ -1242,7 +1243,7 @@ void App::startExport(std::vector<ExportItem> items, int inputNode) {
     exportSettings_.suffix = batchSuffix_;
     exportLog_.clear();
     // The root graph, whatever group is open: exports always render the whole project.
-    exporter_.start(graph_.toJson(), std::move(items), inputNode, exportSettings_);
+    exporter_.start(graph_.toJson(), std::move(items), inputNode, exportSettings_, gpuDevice_ && gpu::available());
 }
 
 void App::pollExport() {
@@ -1503,10 +1504,10 @@ bool App::sameDetails(const std::vector<AsyncEvaluator::Detail>& a, const std::v
 
 std::vector<AsyncEvaluator::Detail> App::wantedDetails() {
     std::vector<AsyncEvaluator::Detail> out;
-    auto want = [&](const Viewer& v, int tag, int node, int pin, const ImagePtr& shown) {
+    auto want = [&](const Viewer& v, int tag, int node, int pin, int shownW) {
         // Only views zoomed in past the preview's pixels; the evaluator decides whether the full
         // resolution has more to show.
-        if (!node || !shown || shown->w <= 0 || v.info.imageW <= shown->w * 1.15f) return;
+        if (!node || shownW <= 0 || v.info.imageW <= shownW * 1.15f) return;
         AsyncEvaluator::Detail d;
         d.tag = tag;
         d.node = node;
@@ -1515,12 +1516,12 @@ std::vector<AsyncEvaluator::Detail> App::wantedDetails() {
         d.screenW = v.info.imageW;
         out.push_back(d);
     };
-    if (showOriginal_) want(left_, -1, leftNode_, 0, leftShown_);
+    if (showOriginal_) want(left_, -1, leftNode_, 0, leftShown_ ? leftShown_->w : 0);
     // Top-level nodes only: regions are evaluated in the root graph.
     for (size_t i = 0; i < std::min({viewers_.size(), submittedViewers_, submittedTargets_.size()}); ++i)
         if (submittedTargets_[i].size() == 1)
             want(*viewers_[i], viewers_[i]->id, submittedTargets_[i][0], i < submittedPins_.size() ? submittedPins_[i] : 0,
-                 viewers_[i]->shown);
+                 viewers_[i]->shownWidth());
     return out;
 }
 
@@ -1534,7 +1535,8 @@ int App::wantedProxyEdge() const {
     return std::clamp(int(std::ceil(edge / 256.0f)) * 256, kMinProxyEdge, kMaxProxyEdge);
 }
 
-void App::requestDisplay(int slot, const ImagePtr& scene, bool clipping, bool histogram, bool tint) {
+void App::requestDisplay(int slot, const ImagePtr& scene, bool clipping, bool histogram, bool tint,
+                         const Value& gpuScene) {
     DisplayWorker::Request r;
     r.slot = slot;
     r.seq = ++displaySeq_[slot];
@@ -1543,6 +1545,8 @@ void App::requestDisplay(int slot, const ImagePtr& scene, bool clipping, bool hi
     r.clipping = clipping;
     r.histogram = histogram;
     r.tint = tint;
+    r.gpu = gpuDevice_ && gpu::available();
+    r.gpuScene = gpuScene;
     display_.submit(std::move(r));
 }
 
@@ -1562,12 +1566,11 @@ void App::dropDetail(Viewer& v) {
 
 void App::refreshDisplay(Viewer& v, bool main) {
     // The histogram follows the main Result.
-    if (v.shown) {
-        requestDisplay(mainSlot(v), v.shown, main && clipping_, main);
+    if (v.hasShown()) {
+        requestDisplay(mainSlot(v), v.shown, main && clipping_, main, false, v.shownGpu);
         return;
     }
     dropDisplay(mainSlot(v));
-    v.display.reset();
     v.tex.reset();
     if (main) histogram_.valid = false;
 }
@@ -1590,7 +1593,6 @@ void App::applyDisplays() {
         for (size_t i = 0; i < viewers_.size(); ++i) {
             Viewer& v = *viewers_[i];
             if (r.slot == mainSlot(v)) {
-                v.display = r.display;
                 upload(v.tex);
                 if (i == 0) histogram_ = r.histogram;
             } else if (r.slot == detailSlot(v)) {
@@ -1660,13 +1662,18 @@ void App::updateTextures() {
             v.error = res->errors[i];
             // A changed image makes the detail stale; its new one follows (unchanged: the
             // evaluation was only for the view, so the old detail stays until replaced).
-            if (res->images[i] != v.shown) dropDetail(v);
+            const Value gpuImage = i < res->gpuImages.size() ? res->gpuImages[i] : Value();
+            if (res->images[i] != v.shown || gpuImage.v != v.shownGpu.v) dropDetail(v);
             v.shown = res->images[i];
+            v.shownGpu = gpuImage;
             refreshDisplay(v, i == 0);
         }
         // A mask target follows the viewers (see drawFrame).
-        if (maskWanted_ && res->images.size() > submittedViewers_ && res->images[submittedViewers_])
-            requestDisplay(kSlotMask, res->images[submittedViewers_], false, false, true);
+        if (maskWanted_ && res->images.size() > submittedViewers_) {
+            const size_t m = submittedViewers_;
+            const Value gpuMask = m < res->gpuImages.size() ? res->gpuImages[m] : Value();
+            if (res->images[m] || !gpuMask.empty()) requestDisplay(kSlotMask, res->images[m], false, false, true, gpuMask);
+        }
     }
     if (res && res->tilesDone) {
         for (const AsyncEvaluator::Tile& t : res->tiles) {

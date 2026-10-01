@@ -112,8 +112,10 @@ static int renderHeadless(const std::string& project, const std::string& outPath
 // NodeLab.exe --benchmark project.nlproj [--full] [--runs N] : evaluates the Output node from an
 // empty cache N times (after one warm-up run that also loads the images) and prints per-node and
 // total median milliseconds. Proxy resolution unless --full. --device gpu runs GPU nodes there
-// (marked "gpu"), with --precision full or half (the default, like Precision: Auto).
-static int benchmarkHeadless(const std::string& project, bool full, int runs, const HeadlessDevice& dev) {
+// (marked "gpu"), with --precision full or half (the default, like Precision: Auto). --sync waits
+// for the device around each GPU node and runs fused chains unfused, so each node's time is its
+// own (the total is then slower than a normal run).
+static int benchmarkHeadless(const std::string& project, bool full, int runs, bool sync, const HeadlessDevice& dev) {
     Graph g;
     nlohmann::json ui;
     std::string err;
@@ -140,6 +142,7 @@ static int benchmarkHeadless(const std::string& project, bool full, int runs, co
     try {
         for (int r = 0; r <= runs; ++r) {
             Evaluator ev;
+            ev.syncTimings = sync;
             const auto t0 = std::chrono::steady_clock::now();
             ev.evaluateDisplay(g, outId, ctx);
             const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -268,15 +271,16 @@ int main(int argc, char** argv) {
 
     if (argc >= 3 && std::string(argv[1]) == "--benchmark") {
         attachParentConsole();
-        bool full = false;
+        bool full = false, sync = false;
         int runs = 5;
         for (int i = 3; i < argc; ++i) {
             std::string a = argv[i];
             if (a == "--full") full = true;
+            else if (a == "--sync") sync = true;
             else if (a == "--runs" && i + 1 < argc) runs = std::max(1, std::atoi(argv[++i]));
         }
         HeadlessDevice dev(argc, argv, true);
-        return benchmarkHeadless(argv[2], full, runs, dev);
+        return benchmarkHeadless(argv[2], full, runs, sync, dev);
     }
 
     // NodeLab.exe --gpu-info : the GPU device NodeLab would use, or why there is none.
@@ -299,6 +303,7 @@ int main(int argc, char** argv) {
         std::string a = argv[i];
         if (a == "--screenshot" && i + 1 < argc) opt.screenshot = argv[++i];
         else if (a == "--script" && i + 1 < argc) opt.script = argv[++i];
+        else if (a == "--device" && i + 1 < argc) opt.gpu = std::string(argv[++i]) == "gpu";
         else opt.project = a;
     }
     App app;

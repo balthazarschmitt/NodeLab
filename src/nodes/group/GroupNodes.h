@@ -47,7 +47,8 @@ public:
     std::string signatureExtra() const override;
 
     // Preview a node inside the group (path relative to the inner graph), given this group's inputs.
-    ImagePtr previewInner(EvalContext& ctx, const std::vector<Value>& inputs, const std::vector<int>& path, int pin = 0);
+    ImagePtr previewInner(EvalContext& ctx, const std::vector<Value>& inputs, const std::vector<int>& path, int pin = 0,
+                          Value* onGpu = nullptr);
 
     Graph& inner() { return *inner_; }
     const Graph& inner() const { return *inner_; }

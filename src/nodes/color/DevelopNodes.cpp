@@ -197,23 +197,25 @@ Value channelValue(gpu::TexturePtr t) {
 // guidedSmooth (fast = false) or fastGuidedSmooth of the w x h channel I on the device, with the
 // same passes: means of I and I^2 (over s x s cells for the fast one), blurred together as one
 // RGBA texture; the coefficients a, b, blurred; then a * I + b (a, b sampled bilinearly from the
-// cells). GPU runs have no region, so the cell grid starts at the buffer's origin.
-Value guidedGpu(EvalContext& ctx, const Value& I, int w, int h, float sigma, float eps, bool fast) {
+// cells). (ox, oy): where the buffer sits in the full image; the cells are anchored to it, as in
+// fastGuidedSmooth, so a region gets the whole image's coefficients.
+Value guidedGpu(EvalContext& ctx, const Value& I, int w, int h, float sigma, float eps, bool fast, int ox, int oy) {
     const int s = fast ? guidedScale(sigma) : 1;
+    const int cx0 = ox / s, cy0 = oy / s;
     gpu::PointOp m;
-    m.w = (w + s - 1) / s, m.h = (h + s - 1) / s;
+    m.w = (ox + w + s - 1) / s - cx0, m.h = (oy + h + s - 1) / s - cy0;
     m.full = true;
     if (s == 1) {
         m.body = "    float v = ch0(p);\n    out0 = vec4(v, v * v, 0.0, 1.0);\n";
     } else {
         m.gather = {0};
-        m.params = {float(s)};
+        m.params = {float(s), float(ox), float(oy), float(cx0), float(cy0)};
         m.body = R"(
-    int S = int(P[0]);
+    int S = int(P[0]), OX = int(P[1]), OY = int(P[2]), CX = int(P[3]), CY = int(P[4]);
     float sum = 0.0, sum2 = 0.0;
     int cnt = 0;
-    for (int y = p.y * S; y < min((p.y + 1) * S, size0.y); ++y)
-        for (int x = p.x * S; x < min((p.x + 1) * S, size0.x); ++x) {
+    for (int y = max((p.y + CY) * S - OY, 0); y < min((p.y + CY + 1) * S - OY, size0.y); ++y)
+        for (int x = max((p.x + CX) * S - OX, 0); x < min((p.x + CX + 1) * S - OX, size0.x); ++x) {
             float v = fetchCh0(ivec2(x, y));
             sum += v, sum2 += v * v, ++cnt;
         }
@@ -239,9 +241,9 @@ Value guidedGpu(EvalContext& ctx, const Value& I, int w, int h, float sigma, flo
         q.body = "    vec4 c = img1(p);\n    out0 = c.r * ch0(p) + c.g;\n";
     } else {
         q.gather = {1};
-        q.params = {1.0f / s};
+        q.params = {1.0f / s, float(ox), float(oy), float(cx0), float(cy0)};
         q.body = R"(
-    precise vec2 l = (vec2(p) + 0.5) * P[0];
+    precise vec2 l = (vec2(p) + vec2(P[1], P[2]) + 0.5) * P[0] - vec2(P[3], P[4]);
     vec4 c = bilinear1(l, false);
     out0 = c.r * ch0(p) + c.g;
 )";
@@ -502,7 +504,11 @@ public:
             const float sg = std::max(longEdge * 0.01f, 1.0f);
             const Value dark = channelValue(gpu::boxBlur(textureOf(darkRaw), sg, sg));
             // Airlight: the average colour of the haziest 0.1% (pixels at or above the dark
-            // channel's value at that rank), as dehazeImage.
+            // channel's value at that rank), as dehazeImage. A region reuses the whole image's.
+            float A[3];
+            if (ctx.roi && ctx.previewStats && ctx.previewStats->size() == 3) {
+                for (int k = 0; k < 3; ++k) A[k] = (*ctx.previewStats)[size_t(k)];
+            } else {
             const size_t n = size_t(w) * h, top = std::max<size_t>(1, n / 1000);
             const float thresh = gpu::select(*textureOf(dark), {n - top})[0];
             gpu::PointOp hazy;
@@ -517,8 +523,8 @@ public:
 )";
             const std::array<float, 4> sum = sumGpu(ctx, hazy, {cur, dark}, w, h);
             const float minAir = lin ? 0.1f : 0.3f;
-            float A[3];
             for (int k = 0; k < 3; ++k) A[k] = std::max(sum[size_t(k)] / std::max(sum[3], 1.0f), minAir);
+            }
             if (ctx.statsOut) *ctx.statsOut = {A[0], A[1], A[2]};
             P[20] = A[0], P[21] = A[1], P[22] = A[2], P[23] = std::max({A[0], A[1], A[2]});
             cur = pass("    vec4 c = img0(p);\n    out0 = vec4(basicDehaze(c.rgb, ch1(p)), c.a);\n", {cur, dark}, true);
@@ -528,7 +534,7 @@ public:
         Value mask;
         if (lin && (highlights != 0.0f || shadows != 0.0f)) {
             const Value ev = pass("    out0 = evOf(luminance(img0(p).rgb));\n", {cur}, false);
-            mask = guidedGpu(ctx, ev, w, h, std::max(longEdge * 0.02f, 1.0f), 0.5f, true);
+            mask = guidedGpu(ctx, ev, w, h, std::max(longEdge * 0.02f, 1.0f), 0.5f, true, fr.x0, fr.y0);
         }
         cur = pass("    vec4 c = img0(p);\n    out0 = vec4(basicTone(c.rgb, has1, ch1(p)), c.a);\n", {cur, mask}, true);
 
@@ -540,7 +546,7 @@ public:
                        {cur}, false);
             if (clarity != 0.0f) {
                 const float sigma = std::max(longEdge * 0.012f, 1.0f);
-                coarse = guidedGpu(ctx, lum, w, h, sigma, lin ? 0.1f : 0.004f, lin);
+                coarse = guidedGpu(ctx, lum, w, h, sigma, lin ? 0.1f : 0.004f, lin, fr.x0, fr.y0);
             }
             if (texture != 0.0f) {
                 const float sg = std::max(longEdge * 0.0025f, 0.7f);

@@ -73,7 +73,7 @@ std::string Evaluator::baseKey(const Node& n, const EvalContext& ctx) const {
 }
 
 bool Evaluator::gpuLevel(const EvalContext& ctx) const {
-    return ctx.gpu && level_ != Region && !ctx.roi && gpu::available();
+    return ctx.gpu && gpu::available();
 }
 
 Value Evaluator::converted(Entry& up, int pin, bool toGpu, const EvalContext& ctx) {
@@ -127,8 +127,14 @@ void Evaluator::run(const Graph& g, Node& n, EvalContext& ctx, std::vector<Value
                     // No waiting for the device after each node: it works through the queue while
                     // the CPU prepares the next nodes (20% faster on the infrared preset), and a
                     // timer query measures the node's own device time.
+                    if (syncTimings) {
+                        for (const Value& v : inputs) gpu::materialize(v);  // fused inputs count upstream
+                        gpu::finish();
+                    }
                     auto timer = std::make_shared<gpu::Timer>();
                     n.evaluateGpu(ctx, inputs, outs);
+                    if (syncTimings)
+                        for (const Value& v : outs) gpu::materialize(v);
                     timer->stop();
                     e.timer = std::move(timer);
                     ++gpuRuns;
@@ -160,6 +166,23 @@ void Evaluator::run(const Graph& g, Node& n, EvalContext& ctx, std::vector<Value
     e.alt.clear();
     e.gpu = gpu && !n.muted;
     e.stats = std::move(stats);
+}
+
+void Evaluator::materializeShared(const Graph& g, const std::vector<const Link*>& from, std::vector<Value>& inputs) {
+    // A pending point op result (gpu::runPoint) is fused into the GPU node reading it, unless
+    // other wires read it too: each would compute it again, so it runs once now instead.
+    for (size_t i = 0; i < inputs.size(); ++i) {
+        if (!from[i] || !gpu::pending(inputs[i])) continue;
+        int wires = 0;
+        for (const Link& l : g.links()) wires += l.fromNode == from[i]->fromNode;
+        if (wires < 2) continue;
+        try {
+            gpu::Scope scope;
+            gpu::materialize(inputs[i]);
+        } catch (const gpu::Error&) {
+            // run() falls back to the CPU, which computes it from there.
+        }
+    }
 }
 
 size_t Evaluator::ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unordered_map<int, size_t>& pass) {
@@ -209,22 +232,7 @@ size_t Evaluator::ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unor
                 // Couldn't upload (out of GPU memory): run(), finding CPU inputs, falls back.
             }
         }
-        if (gpu) {
-            // A pending point op result (gpu::runPoint) is fused into the GPU node reading it, unless
-            // other wires read it too: each would compute it again, so it runs once now instead.
-            for (size_t i = 0; i < inputs.size(); ++i) {
-                if (!from[i] || !gpu::pending(inputs[i])) continue;
-                int wires = 0;
-                for (const Link& l : g.links()) wires += l.fromNode == from[i]->fromNode;
-                if (wires < 2) continue;
-                try {
-                    gpu::Scope scope;
-                    gpu::materialize(inputs[i]);
-                } catch (const gpu::Error&) {
-                    // run() falls back to the CPU, which computes it from there.
-                }
-            }
-        }
+        if (gpu) materializeShared(g, from, inputs);
         run(g, *n, ctx, inputs, e, sig, gpu);
     }
     if (releaseIntermediates) {
@@ -266,7 +274,7 @@ Value Evaluator::evaluateOutput(const Graph& g, int nodeId, int pin, EvalContext
     return pin < int(outs.size()) ? outs[pin] : Value();
 }
 
-ImagePtr Evaluator::evaluateDisplay(const Graph& g, int nodeId, EvalContext& ctx, int pin) {
+ImagePtr Evaluator::evaluateDisplay(const Graph& g, int nodeId, EvalContext& ctx, int pin, Value* onGpu) {
     Node* n = g.find(nodeId);
     if (!n) return nullptr;
     Value v;
@@ -278,6 +286,15 @@ ImagePtr Evaluator::evaluateDisplay(const Graph& g, int nodeId, EvalContext& ctx
         v = evaluateOutput(g, nodeId, pin, ctx);
     }
     if (v.empty()) return nullptr;
+    if (onGpu && v.onGpu()) {
+        // Left on the device: the viewer converts it there, and downloading it would cost more
+        // than the conversion (12 ms for a 1 MP proxy on an iGPU). Run a pending (fused) stage
+        // now, while its inputs are alive.
+        gpu::Scope scope;
+        gpu::materialize(v);
+        *onGpu = v;
+        return nullptr;
+    }
     return toImage(v, ctx.defaultW, ctx.defaultH);
 }
 
@@ -294,13 +311,13 @@ std::vector<Value> Evaluator::gatherInputs(const Graph& g, int nodeId, EvalConte
     return inputs;
 }
 
-ImagePtr Evaluator::evaluateDisplayPath(const Graph& g, const NodePath& path, EvalContext& ctx, int pin) {
+ImagePtr Evaluator::evaluateDisplayPath(const Graph& g, const NodePath& path, EvalContext& ctx, int pin, Value* onGpu) {
     if (path.empty()) return nullptr;
-    if (path.size() == 1) return evaluateDisplay(g, path[0], ctx, pin);
+    if (path.size() == 1) return evaluateDisplay(g, path[0], ctx, pin, onGpu);
     auto* group = dynamic_cast<GroupNode*>(g.find(path[0]));
     if (!group) return nullptr;
     std::vector<Value> inputs = gatherInputs(g, path[0], ctx);
-    return group->previewInner(ctx, inputs, NodePath(path.begin() + 1, path.end()), pin);
+    return group->previewInner(ctx, inputs, NodePath(path.begin() + 1, path.end()), pin, onGpu);
 }
 
 std::optional<Evaluator::RegionResult> Evaluator::evaluateRegion(const Graph& g, int nodeId, int pin, EvalContext& ctx,
@@ -468,16 +485,13 @@ std::optional<Evaluator::RegionResult> Evaluator::evaluateRegion(const Graph& g,
                 key += "|R" + std::to_string(r.x) + "," + std::to_string(r.y) + "," + std::to_string(r.w) + "," +
                        std::to_string(r.h);
             std::vector<Value> inputs(info.inputs.size());
+            std::vector<const Link*> from(info.inputs.size(), nullptr);  // linked inputs carrying a value
             for (size_t i = 0; i < info.inputs.size(); ++i) {
                 if (const Link* l = g.inputLink(id, int(i))) {
                     key += "|L" + std::to_string(sigs.at(l->fromNode)) + ":" + std::to_string(l->fromPin);
                     const Entry& up = cache.at(l->fromNode);
                     if (l->fromPin < int(up.outs.size())) inputs[i] = up.outs[l->fromPin];
-                    if (inputSized(l)) {
-                        const PixelRect& ur = plan[l->fromNode].req;
-                        const PixelRect& r = p.in[i];
-                        inputs[i] = cropValue(inputs[i], r.x - ur.x, r.y - ur.y, r.w, r.h);
-                    }
+                    if (!inputs[i].empty()) from[i] = l;
                     if (inputs[i].empty() && info.inputs[i].fallbackParam >= 0)
                         inputs[i] = Value(n.paramF(info.inputs[i].fallbackParam));
                 } else {
@@ -500,7 +514,24 @@ std::optional<Evaluator::RegionResult> Evaluator::evaluateRegion(const Graph& g,
                 rctx.roi = &window;
                 rctx.statsOut = nullptr;
                 rctx.previewStats = stats.empty() ? nullptr : &stats;
-                run(g, n, rctx, inputs, e, sig, false);
+                // As in ensure(): the node runs where it can and its inputs move there (each value
+                // once), and only then are they cut to the part it reads.
+                const bool gpu = !n.muted && gpuLevel(rctx) && n.gpuSupported(rctx, inputs);
+                for (size_t i = 0; i < inputs.size(); ++i) {
+                    if (!from[i] || !inputSized(from[i])) continue;
+                    if (inputs[i].onGpu() != gpu) {
+                        try {
+                            inputs[i] = converted(cache.at(from[i]->fromNode), from[i]->fromPin, gpu, ctx);
+                        } catch (const gpu::Error&) {
+                            // run() falls back to the CPU
+                        }
+                    }
+                    const PixelRect& ur = plan[from[i]->fromNode].req;
+                    const PixelRect& r = p.in[i];
+                    inputs[i] = cropValue(inputs[i], r.x - ur.x, r.y - ur.y, r.w, r.h);
+                }
+                if (gpu) materializeShared(g, from, inputs);
+                run(g, n, rctx, inputs, e, sig, gpu);
                 // Every sized output must cover the window; keep the requested part.
                 for (Value& v : e.outs) {
                     int vw, vh;
@@ -670,6 +701,7 @@ void AsyncEvaluator::run() {
         res.generation = job.generation;
         res.draft = job.options.draft;
         res.images.resize(job.targets.size());
+        res.gpuImages.resize(job.targets.size());
         res.errors.resize(job.targets.size());
         bool cancelled = false;
         auto t0 = std::chrono::steady_clock::now();
@@ -692,7 +724,7 @@ void AsyncEvaluator::run() {
             if (ctx.gpu) device.emplace();
             for (size_t t = 0; t < job.targets.size(); ++t) {
                 try {
-                    res.images[t] = evaluator_.evaluateDisplayPath(g, job.targets[t], ctx, job.pins[t]);
+                    res.images[t] = evaluator_.evaluateDisplayPath(g, job.targets[t], ctx, job.pins[t], &res.gpuImages[t]);
                 } catch (const EvalCancelled&) {
                     throw;
                 } catch (const std::exception& e) {
@@ -763,9 +795,12 @@ std::vector<AsyncEvaluator::Tile> AsyncEvaluator::evaluateDetails(const Graph& g
         tiles.push_back(t);
         // How many full-resolution pixels the view shows per screen pixel decides the level:
         // the smallest of 1, 1/2, 1/4... that is at least as sharp as the screen, like a mipmap.
-        ImagePtr preview = evaluator_.evaluateDisplay(g, d.node, ctx, d.pin);
-        if (!preview || preview->w <= 0 || d.screenW <= 0) continue;
-        const float need = ctx.scale * d.screenW / float(preview->w);
+        Value onGpu;  // its size is all that is needed: no download
+        ImagePtr preview = evaluator_.evaluateDisplay(g, d.node, ctx, d.pin, &onGpu);
+        int pw = preview ? preview->w : 0, ph = 0;
+        if (!preview) onGpu.size(pw, ph);
+        if (pw <= 0 || d.screenW <= 0) continue;
+        const float need = ctx.scale * d.screenW / float(pw);
         if (need <= ctx.scale * 1.15f) continue;  // the preview is (nearly) as sharp
         float level = 1.0f;
         while (level * 0.5f >= need) level *= 0.5f;
@@ -774,6 +809,10 @@ std::vector<AsyncEvaluator::Tile> AsyncEvaluator::evaluateDetails(const Graph& g
         rctx.cache = &cache_;
         rctx.cancel = &cancel_;
         if (!initRegionContext(g, rctx, level)) continue;
+        rctx.gpu = ctx.gpu;
+        rctx.gpuHalf = ctx.gpuHalf;
+        std::optional<gpu::Scope> device;
+        if (rctx.gpu) device.emplace();
         // A margin around the visible part, so a little panning stays sharp.
         const float mu = (d.u1 - d.u0) * 0.1f, mv = (d.v1 - d.v0) * 0.1f;
         auto r = evaluator_.evaluateRegion(g, d.node, d.pin, rctx, std::max(0.0f, d.u0 - mu), std::max(0.0f, d.v0 - mv),

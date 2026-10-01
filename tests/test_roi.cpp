@@ -8,6 +8,7 @@
 #include <set>
 #include <thread>
 
+#include "gpu/Device.h"
 #include "graph/Evaluator.h"
 #include "graph/NodeRegistry.h"
 #include "io/ImageCache.h"
@@ -52,8 +53,19 @@ void registerSource() {
     NodeRegistry::instance().add<RoiTestSource>();
 }
 
+}  // namespace
+
+bool gpuTestDevice();  // test_gpu.cpp: the device is up (else the GPU cases skip)
+
+namespace {
+
+// Runs the checks with GPU nodes on the device (full precision), as zoomed-in details do with the
+// GPU device on.
+bool gRoiGpu = false;
+
 EvalContext roiCtx() {
     EvalContext ctx;
+    ctx.gpu = gRoiGpu;
     ctx.defaultW = 120;
     ctx.defaultH = 80;
     ctx.scale = 0.5f;
@@ -106,7 +118,7 @@ bool checkRegions(const Graph& g, int id) {
             if (!r) continue;
             any = true;
             ImagePtr wi = toImage(whole, ww, wh);
-            CHECK(regionError(*wi, *r) <= 2e-5f);
+            CHECK(regionError(*wi, *r) <= (gRoiGpu ? 1e-4f : 2e-5f));
             CHECK(r->u0 <= box[0]);
             CHECK(r->v1 >= box[3]);
         }
@@ -131,11 +143,9 @@ bool checkNode(const std::string& type, const Params& params = {}) {
     return checkRegions(g, n->id);
 }
 
-}  // namespace
-
 // The core promise of region evaluation: a zoomed-in region looks exactly like the same part of
 // the whole image. Nodes that can't promise it must make the evaluator fall back (no result).
-TEST_CASE("every node's region matches the same part of its whole image") {
+void checkEveryNode() {
     registerSource();
     std::set<std::string> regional;
     for (const auto& type : NodeRegistry::instance().types()) {
@@ -157,7 +167,7 @@ TEST_CASE("every node's region matches the same part of its whole image") {
 }
 
 // Settings that depend on position or on the image size.
-TEST_CASE("regions match with position- and size-dependent settings") {
+void checkSettings() {
     registerSource();
     const std::vector<std::pair<std::string, Params>> cases = {
         {"conv.expression", {{"Expression", "x / w + y * 0.01 + u - v * h / 100"}}},
@@ -194,7 +204,7 @@ TEST_CASE("regions match with position- and size-dependent settings") {
 }
 
 // A photo-style chain: regions propagate through padding, mapping and generators together.
-TEST_CASE("regions match through a chain of nodes") {
+void checkChain() {
     registerSource();
     Graph g;
     Node* src = g.addNode("test.roi_source");
@@ -221,6 +231,24 @@ TEST_CASE("regions match through a chain of nodes") {
     Evaluator ev;
     ev.evaluateDisplay(g, out->id, ctx);
     CHECK(ev.evaluateRegion(g, out->id, 0, ctx, 0.2f, 0.2f, 0.5f, 0.5f));
+}
+
+}  // namespace
+
+TEST_CASE("every node's region matches the same part of its whole image") { checkEveryNode(); }
+TEST_CASE("regions match with position- and size-dependent settings") { checkSettings(); }
+TEST_CASE("regions match through a chain of nodes") { checkChain(); }
+
+// The same on the GPU device: its nodes must honour the region (ctx.roi) as the CPU's do.
+TEST_CASE("GPU regions match the same part of the whole image") {
+    if (!gpuTestDevice()) return;
+    struct Restore {
+        ~Restore() { gRoiGpu = false; }
+    } restore;
+    gRoiGpu = true;
+    SUBCASE("every node") { checkEveryNode(); }
+    SUBCASE("settings") { checkSettings(); }
+    SUBCASE("chain") { checkChain(); }
 }
 
 TEST_CASE("region evaluation reuses the preview's statistics and cache levels stay separate") {

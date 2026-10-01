@@ -5,6 +5,22 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 ## Unreleased
 
+## 0.16.0 (2026-10-01)
+
+- **The viewers convert on the GPU:** with the GPU device on, the view transform, the clipping
+  warnings and the histogram run on the card, and a result still on the card is converted there
+  without being copied back first. On a 2.7 MP image this takes 15 ms instead of 80 ms (Standard)
+  or 170 ms (AgX), so the viewer keeps up with slider drags.
+- **Results stay on the GPU:** a viewer's result is no longer copied back to the CPU after each
+  evaluation (12 ms for a 1 MP preview on an integrated GPU). The eyedropper copies it once,
+  when it is used.
+- **Zoomed-in detail on the GPU:** the sharp detail shown when zooming past the preview's
+  resolution is now computed on the GPU too, with the same result as the whole image.
+- **Exports on the GPU:** with the GPU device on, File > Export renders on the GPU at Full
+  precision. The 38-node infrared graph on a 24 MP photo evaluates in 4.4 s instead of 18 s on
+  an integrated GPU (saving the file takes the same time as before).
+- `--device gpu` also works with `--screenshot` and `--script`, which otherwise use the CPU.
+
 ## 0.15.0 (2026-10-01)
 
 - **Nearly every node runs on the GPU:** 79 of the 88 node types, up from 45.

@@ -109,9 +109,15 @@ public:
     bool gpuSupported(const EvalContext&, const std::vector<Value>&) const override { return true; }
 
 protected:
-    // Output size on the GPU, which never runs regions: maskSize's.
+    // Output size on the GPU: maskSize's.
     static void gpuSize(const EvalContext& ctx, const std::vector<Value>& in, int& w, int& h) {
         if (!in[0].size(w, h)) resolveSize({}, ctx, w, h);
+    }
+    // The full image's size, which the shapes are relative to (a region's buffer is part of it).
+    static void gpuFullSize(const EvalContext& ctx, const std::vector<Value>& in, int& w, int& h) {
+        gpuSize(ctx, in, w, h);
+        const PixelFrame fr = frameOf(ctx, w, h);
+        w = fr.fullW, h = fr.fullH;
     }
     // The GPU version: body computes `float shape` at pixel position `xy` (full-image pixels).
     void runGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out, const std::string& body,
@@ -156,7 +162,7 @@ protected:
     }
     void runGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out, bool ellipse) {
         int w, h;
-        gpuSize(ctx, in, w, h);
+        gpuFullSize(ctx, in, w, h);
         const float hw = std::max(paramF(2) * w * 0.5f, 1e-3f), hh = std::max(paramF(3) * h * 0.5f, 1e-3f);
         const float a = -paramF(4) * kPi / 180.0f;
         std::string body = R"(
@@ -246,7 +252,7 @@ public:
     }
     void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         int w, h;
-        gpuSize(ctx, in, w, h);
+        gpuFullSize(ctx, in, w, h);
         const float x0 = paramF(0) * w, y0 = paramF(1) * h;
         const float dx = paramF(2) * w - x0, dy = paramF(3) * h - y0;
         runGpu(ctx, in, out,

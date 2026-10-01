@@ -70,6 +70,11 @@ struct Histogram {
     bool clipHigh = false, clipLow = false;
     bool valid = false;
     void compute(const Image& img);
+    // From counts made elsewhere (gpu::display): 4 x 256 bins, then the clip-high and clip-low flags.
+    void setCounts(const uint32_t* counts);
+
+private:
+    void scalePeak();
 };
 
 // Average RGB of the pixels in the inclusive rectangle (clamped to the image).

@@ -66,7 +66,11 @@ build\nodelab_tests.exe
   `--depth 16` (or 32 for full-float EXR) sets the bit depth.
 - **Benchmark:** `NodeLab.exe --benchmark project.nlproj [--full] [--runs N]` prints the median ms
   per node. Use it before and after performance work.
-- **Screenshot of the UI:** `NodeLab.exe project.nlproj --screenshot shot.png`.
+  - With `--device gpu`, per-node times are timer queries on queued work and can land on the
+    wrong node (one that reads back waits for everything before it). Add `--sync` for each
+    node's own time: it waits around every node and doesn't fuse.
+- **Screenshot of the UI:** `NodeLab.exe project.nlproj --screenshot shot.png`. Automated runs use
+  the CPU device; add `--device gpu` to check the GPU path (evaluation and the viewer's display).
 - **Scripted UI tests:** `NodeLab.exe tests\ui\interact.nlproj --script tests\ui\<name>.txt`.
   - Script commands are documented in `src/ui/UiScript.h`.
   - Input goes straight into ImGui and the real mouse is ignored.
@@ -96,7 +100,7 @@ src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (
               histograms off the UI thread), FileDialog (Win32), UiScript
 src/gpu       Device (hidden GL 4.3 context, texture pool, programs, timer queries, PBO downloads),
               GL (loader), PointOp (per-pixel nodes as GLSL bodies, fused into chains), Blur,
-              Reduce (exact percentiles by radix select)
+              Reduce (exact percentiles by radix select), Display (viewer bytes and histogram)
 ```
 
 ## Conventions
@@ -151,10 +155,22 @@ src/gpu       Device (hidden GL 4.3 context, texture pool, programs, timer queri
 - **GPU nodes** (Blender's compositor Device: GPU): a node opts in with `gpuSupported` and
   `evaluateGpu`, usually a `gpu::PointOp` GLSL body that mirrors its C++ loop.
   - Values on the device are `GpuImagePtr`/`GpuChannelPtr`. The evaluator converts inputs between
-    devices and caches the copies. GPU runs happen only at the Preview and Draft levels; regions
-    and exports use the CPU unless `--device gpu`.
+    devices and caches the copies. GPU runs happen at the Preview, Draft and Region levels;
+    File > Export uses the device at Full precision (holding it only while evaluating);
+    `--render` uses the CPU unless `--device gpu`.
+  - **Regions on the GPU:** `evaluateGpu` must honour `ctx.roi` as `evaluate` does (`frameOf` for
+    positions and sizes, `previewStats` for global statistics, Crop's window mapping).
+    `test_roi.cpp`'s GPU case checks every node.
   - A `gpu::Error` falls back to the CPU. `test_gpu.cpp` compares every GPU node with its CPU
-    version (it skips when there's no GPU). Automated UI runs force the CPU device.
+    version (it skips when there's no GPU). Automated UI runs use the CPU device unless given
+    `--device gpu`.
+  - **Viewer:** `gpu::display` (`src/gpu/Display.cpp`) mirrors `colormgmt::viewTransform`,
+    `displayBytes` and `Histogram::compute`; change them together. It writes an RGBA8 texture,
+    because reading back a buffer a shader wrote is about 10x slower than a texture through
+    the pack buffer.
+    - Viewer results evaluated on the GPU stay there (`AsyncEvaluator::Result::gpuImages`, with a
+      null image). `DisplayWorker::download` fetches the pixels only for the eyedropper, masks
+      and the CPU fallback.
   - **Fusion:** `runPoint` doesn't dispatch. Its outputs are *pending* (`GpuValue::pending`), and a
     later point op of the same size compiles the pending stage into its own shader. Each stage's
     names are namespaced with `#define`/`#undef`, so a body and its `functions` use the plain
