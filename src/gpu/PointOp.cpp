@@ -286,8 +286,8 @@ std::vector<std::string> declaredNames(const std::string& functions) {
 // Whether `functions` reads a stage's own inputs or params, so it can't be shared between stages.
 bool stageSpecific(const std::string& functions) {
     for (const std::string& id : identifiers(stripComments(functions))) {
-        if (id == "P" || id == "lutLookup") return true;
-        for (const char* pre : {"img", "ch", "par", "has"}) {
+        if (id == "P" || id == "lutLookup" || id == "lutAt") return true;
+        for (const char* pre : {"img", "ch", "par", "has", "fetch", "fetchCh", "bilinear", "size"}) {
             const size_t n = std::strlen(pre);
             if (id.size() > n && id.compare(0, n, pre) == 0 &&
                 std::all_of(id.begin() + std::ptrdiff_t(n), id.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)); }))
@@ -393,6 +393,27 @@ struct Generator {
                 accessors += "float " + q + "ch(ivec2 p) { return " + ch + "; }\n";
             }
             accessors += "const bool " + q + "has = " + (in.kind == Kind::None ? "false" : "true") + ";\n";
+            if (std::find(s.op.gather.begin(), s.op.gather.end(), int(i)) != s.op.gather.end()) {
+                // Reads anywhere in the pin's buffer: texels clamped to its edges, and the CPU's
+                // bilinear sampling (pixel centres at +0.5) on top of them.
+                const bool tex = in.kind == Kind::ImageTex || in.kind == Kind::ChannelTex;
+                accessors += "const ivec2 " + q + "size = " +
+                             (tex ? "ivec2(" + std::to_string(in.tw) + ", " + std::to_string(in.th) + ")" : std::string("uSize")) + ";\n";
+                std::string at;
+                if (in.kind == Kind::ImageTex) at = "texelFetch(" + q + "T, clamp(c, ivec2(0), " + q + "size - 1), 0)";
+                else if (in.kind == Kind::ChannelTex) at = "vec4(vec3(texelFetch(" + q + "T, clamp(c, ivec2(0), " + q + "size - 1), 0).r), 1.0)";
+                else at = img;
+                accessors += "vec4 " + q + "fetch(ivec2 c) { return " + at + "; }\n";
+                accessors += "float " + q + "fetchCh(ivec2 c) { return " +
+                             (in.kind == Kind::ImageTex ? "luminance(" + q + "fetch(c).rgb)" : q + "fetch(c).r") + "; }\n";
+                accessors += "vec4 " + q + "bilinear(vec2 xy, bool transparent) {\n"
+                             "    if (transparent && (xy.x < 0.0 || xy.y < 0.0 || xy.x > float(" + q + "size.x) || xy.y > float(" + q +
+                             "size.y))) return vec4(0.0);\n"
+                             "    xy -= 0.5;\n    ivec2 i0 = ivec2(floor(xy));\n    vec2 f = xy - vec2(i0);\n"
+                             "    vec4 a = " + q + "fetch(i0), b = " + q + "fetch(i0 + ivec2(1, 0)), c = " + q + "fetch(i0 + ivec2(0, 1)), d = " + q +
+                             "fetch(i0 + ivec2(1, 1));\n"
+                             "    vec4 top = a + (b - a) * f.x, bot = c + (d - c) * f.x;\n    return top + (bot - top) * f.y;\n}\n";
+            }
             accessors += "float " + q + "par(ivec2 p) { return clamp(" + q + "ch(p), " + num(in.lo) + ", " + num(in.hi) + "); }\n";
         }
         code += accessors;
@@ -420,10 +441,14 @@ struct Generator {
             define("ch" + n, q + "ch");
             define("par" + n, q + "par");
             define("has" + n, q + "has");
+            if (std::find(s.op.gather.begin(), s.op.gather.end(), int(i)) != s.op.gather.end())
+                for (const char* g : {"fetch", "fetchCh", "bilinear", "size"}) define(g + n, q + g);
         }
         if (!s.op.lut.empty()) {
             code += "#define lutLookup(off, n, x) lutLookupBase(" + std::to_string(lutBase) + " + (off), n, x)\n";
+            code += "#define lutAt(i) L[" + std::to_string(lutBase) + " + (i)]\n";
             macros.push_back("lutLookup");
+            macros.push_back("lutAt");
         }
         for (const std::string& nm : names) define(nm, fpre + nm);
         if (own) code += s.op.functions + "\n";
@@ -462,7 +487,7 @@ std::vector<TexturePtr> dispatchTree(const Stage& root, const Pending& pd) {
     std::string stores;
     for (size_t k = 0; k < root.outImage.size(); ++k) {
         const std::string n = std::to_string(k);
-        formats.push_back(outFormat(root.outImage[k], pd.half));
+        formats.push_back(outFormat(root.outImage[k], pd.half && !root.op.full));
         s += "layout(" + std::string(glslFormat(formats.back())) + ", binding = " + n + ") uniform writeonly image2D uOut" + n + ";\n";
         stores += "    imageStore(uOut" + n + ", p, " + (root.outImage[k] ? "o" + n : "vec4(o" + n + ")") + ");\n";
     }
@@ -527,18 +552,17 @@ void Pending::run() {
     root.reset();  // the inputs it held are no longer needed
 }
 
-void runPoint(EvalContext& ctx, const Node& node, const PointOp& op, const std::vector<Value>& in,
-              std::vector<Value>& out) {
-    const NodeInfo& info = node.info();
+namespace {
+
+// runPoint and runPass: `info` gives the param ranges of pins (par<i>), when there is one.
+std::vector<Value> runStage(EvalContext& ctx, const NodeInfo* info, const PointOp& op, const std::vector<Value>& in,
+                            const std::vector<bool>& outImage) {
     const int w = op.w, h = op.h;
     if (w <= 0 || h <= 0) throw Error("GPU: empty output");
 
     auto st = std::make_shared<Stage>();
     st->op = op;
-    for (const PinDesc& o : info.outputs) {
-        if (o.type != PinType::Image && o.type != PinType::Channel) throw Error("GPU: point ops output images and channels");
-        st->outImage.push_back(o.type == PinType::Image);
-    }
+    st->outImage = outImage;
     st->inputs.resize(in.size());
     for (size_t i = 0; i < in.size(); ++i) {
         Stage::Input& si = st->inputs[i];
@@ -551,7 +575,8 @@ void runPoint(EvalContext& ctx, const Node& node, const PointOp& op, const std::
         if (auto p = std::get_if<GpuChannelPtr>(&v.v); p && *p) g = p->get();
         if (g) {
             si.src = v;
-            if (!g->tex && g->pending && g->pending->root && g->w == w && g->h == h) {
+            const bool gather = std::find(op.gather.begin(), op.gather.end(), int(i)) != op.gather.end();
+            if (!g->tex && g->pending && g->pending->root && g->w == w && g->h == h && !gather && g->pending->root->op.inlinable) {
                 // Fusion: the producer hasn't run, and lines up pixel for pixel with this op, so
                 // its code runs inside this shader instead of writing a texture.
                 si.kind = Kind::Fused;
@@ -571,8 +596,8 @@ void runPoint(EvalContext& ctx, const Node& node, const PointOp& op, const std::
             si.constant = op.defaults[i];
         }
         // paramSampler's range: the param backing the pin, if any.
-        if (i < info.inputs.size() && info.inputs[i].fallbackParam >= 0) {
-            const ParamDesc& d = info.params[size_t(info.inputs[i].fallbackParam)];
+        if (info && i < info->inputs.size() && info->inputs[i].fallbackParam >= 0) {
+            const ParamDesc& d = info->params[size_t(info->inputs[i].fallbackParam)];
             si.lo = d.hardMin;
             si.hi = d.hardMax;
         }
@@ -584,7 +609,7 @@ void runPoint(EvalContext& ctx, const Node& node, const PointOp& op, const std::
     pd->frame = nodeutil::frameOf(ctx, w, h);
     pd->linear = ctx.linear();
     pd->half = ctx.gpuHalf;
-    out.assign(info.outputs.size(), Value());
+    std::vector<Value> out(st->outImage.size());
     for (size_t k = 0; k < st->outImage.size(); ++k) {
         if (st->outImage[k]) {
             auto im = std::make_shared<GpuImage>();
@@ -596,6 +621,25 @@ void runPoint(EvalContext& ctx, const Node& node, const PointOp& op, const std::
             out[k] = Value(GpuChannelPtr(c));
         }
     }
+    return out;
+}
+
+}  // namespace
+
+void runPoint(EvalContext& ctx, const Node& node, const PointOp& op, const std::vector<Value>& in,
+              std::vector<Value>& out) {
+    const NodeInfo& info = node.info();
+    std::vector<bool> outImage;
+    for (const PinDesc& o : info.outputs) {
+        if (o.type != PinType::Image && o.type != PinType::Channel) throw Error("GPU: point ops output images and channels");
+        outImage.push_back(o.type == PinType::Image);
+    }
+    out = runStage(ctx, &info, op, in, outImage);
+}
+
+std::vector<Value> runPass(EvalContext& ctx, const PointOp& op, const std::vector<Value>& in,
+                           const std::vector<bool>& outImage) {
+    return runStage(ctx, nullptr, op, in, outImage);
 }
 
 void runOver(EvalContext& ctx, const Node& node, PointOp op, const std::vector<Value>& in, std::vector<Value>& out,

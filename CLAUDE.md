@@ -163,6 +163,14 @@ src/gpu       Device (hidden GL 4.3 context, texture pool, programs, timer queri
     several wires, so nothing is computed twice.
   - GLSL division is approximate and drivers fold NaN checks: see the `c_*` helpers in
     `Expression.cpp` where exact results matter.
+    - Values that feed `floor()` or a comparison at pixel boundaries (texture coordinates,
+      cells) are computed on the CPU per row or column and read with `lutAt(i)`; see
+      `TextureBase::runGpu`.
+  - **Neighbourhood nodes:** list the pins they read at other pixels in `PointOp::gather`
+    (`fetch<i>`, `bilinear<i>`, `size<i>`).
+    - `runPass` chains the passes; mark sums and other intermediates `full`.
+    - `gpu::boxBlur` blurs a texture, and `gpu::select` gives exact ranks (percentiles).
+    - Basic's `guidedGpu`/`sumGpu` show a guided filter and a sum read back.
 - **Node state:** `Node::muted`, `collapsed` and `label` persist in JSON. `Graph::cloneNode` copies them.
 - **Groups:** a `GroupNode` owns an inner `Graph`, and its interface pins are pushed to the inner
   Group Input/Output nodes by `syncInner()`. Use `GroupNode::removePin`/`movePin`/`setPinType`, which

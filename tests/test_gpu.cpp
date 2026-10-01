@@ -324,7 +324,8 @@ TEST_CASE("GPU curve nodes match the CPU with bent curves") {
     };
     for (const Case& c : cases) {
         for (bool linear : {false, true}) {
-            CAPTURE(c.type);
+            const std::string type = c.type;
+            CAPTURE(type);
             CAPTURE(linear);
             Graph g;
             Node* src = cpuSource(g);
@@ -359,7 +360,8 @@ TEST_CASE("GPU develop nodes match the CPU with sliders moved") {
     };
     for (const Case& c : cases) {
         for (float factor : {1.0f, 0.6f}) {
-            CAPTURE(c.type);
+            const std::string type = c.type;
+            CAPTURE(type);
             CAPTURE(c.linear);
             CAPTURE(factor);
             Graph g;
@@ -374,13 +376,148 @@ TEST_CASE("GPU develop nodes match the CPU with sliders moved") {
             CHECK(difference(cpu.v, gpu.v) < 2e-4f);
         }
     }
-    // Neighbourhood sliders keep Basic on the CPU (until G3).
-    Graph g;
-    Node* src = cpuSource(g);
-    Node* n = g.addNode("color.basic");
-    n->params[5] = -50.0f;
-    g.connect(src->id, 0, n->id, 0);
-    CHECK_FALSE(evaluate(g, n->id, 0, true, true).onGpu);
+}
+
+TEST_CASE("GPU Basic matches the CPU with its local filters") {
+    if (!gpuReady()) return;
+    // Highlights/Shadows (the tone equalizer's guided mask in linear projects), Clarity (guided),
+    // Texture (blur) and Dehaze (dark channel, airlight). The large size makes the fast guided
+    // filter solve its coefficients on cells.
+    const std::vector<std::vector<std::pair<int, float>>> cases = {
+        {{5, -50}, {6, 40}},
+        {{10, 60}},
+        {{10, -40}, {3, 0.5f}},
+        {{9, 50}},
+        {{11, 40}},
+        {{11, -40}},
+        {{1, 20}, {4, 30}, {5, -60}, {6, 50}, {9, -30}, {10, 40}, {11, 30}, {12, 30}},
+    };
+    for (const auto& params : cases)
+        for (bool linear : {false, true})
+            for (int sz : {1, 13}) {
+                CAPTURE(linear);
+                CAPTURE(sz);
+                CAPTURE(params.front().first);
+                Graph g;
+                Node* src = cpuSource(g);
+                Node* n = g.addNode("color.basic");
+                for (const auto& [i, v] : params) n->params[size_t(i)] = v;
+                g.connect(src->id, 0, n->id, 0);
+                const int w = 37 * sz, h = 23 * sz;
+                const Run cpu = evaluate(g, n->id, 0, false, linear, w, h), gpu = evaluate(g, n->id, 0, true, linear, w, h);
+                CHECK(gpu.onGpu);
+                CHECK(gpu.fallbacks == 0);
+                CHECK(difference(cpu.v, gpu.v) < 2e-4f);
+            }
+}
+
+TEST_CASE("GPU filters and transforms match the CPU with params moved") {
+    if (!gpuReady()) return;
+    struct Case {
+        const char* type;
+        std::vector<std::pair<int, float>> params;
+        // Extra inputs: pin and the source's channel feeding it (-1: the source image).
+        std::vector<std::pair<int, int>> wires;
+    };
+    const Case cases[] = {
+        {"xform.transform", {{0, 7}, {1, -4}, {2, 25}, {3, 1.3f}}, {}},
+        {"xform.transform", {{0, 7}, {1, -4}, {2, -40}, {3, 0.7f}, {4, 1}}, {}},
+        {"xform.crop", {{0, 0.1f}, {1, 0.85f}, {2, 0.2f}, {3, 0.9f}, {5, 8}}, {}},
+        {"xform.crop", {{0, 0.1f}, {1, 0.85f}, {2, 0.2f}, {3, 0.9f}, {4, 0}, {5, -6}, {7, 0}}, {}},
+        {"xform.crop", {{0, 0.05f}, {1, 0.9f}, {6, 2}}, {}},
+        {"xform.lens_distortion", {{0, -0.3f}, {1, 0.1f}}, {}},
+        {"xform.lens_distortion", {{0, 0.4f}, {1, 0.05f}, {2, 0}}, {}},
+        {"xform.lens_correction", {{0, 40}, {2, 60}, {3, -50}, {4, -60}, {5, 30}}, {}},
+        {"xform.lens_correction", {{0, -50}, {1, 0}, {4, 70}}, {}},
+        {"xform.corner_pin", {{0, 0.1f}, {1, 0.05f}, {2, 0.95f}, {5, 0.8f}, {6, 0.2f}}, {}},
+        {"xform.displace", {{0, 15}, {1, -10}}, {{1, 0}, {2, 2}}},
+        {"xform.map_uv", {}, {{1, -1}}},
+        {"filter.directional_blur", {{0, 8}, {1, 30}, {2, 10}, {3, 0.2f}}, {}},
+        {"filter.bilateral_blur", {{0, 5}, {1, 0.3f}}, {}},
+        {"filter.bilateral_blur", {{0, 3}, {1, 0.05f}}, {{1, -1}}},
+        {"filter.filter", {{1, 2}}, {{1, 0}}},
+        {"filter.dilate_erode", {{1, 3.5f}}, {}},
+        {"filter.dilate_erode", {{1, -4.5f}}, {}},
+        {"filter.dilate_erode", {{0, 1}, {1, 6.5f}}, {}},
+        {"filter.dilate_erode", {{0, 1}, {1, -2.5f}}, {}},
+        {"filter.kuwahara", {{0, 3}}, {}},
+        {"filter.kuwahara", {{0, 9}}, {}},
+        {"filter.pixelate", {{0, 5}}, {}},
+        {"filter.posterize", {{0, 3}}, {}},
+        {"filter.glare", {{0, 0}, {1, 0.2f}, {2, 15}}, {}},
+        {"filter.glare", {{0, 1}, {1, 0.3f}, {2, 20}, {4, 6}}, {}},
+        {"filter.glare", {{0, 2}, {2, 12}, {1, 0.4f}}, {}},
+        {"filter.sun_beams", {{0, 0.2f}, {1, 0.8f}, {2, 0.6f}}, {}},
+        {"matte.box_mask", {{4, 30}, {5, 0}, {7, 1}}, {}},
+        {"matte.ellipse_mask", {{0, 0.3f}, {4, -20}, {5, 0.4f}, {7, 3}}, {{1, 2}}},
+        {"matte.radial_gradient", {{2, 1.2f}, {7, 2}}, {}},
+        {"matte.linear_gradient", {{0, 0.1f}, {1, 0.9f}, {2, 0.8f}, {3, 0.1f}, {5, 1}}, {{1, 2}}},
+        {"matte.channel_key", {{0, 4}, {3, 1}}, {}},
+        {"matte.channel_key", {{0, 7}}, {}},
+        {"matte.channel_key", {{0, 0}, {1, 0.6f}, {2, 0.5f}}, {}},
+        {"matte.luminance_key", {{2, 0}}, {}},
+        {"matte.difference_key", {{1, 0.05f}}, {{1, 2}}},
+        {"matte.distance_key", {{3, 1}}, {}},
+        {"matte.distance_key", {{1, 0.02f}}, {{1, 0}}},
+        {"matte.chroma_key", {{1, 10}, {3, 0.05f}}, {}},
+        {"matte.color_spill", {{1, 0}, {2, 1}, {3, 0.8f}}, {{1, 1}}},
+        {"tex.noise", {{0, 9}, {1, 3.5f}, {2, 0.7f}, {3, 2.5f}, {4, 1.5f}, {5, 7}}, {}},
+        {"tex.voronoi", {{0, 23}, {1, 0.6f}, {2, 3}}, {}},
+        {"tex.gradient", {{0, 1}, {1, 30}}, {}},
+        {"tex.gradient", {{0, 2}, {1, -60}}, {}},
+        {"tex.gradient", {{0, 3}}, {}},
+        {"tex.gradient", {{0, 4}}, {}},
+        {"tex.gradient", {{0, 5}}, {}},
+        {"tex.gradient", {{0, 6}}, {}},
+        {"tex.wave", {{0, 1}, {1, 1}, {2, 7}}, {}},
+        {"tex.wave", {{0, 1}, {1, 2}, {2, 7}, {4, 2}}, {}},
+        {"tex.wave", {{1, 2}, {2, 11}, {3, 35}, {6, 0.3f}}, {}},
+        {"tex.checker", {{0, 13}}, {}},
+        {"tex.white_noise", {{0, 3}, {1, 5}}, {}},
+    };
+    for (const Case& c : cases) {
+        for (bool linear : {false, true}) {
+            const std::string type = c.type;
+            CAPTURE(type);
+            CAPTURE(c.params.size());
+            CAPTURE(linear);
+            Graph g;
+            Node* src = cpuSource(g);
+            Node* split = g.addNode("color.split_rgb");
+            g.connect(src->id, 0, split->id, 0);
+            Node* n = g.addNode(c.type);
+            const NodeInfo& inf = n->info();
+            for (const auto& [i, v] : c.params) {
+                const ParamKind k = inf.params[size_t(i)].kind;
+                if (k == ParamKind::Bool) n->params[size_t(i)] = v != 0.0f;
+                else if (k == ParamKind::Enum) n->params[size_t(i)] = int(v);
+                else n->params[size_t(i)] = v;
+            }
+            // The first pin takes the source (a channel for mask nodes).
+            if (inf.inputs.empty()) {
+            } else if (inf.inputs[0].type == PinType::Image) {
+                g.connect(src->id, 0, n->id, 0);
+            } else {
+                g.connect(split->id, 1, n->id, 0);
+            }
+            for (const auto& [pin, from] : c.wires) {
+                if (from < 0) g.connect(src->id, 0, n->id, pin);
+                else g.connect(split->id, from, n->id, pin);
+            }
+            for (int o = 0; o < int(inf.outputs.size()); ++o) {
+                CAPTURE(o);
+                // Textures also at a larger size: many more cell edges, where coordinates must match exactly.
+                for (int sz : {1, inf.inputs.empty() ? 7 : 1}) {
+                    const Run cpu = evaluate(g, n->id, o, false, linear, 61 * sz, 43 * sz);
+                    const Run gpu = evaluate(g, n->id, o, true, linear, 61 * sz, 43 * sz);
+                    CHECK(gpu.onGpu);
+                    CHECK_MESSAGE(gpu.fallbacks == 0, gpu.error);
+                    CAPTURE(sz);
+                    CHECK(difference(cpu.v, gpu.v) < 2e-4f);
+                }
+            }
+        }
+    }
 }
 
 TEST_CASE("GPU normalize selects the same percentiles as the CPU") {
@@ -527,4 +664,35 @@ TEST_CASE("GPU fusion keeps shared values, lookup tables and big chains right") 
         CHECK(gpu.fallbacks == 0);
         CHECK(difference(cpu.v, gpu.v) < 1e-4f);
     }
+}
+
+TEST_CASE("GPU values pass through Reroute and Switch on the device") {
+    if (!gpuReady()) return;
+    Graph g;
+    Node* src = cpuSource(g);
+    Node* a = g.addNode("color.invert");
+    Node* r = g.addNode("util.reroute");
+    Node* sw = g.addNode("util.switch");
+    Node* b = g.addNode("color.invert");
+    g.connect(src->id, 0, a->id, 0);
+    g.connect(a->id, 0, r->id, 0);
+    g.connect(r->id, 0, sw->id, 1);
+    sw->params[0] = true;
+    g.connect(sw->id, 0, b->id, 0);
+    const Run cpu = evaluate(g, b->id, 0, false, true), gpu = evaluate(g, b->id, 0, true, true);
+    CHECK(difference(cpu.v, gpu.v) < 1e-5f);
+    EvalContext ctx;
+    ctx.defaultW = 37;
+    ctx.defaultH = 23;
+    ctx.gpu = true;
+    ctx.colorManagement = g.colorManagement;
+    Evaluator ev;
+    ev.evaluateOutput(g, b->id, 0, ctx);
+    CHECK(ev.gpuNodes()[r->id]);
+    CHECK(ev.gpuNodes()[sw->id]);
+    // A CPU value stays on the CPU (no upload just to pass it along).
+    g.connect(src->id, 0, r->id, 0);
+    Evaluator ev2;
+    ev2.evaluateOutput(g, sw->id, 0, ctx);
+    CHECK_FALSE(ev2.gpuNodes()[r->id]);
 }

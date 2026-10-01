@@ -327,6 +327,10 @@ public:
     // Passes the value through untouched (a channel stays a channel).
     int roiPadding(const EvalContext&) const override { return 0; }
     void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override { out[0] = in[0]; }
+    // A GPU value stays on the device (running on the CPU would download it, and a GPU reader
+    // upload it again).
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return in[0].onGpu(); }
+    void evaluateGpu(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override { out[0] = in[0]; }
 };
 
 class SwitchNode : public Node {
@@ -337,6 +341,8 @@ public:
                   {ParamDesc::Bool("On", false)}})
     int roiPadding(const EvalContext&) const override { return 0; }
     void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override { out[0] = in[paramB(0) ? 1 : 0]; }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return in[paramB(0) ? 1 : 0].onGpu(); }
+    void evaluateGpu(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override { out[0] = in[paramB(0) ? 1 : 0]; }
 };
 
 class SplitNode : public Node {
@@ -370,6 +376,29 @@ public:
             }
         });
         out[0] = Value(ImagePtr(img));
+    }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override {
+        return gpu::sizedValue(in[0]) || gpu::sizedValue(in[1]);
+    }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        resolveSize(in, ctx, op.w, op.h);
+        const bool vertical = paramI(1) == 0;
+        const PixelFrame fr = frameOf(ctx, op.w, op.h);
+        op.functions = std::string("const bool VERTICAL = ") + (vertical ? "true" : "false") +
+                       ";\nconst bool LINE = " + (paramB(2) ? "true" : "false") + ";\n";
+        op.body = R"(
+    vec4 a = img0(p), b = img1(p);
+    if (!has0 || !has1) {
+        out0 = has0 ? a : b;  // only one side: it passes through
+    } else {
+        int c = VERTICAL ? p.x + uOrigin.x : p.y + uOrigin.y, cut = int(P[0]);
+        out0 = c < cut ? a : b;
+        if (LINE && c == cut) out0.rgb = vec3(1.0);
+    }
+)";
+        op.params = {float(int(paramF(0) * (vertical ? fr.fullW : fr.fullH)))};
+        gpu::runPoint(ctx, *this, op, in, out);
     }
 };
 

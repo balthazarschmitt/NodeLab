@@ -5,6 +5,31 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 ## Unreleased
 
+## 0.15.0 (2026-10-01)
+
+- **Nearly every node runs on the GPU:** 79 of the 88 node types, up from 45.
+  - Filters: Directional Blur, Bilateral Blur, Filter, Dilate / Erode, Kuwahara, Pixelate,
+    Posterize, Glare and Sun Beams.
+  - Transforms: Transform, Crop, Flip, Lens Distortion, Lens Correction, Displace, Map UV and
+    Corner Pin.
+  - Mattes: the keys, Color Spill, Box and Ellipse Mask, and the gradients.
+  - Textures: Noise, Voronoi, Gradient, Wave, Checker and White Noise, with the CPU's exact hashes.
+  - Reroute, Switch and Split. Reroute and Switch keep GPU values on the card.
+  - Still on the CPU: Image Info, File Output, Brush Mask and Double Edge Mask.
+- **Basic stays on the GPU with every slider:** Texture, Clarity, Dehaze and the scene-linear tone
+  equalizer (Highlights and Shadows) run as GPU passes.
+  - The guided filters, the dark channel, and Dehaze's airlight (an exact selection and a sum on
+    the card) all run there.
+  - Basic with all its local sliders on a 1 MP preview: 133 ms → 26 ms. At full resolution:
+    320 ms → 66 ms.
+- **Faster GPU blur:** shorter runs per thread keep more of the card busy, so Blur at size 30 on
+  a 1 MP preview takes 7 ms instead of 10 ms.
+- Preview times on Intel Iris Plus, CPU → GPU: effects 86 → 27 ms, infrared foliage 142 → 58 ms,
+  the infrared preset 380 → 100 ms.
+- **Known small differences:** Kuwahara can pick a neighbouring quadrant where two are almost
+  equally smooth, so a few pixels on edges differ from the CPU's. Expression `floor()` at exact
+  boundaries can also round the other way.
+
 ## 0.14.0 (2026-10-01)
 
 - **Every per-pixel node runs on the GPU:** all Color nodes (including Basic, Color Mixer and

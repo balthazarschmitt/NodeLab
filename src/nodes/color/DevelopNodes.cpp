@@ -11,7 +11,9 @@
 
 #include "core/ColorMath.h"
 #include "core/ColorScience.h"
+#include "gpu/Blur.h"
 #include "gpu/PointOp.h"
+#include "gpu/Reduce.h"
 #include "nodes/ImageOps.h"
 #include "nodes/NodeUtil.h"
 
@@ -173,6 +175,107 @@ float smoothT(float e0, float e1, float x) {
 }
 vec4 applyFactor(vec4 s, vec3 d, float f) { return vec4(s.rgb + (d - s.rgb) * f, s.a); }
 )";
+
+// ---------------------------------------------------------------- GPU local filters
+
+gpu::TexturePtr textureOf(const Value& v) {
+    if (auto i = std::get_if<GpuImagePtr>(&v.v); i && *i) return (*i)->texture();
+    if (auto c = std::get_if<GpuChannelPtr>(&v.v); c && *c) return (*c)->texture();
+    throw gpu::Error("GPU: expected pixels on the device");
+}
+Value imageValue(gpu::TexturePtr t) {
+    auto r = std::make_shared<GpuImage>();
+    r->w = t->w(), r->h = t->h(), r->tex = std::move(t);
+    return Value(GpuImagePtr(r));
+}
+Value channelValue(gpu::TexturePtr t) {
+    auto r = std::make_shared<GpuChannel>();
+    r->w = t->w(), r->h = t->h(), r->tex = std::move(t);
+    return Value(GpuChannelPtr(r));
+}
+
+// guidedSmooth (fast = false) or fastGuidedSmooth of the w x h channel I on the device, with the
+// same passes: means of I and I^2 (over s x s cells for the fast one), blurred together as one
+// RGBA texture; the coefficients a, b, blurred; then a * I + b (a, b sampled bilinearly from the
+// cells). GPU runs have no region, so the cell grid starts at the buffer's origin.
+Value guidedGpu(EvalContext& ctx, const Value& I, int w, int h, float sigma, float eps, bool fast) {
+    const int s = fast ? guidedScale(sigma) : 1;
+    gpu::PointOp m;
+    m.w = (w + s - 1) / s, m.h = (h + s - 1) / s;
+    m.full = true;
+    if (s == 1) {
+        m.body = "    float v = ch0(p);\n    out0 = vec4(v, v * v, 0.0, 1.0);\n";
+    } else {
+        m.gather = {0};
+        m.params = {float(s)};
+        m.body = R"(
+    int S = int(P[0]);
+    float sum = 0.0, sum2 = 0.0;
+    int cnt = 0;
+    for (int y = p.y * S; y < min((p.y + 1) * S, size0.y); ++y)
+        for (int x = p.x * S; x < min((p.x + 1) * S, size0.x); ++x) {
+            float v = fetchCh0(ivec2(x, y));
+            sum += v, sum2 += v * v, ++cnt;
+        }
+    out0 = vec4(sum / float(cnt), sum2 / float(cnt), 0.0, 1.0);
+)";
+    }
+    const float ls = sigma / s;
+    const Value means = imageValue(gpu::boxBlur(textureOf(gpu::runPass(ctx, m, {I}, {true})[0]), ls, ls));
+    gpu::PointOp c;
+    c.w = m.w, c.h = m.h;
+    c.full = true;
+    c.params = {eps};
+    c.body = R"(
+    vec4 m = img0(p);
+    float var = max(m.g - m.r * m.r, 0.0);
+    float a = var / (var + P[0]);
+    out0 = vec4(a, m.r - a * m.r, 0.0, 1.0);
+)";
+    const Value ab = imageValue(gpu::boxBlur(textureOf(gpu::runPass(ctx, c, {means}, {true})[0]), ls, ls));
+    gpu::PointOp q;
+    q.w = w, q.h = h;
+    if (s == 1) {
+        q.body = "    vec4 c = img1(p);\n    out0 = c.r * ch0(p) + c.g;\n";
+    } else {
+        q.gather = {1};
+        q.params = {1.0f / s};
+        q.body = R"(
+    precise vec2 l = (vec2(p) + 0.5) * P[0];
+    vec4 c = bilinear1(l, false);
+    out0 = c.r * ch0(p) + c.g;
+)";
+    }
+    return gpu::runPass(ctx, q, {I, ab}, {false})[0];
+}
+
+// The sum of every pixel of a GPU image, read back: `first` reduces 16 x 16 blocks of its inputs
+// (gathered) to one RGBA sum each, then plain block sums run down to one pixel.
+std::array<float, 4> sumGpu(EvalContext& ctx, gpu::PointOp first, const std::vector<Value>& in, int w, int h) {
+    first.w = (w + 15) / 16, first.h = (h + 15) / 16;
+    first.full = true;
+    first.inlinable = false;
+    Value cur = gpu::runPass(ctx, first, in, {true})[0];
+    int cw = first.w, ch = first.h;
+    while (cw > 1 || ch > 1) {
+        gpu::PointOp b;
+        b.w = (cw + 15) / 16, b.h = (ch + 15) / 16;
+        b.full = true;
+        b.inlinable = false;
+        b.gather = {0};
+        b.body = R"(
+    vec4 acc = vec4(0.0);
+    for (int y = p.y * 16; y < min(p.y * 16 + 16, size0.y); ++y)
+        for (int x = p.x * 16; x < min(p.x * 16 + 16, size0.x); ++x) acc += fetch0(ivec2(x, y));
+    out0 = acc;
+)";
+        cur = gpu::runPass(ctx, b, {cur}, {true})[0];
+        cw = b.w, ch = b.h;
+    }
+    const ImagePtr px = gpu::download(*std::get<GpuImagePtr>(cur.v));
+    const float* v = px->pixel(0);
+    return {v[0], v[1], v[2], v[3]};
+}
 
 // ---------------------------------------------------------------- Basic
 
@@ -347,115 +450,112 @@ public:
         out[0] = Value(ImagePtr(img));
     }
 
-    // On the GPU when it is per-pixel: Dehaze, Clarity and Texture (and, in scene-linear
-    // projects, the tone equalizer behind Highlights and Shadows) read neighbourhoods.
-    bool gpuSupported(const EvalContext& ctx, const std::vector<Value>& in) const override {
-        if (!gpu::sizedValue(in[0]) || paramF(9) != 0.0f || paramF(10) != 0.0f || paramF(11) != 0.0f) return false;
-        return !ctx.linear() || (paramF(5) == 0.0f && paramF(6) == 0.0f);
-    }
+    // The local filters run as GPU passes around the per-pixel maths: Dehaze's dark channel (its
+    // airlight from an exact selection and a sum on the device), the tone equalizer's guided mask,
+    // and Clarity's and Texture's smoothed luminance. The per-pixel steps between them fuse.
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
     void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         const bool lin = ctx.linear();
         const float temp = paramF(1) / 100, tint = paramF(2) / 100, stops = paramF(3);
-        gpu::PointOp op;
-        op.defaults = {NAN, 1.0f};
-        // P[0..8]: white balance (a matrix in linear projects, gains in legacy ones), then
-        // contrast, highlights, shadows, whites, blacks, vibrance, saturation at P[9..15].
+        const float highlights = paramF(5) / 100, shadows = paramF(6) / 100;
+        const float texture = paramF(9) / 100, clarity = paramF(10) / 100, dehaze = paramF(11) / 100;
+        int w, h;
+        if (!in[0].size(w, h)) throw gpu::Error("GPU: Basic needs an image");
+        const PixelFrame fr = frameOf(ctx, w, h);
+        const float longEdge = float(std::max(fr.fullW, fr.fullH));
+
+        // P[0..9]: white balance (a matrix and the exposure gain in linear projects, gains in legacy
+        // ones); contrast, highlights, shadows, whites, blacks, vibrance, saturation at P[10..16];
+        // texture, clarity, dehaze at P[17..19]; the airlight and its maximum at P[20..23].
+        std::vector<float> P;
         if (lin) {
             colorsci::Mat3 wb;
             colorsci::whiteBalanceMatrix(temp, tint, wb);
             const bool useWb = temp != 0.0f || tint != 0.0f;
-            const float gain = std::exp2(stops);
             for (int r = 0; r < 3; ++r)
-                for (int c = 0; c < 3; ++c) op.params.push_back(useWb ? wb[r][c] : float(r == c));
-            op.params.push_back(gain);  // P[9] in linear projects; the sliders follow at P[10..16]
+                for (int c = 0; c < 3; ++c) P.push_back(useWb ? wb[r][c] : float(r == c));
+            P.push_back(std::exp2(stops));
         } else {
             float gain[3] = {std::exp2(0.7f * temp), std::exp2(-0.5f * tint), std::exp2(-0.7f * temp)};
             const float norm = std::exp2(stops) / luminance(gain[0], gain[1], gain[2]);
-            for (float g : gain) op.params.push_back(g * norm);
-            op.params.resize(10, 0.0f);
+            for (float g : gain) P.push_back(g * norm);
+            P.resize(10, 0.0f);
         }
-        for (int i : {4, 5, 6, 7, 8, 12, 13}) op.params.push_back(paramF(i) / 100);
-        op.functions = kGlslDevelop + std::string(R"(
-const float kMidGreyEv = -2.4739312;
-float sCurve(float x, float p) {
-    float xc = clamp(x, 0.0, 1.0);
-    float y = xc < 0.5 ? 0.5 * powPos(2.0 * xc, p) : 1.0 - 0.5 * powPos(2.0 - 2.0 * xc, p);
-    return y + (x - xc);
-}
-float toneCurve(float v, float highlights, float shadows, float whites, float blacks) {
-    if (highlights != 0.0) {
-        float w = smoothT(0.35, 1.0, v);
-        if (highlights < 0.0) v += highlights * 0.22 * w * max(v, 0.0);
-        else v += highlights * 0.2 * w * clamp(1.25 - v, 0.0, 1.0);
-    }
-    if (shadows != 0.0) {
-        float w = 1.0 - smoothT(0.0, 0.6, v);
-        if (shadows > 0.0) v += shadows * 0.18 * w * smoothT(0.0, 0.2, v);
-        else v += shadows * 0.4 * w * max(v, 0.0);
-    }
-    if (whites != 0.0) {
-        float wp = 1.0 - 0.2 * whites;
-        v += (v / wp - v) * smoothT(0.4, 1.0, v);
-    }
-    if (blacks != 0.0) {
-        float bp = -0.08 * blacks;
-        v += ((v - bp) / (1.0 - bp) - v) * (1.0 - smoothT(0.0, 0.5, v));
-    }
-    return v;
-}
-)") + (lin ? "const bool LIN = true;\n" : "const bool LIN = false;\n");
+        for (int i : {4, 5, 6, 7, 8, 12, 13, 9, 10, 11}) P.push_back(paramF(i) / 100);
+        P.resize(24, 0.0f);
+        const std::string functions = basicGlsl(lin);
+        auto pass = [&](const std::string& body, const std::vector<Value>& pin, bool image) {
+            gpu::PointOp op;
+            op.w = w, op.h = h;
+            op.full = true;
+            op.params = P;
+            op.functions = functions;
+            op.body = body;
+            return gpu::runPass(ctx, op, pin, {image})[0];
+        };
+
+        Value cur = pass("    vec4 s = img0(p);\n    out0 = vec4(basicWb(s.rgb), s.a);\n", {in[0]}, true);
+
+        if (dehaze != 0.0f) {
+            const Value darkRaw = pass("    vec3 c = img0(p).rgb;\n    out0 = clamp(min(c.r, min(c.g, c.b)), 0.0, 1.0);\n",
+                                       {cur}, false);
+            const float sg = std::max(longEdge * 0.01f, 1.0f);
+            const Value dark = channelValue(gpu::boxBlur(textureOf(darkRaw), sg, sg));
+            // Airlight: the average colour of the haziest 0.1% (pixels at or above the dark
+            // channel's value at that rank), as dehazeImage.
+            const size_t n = size_t(w) * h, top = std::max<size_t>(1, n / 1000);
+            const float thresh = gpu::select(*textureOf(dark), {n - top})[0];
+            gpu::PointOp hazy;
+            hazy.gather = {0, 1};
+            hazy.params = {thresh};
+            hazy.body = R"(
+    vec4 acc = vec4(0.0);
+    for (int y = p.y * 16; y < min(p.y * 16 + 16, size0.y); ++y)
+        for (int x = p.x * 16; x < min(p.x * 16 + 16, size0.x); ++x)
+            if (fetchCh1(ivec2(x, y)) >= P[0]) acc += vec4(clamp(fetch0(ivec2(x, y)).rgb, 0.0, 1.0), 1.0);
+    out0 = acc;
+)";
+            const std::array<float, 4> sum = sumGpu(ctx, hazy, {cur, dark}, w, h);
+            const float minAir = lin ? 0.1f : 0.3f;
+            float A[3];
+            for (int k = 0; k < 3; ++k) A[k] = std::max(sum[size_t(k)] / std::max(sum[3], 1.0f), minAir);
+            if (ctx.statsOut) *ctx.statsOut = {A[0], A[1], A[2]};
+            P[20] = A[0], P[21] = A[1], P[22] = A[2], P[23] = std::max({A[0], A[1], A[2]});
+            cur = pass("    vec4 c = img0(p);\n    out0 = vec4(basicDehaze(c.rgb, ch1(p)), c.a);\n", {cur, dark}, true);
+        }
+
+        // Tone. The equalizer's mask is the guided filter on log luminance (linear projects).
+        Value mask;
+        if (lin && (highlights != 0.0f || shadows != 0.0f)) {
+            const Value ev = pass("    out0 = evOf(luminance(img0(p).rgb));\n", {cur}, false);
+            mask = guidedGpu(ctx, ev, w, h, std::max(longEdge * 0.02f, 1.0f), 0.5f, true);
+        }
+        cur = pass("    vec4 c = img0(p);\n    out0 = vec4(basicTone(c.rgb, has1, ch1(p)), c.a);\n", {cur, mask}, true);
+
+        // Local contrast: luminance (log luminance in linear projects) and its smoothed copies.
+        Value lum, coarse, fine;
+        if (clarity != 0.0f || texture != 0.0f) {
+            lum = pass(lin ? "    out0 = evOf(luminance(img0(p).rgb));\n"
+                           : "    out0 = clamp(luminance(img0(p).rgb), 0.0, 1.5);\n",
+                       {cur}, false);
+            if (clarity != 0.0f) {
+                const float sigma = std::max(longEdge * 0.012f, 1.0f);
+                coarse = guidedGpu(ctx, lum, w, h, sigma, lin ? 0.1f : 0.004f, lin);
+            }
+            if (texture != 0.0f) {
+                const float sg = std::max(longEdge * 0.0025f, 0.7f);
+                fine = channelValue(gpu::boxBlur(textureOf(lum), sg, sg));
+            }
+        }
+
+        gpu::PointOp op;
+        op.defaults = {NAN, 1.0f};
+        op.params = P;
+        op.functions = functions;
         op.body = R"(
     vec4 s = img0(p);
-    float contrast = P[10], highlights = P[11], shadows = P[12], whites = P[13], blacks = P[14];
-    float vibrance = P[15], saturation = P[16];
-    vec3 d;
-    if (LIN) {
-        d = vec3(P[0] * s.r + P[1] * s.g + P[2] * s.b, P[3] * s.r + P[4] * s.g + P[5] * s.b,
-                 P[6] * s.r + P[7] * s.g + P[8] * s.b) * P[9];
-        if (contrast != 0.0 || whites != 0.0 || blacks != 0.0) {
-            float e = log2(max(luminance(d), 1.0 / 65536.0)), g = 0.0;
-            float slope = 1.0 + contrast * (contrast > 0.0 ? 0.6 : 0.45);
-            if (contrast != 0.0) g += (slope - 1.0) * 3.0 * tanh((e - kMidGreyEv) / 3.0);
-            float ep = e + g;
-            g += whites * smoothT(-1.5, 1.0, ep) + blacks * 1.5 * (1.0 - smoothT(-9.0, -4.5, ep));
-            d *= exp2(g);
-        }
-        if (vibrance != 0.0 || saturation != 0.0) {
-            vec3 lab = rgbToOklab(d);
-            float C = sqrt(lab.y * lab.y + lab.z * lab.z), vib = vibrance;
-            if (vib > 0.0) {
-                float hue = atan2C(lab.z, lab.y) * 57.29578;
-                float skin = 1.0 - 0.5 * smoothT(20.0, 40.0, hue) * (1.0 - smoothT(75.0, 95.0, hue));
-                vib *= (1.0 - smoothT(0.0, 0.2, C)) * skin;
-            }
-            float m = max(0.0, (1.0 + saturation) * (1.0 + vib));
-            d = oklabToRgb(vec3(lab.x, lab.y * m, lab.z * m));
-        }
-        d = compressToGamut(d);
-    } else {
-        d = linearToSrgb(srgbToLinear(max(s.rgb, 0.0)) * vec3(P[0], P[1], P[2]));
-        if (contrast != 0.0) {
-            float pw = 1.0 + contrast * (contrast > 0.0 ? 0.9 : 0.6);
-            d = vec3(sCurve(d.r, pw), sCurve(d.g, pw), sCurve(d.b, pw));
-        }
-        float l = max(luminance(d), 0.0), nl = toneCurve(l, highlights, shadows, whites, blacks);
-        if (l > 1e-3) d *= min(nl / l, 4.0);
-        else d += nl - l;
-        d = clamp01(d);
-        if (vibrance != 0.0 || saturation != 0.0) {
-            vec3 hsv = rgbToHsv(d);
-            float vib = vibrance;
-            if (vib > 0.0) {
-                float skin = 1.0 - 0.5 * smoothT(0.0, 0.04, hsv.x) * (1.0 - smoothT(0.1, 0.16, hsv.x));
-                vib *= (1.0 - hsv.y) * skin;
-            }
-            float m = max(0.0, (1.0 + saturation) * (1.0 + vib));
-            float ll = luminance(d);
-            d = clamp01(ll + (d - ll) * m);
-        }
-    }
-    out0 = applyFactor(s, d, par1(p));)";
-        gpu::runOver(ctx, *this, op, in, out);
+    out0 = applyFactor(s, basicFinish(img2(p).rgb, has3, ch3(p), has4, ch4(p), has5, ch5(p)), par1(p));)";
+        gpu::runOver(ctx, *this, op, {in[0], in[1], cur, lum, coarse, fine}, out);
     }
 
 private:
@@ -575,6 +675,139 @@ private:
         finishLinear(*img);
         applyFactor(*this, *src, *img, facIn);
         return img;
+    }
+
+    // Basic's per-pixel steps in GLSL, reading the params laid out in evaluateGpu.
+    static std::string basicGlsl(bool lin) {
+        return kGlslDevelop + std::string(lin ? "const bool LIN = true;\n" : "const bool LIN = false;\n") + R"(
+const float kMidGreyEv = -2.4739312;
+float evOf(float y) { return log2(max(y, 1.0 / 65536.0)); }
+float sCurve(float x, float p) {
+    float xc = clamp(x, 0.0, 1.0);
+    float y = xc < 0.5 ? 0.5 * powPos(2.0 * xc, p) : 1.0 - 0.5 * powPos(2.0 - 2.0 * xc, p);
+    return y + (x - xc);
+}
+float toneCurve(float v, float highlights, float shadows, float whites, float blacks) {
+    if (highlights != 0.0) {
+        float w = smoothT(0.35, 1.0, v);
+        if (highlights < 0.0) v += highlights * 0.22 * w * max(v, 0.0);
+        else v += highlights * 0.2 * w * clamp(1.25 - v, 0.0, 1.0);
+    }
+    if (shadows != 0.0) {
+        float w = 1.0 - smoothT(0.0, 0.6, v);
+        if (shadows > 0.0) v += shadows * 0.18 * w * smoothT(0.0, 0.2, v);
+        else v += shadows * 0.4 * w * max(v, 0.0);
+    }
+    if (whites != 0.0) {
+        float wp = 1.0 - 0.2 * whites;
+        v += (v / wp - v) * smoothT(0.4, 1.0, v);
+    }
+    if (blacks != 0.0) {
+        float bp = -0.08 * blacks;
+        v += ((v - bp) / (1.0 - bp) - v) * (1.0 - smoothT(0.0, 0.5, v));
+    }
+    return v;
+}
+vec3 basicWb(vec3 s) {
+    if (LIN)
+        return vec3(P[0] * s.r + P[1] * s.g + P[2] * s.b, P[3] * s.r + P[4] * s.g + P[5] * s.b,
+                    P[6] * s.r + P[7] * s.g + P[8] * s.b) * P[9];
+    return linearToSrgb(srgbToLinear(max(s, 0.0)) * vec3(P[0], P[1], P[2]));
+}
+vec3 basicDehaze(vec3 c, float dark) {
+    float amount = P[19];
+    vec3 A = vec3(P[20], P[21], P[22]);
+    if (amount > 0.0) {
+        float t = max(1.0 - 0.95 * amount * dark / P[23], 0.25);
+        return (c - A) / t + A;
+    }
+    float hz = -amount * (0.35 + 0.4 * dark);
+    return c + (A - c) * hz;
+}
+vec3 basicTone(vec3 d, bool hasMask, float em) {
+    float contrast = P[10], highlights = P[11], shadows = P[12], whites = P[13], blacks = P[14];
+    if (LIN) {
+        if (contrast != 0.0 || hasMask || whites != 0.0 || blacks != 0.0) {
+            float e = evOf(luminance(d)), g = 0.0;
+            float slope = 1.0 + contrast * (contrast > 0.0 ? 0.6 : 0.45);
+            if (contrast != 0.0) g += (slope - 1.0) * 3.0 * tanh((e - kMidGreyEv) / 3.0);
+            if (hasMask) {
+                float hA = highlights * (highlights < 0.0 ? 1.5 : 1.0), sA = shadows * (shadows > 0.0 ? 2.0 : 1.5);
+                g += hA * smoothT(-3.0, -0.5, em) + sA * (1.0 - smoothT(-6.0, -2.5, em));
+            }
+            float ep = e + g;
+            g += whites * smoothT(-1.5, 1.0, ep) + blacks * 1.5 * (1.0 - smoothT(-9.0, -4.5, ep));
+            d *= exp2(g);
+        }
+        return d;
+    }
+    if (contrast != 0.0) {
+        float pw = 1.0 + contrast * (contrast > 0.0 ? 0.9 : 0.6);
+        d = vec3(sCurve(d.r, pw), sCurve(d.g, pw), sCurve(d.b, pw));
+    }
+    float l = max(luminance(d), 0.0), nl = toneCurve(l, highlights, shadows, whites, blacks);
+    if (l > 1e-3) d *= min(nl / l, 4.0);
+    else d += nl - l;
+    return d;
+}
+// Local contrast from the luminance l and its smoothed copies, then vibrance and saturation.
+vec3 basicFinish(vec3 d, bool local, float l, bool hasCoarse, float coarse, bool hasFine, float fine) {
+    float vibrance = P[15], saturation = P[16], texture = P[17], clarity = P[18];
+    if (LIN) {
+        if (local) {
+            float delta = 0.0;
+            if (hasCoarse) {
+                float dt = l - coarse;
+                dt /= 1.0 + 0.5 * abs(dt);
+                float z = (l - kMidGreyEv) / 2.5;
+                delta += clarity * 0.8 * dt * (0.3 + 0.7 * exp(-0.5 * z * z));
+            }
+            if (hasFine) {
+                float dt = l - fine;
+                dt /= 1.0 + 0.5 * abs(dt);
+                delta += texture * dt;
+            }
+            d *= exp2(delta);
+        }
+        if (vibrance != 0.0 || saturation != 0.0) {
+            vec3 lab = rgbToOklab(d);
+            float C = sqrt(lab.y * lab.y + lab.z * lab.z), vib = vibrance;
+            if (vib > 0.0) {
+                float hue = atan2C(lab.z, lab.y) * 57.29578;
+                float skin = 1.0 - 0.5 * smoothT(20.0, 40.0, hue) * (1.0 - smoothT(75.0, 95.0, hue));
+                vib *= (1.0 - smoothT(0.0, 0.2, C)) * skin;
+            }
+            float m = max(0.0, (1.0 + saturation) * (1.0 + vib));
+            d = oklabToRgb(vec3(lab.x, lab.y * m, lab.z * m));
+        }
+        return compressToGamut(d);
+    }
+    if (local) {
+        float delta = 0.0;
+        if (hasCoarse) {
+            float dt = l - coarse;
+            dt /= 1.0 + 3.0 * abs(dt);
+            float mid = max(0.0, 1.0 - (2.0 * l - 1.0) * (2.0 * l - 1.0));
+            delta += clarity * 1.2 * dt * (0.3 + 0.7 * mid);
+        }
+        if (hasFine) delta += texture * 1.5 * (l - fine);
+        d += delta;
+    }
+    d = clamp01(d);
+    if (vibrance != 0.0 || saturation != 0.0) {
+        vec3 hsv = rgbToHsv(d);
+        float vib = vibrance;
+        if (vib > 0.0) {
+            float skin = 1.0 - 0.5 * smoothT(0.0, 0.04, hsv.x) * (1.0 - smoothT(0.1, 0.16, hsv.x));
+            vib *= (1.0 - hsv.y) * skin;
+        }
+        float m = max(0.0, (1.0 + saturation) * (1.0 + vib));
+        float ll = luminance(d);
+        d = clamp01(ll + (d - ll) * m);
+    }
+    return d;
+}
+)";
     }
 
     // Dark channel prior (He et al.): haze lifts the darkest channel of every patch toward the

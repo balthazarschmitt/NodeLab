@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "core/ColorMath.h"
+#include "gpu/PointOp.h"
 #include "nodes/ImageOps.h"
 
 using namespace nodeutil;
@@ -34,6 +35,24 @@ void keyOutputs(const Image& src, bool invert, std::vector<Value>& out, Fn&& mat
     });
     out[0] = Value(ChannelPtr(matte));
     out[1] = Value(ImagePtr(keyed));
+}
+
+// The GPU version of keyOutputs. `matte` sets `float m` from `s` (the pixel) and, for keyers with
+// a Key input (pin 1), `k`: the Key input's pixel (clamped to its edges, as KeySource::at) or
+// the Key Color param in P[0..2].
+void gpuKey(EvalContext& ctx, const Node& node, const std::vector<Value>& in, std::vector<Value>& out,
+            const std::string& matte, std::vector<float> params, bool invert, bool key, const std::string& functions = "") {
+    gpu::PointOp g;
+    g.functions = functions;
+    g.body = "    vec4 s = img0(p);\n";
+    if (key) {
+        g.body += "    vec3 k = has1 ? fetch1(p).rgb : vec3(P[0], P[1], P[2]);\n";
+        g.gather = {1};
+    }
+    g.body += "    float m;\n" + matte + "    m = clamp01(m);\n" + (invert ? "    m = 1.0 - m;\n" : "") +
+              "    out0 = m;\n    out1 = s * m;\n";
+    g.params = std::move(params);
+    gpu::runOver(ctx, node, g, in, out);
 }
 
 // Key color: the Key input's pixel if connected, otherwise the Color param.
@@ -68,10 +87,44 @@ void maskSize(const ChannelPtr& base, const EvalContext& ctx, int& w, int& h) {
     }
 }
 
+// GLSL versions of smoothstep (with its degenerate case) and combineMask.
+const char* const kGlslMatte = R"(
+float smoothstepC(float e0, float e1, float x) {
+    if (e1 <= e0) return x < e0 ? 0.0 : 1.0;
+    float t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+float combineMask(int op, float b, float v) {
+    if (op == 1) return clamp01(b - v);
+    if (op == 2) return clamp01(b * v);
+    if (op == 3) return clamp01(max(b, 1.0 - v));
+    return clamp01(max(b, v));
+}
+)";
+
 // Masks are drawn per pixel from its position (in the full image), so a region draws its window.
 class MaskBase : public Node {
 public:
     int roiPadding(const EvalContext&) const override { return 0; }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>&) const override { return true; }
+
+protected:
+    // Output size on the GPU, which never runs regions: maskSize's.
+    static void gpuSize(const EvalContext& ctx, const std::vector<Value>& in, int& w, int& h) {
+        if (!in[0].size(w, h)) resolveSize({}, ctx, w, h);
+    }
+    // The GPU version: body computes `float shape` at pixel position `xy` (full-image pixels).
+    void runGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out, const std::string& body,
+                std::vector<float> params, int op) {
+        gpu::PointOp g;
+        gpuSize(ctx, in, g.w, g.h);
+        g.functions = kGlslMatte;
+        g.body = "    vec2 xy = vec2(p + uOrigin) + 0.5;\n" + body +
+                 "    out0 = combineMask(" + std::to_string(op) + ", has0 ? ch0(p) : 0.0, par1(p) * shape);\n";
+        g.params = std::move(params);
+        g.defaults = {NAN, 1.0f};
+        gpu::runPoint(ctx, *this, g, in, out);
+    }
 };
 
 class ShapeMaskNode : public MaskBase {
@@ -101,6 +154,21 @@ protected:
             return combineMask(op, sb(bx, by), sv(bx, by) * shape);
         })));
     }
+    void runGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out, bool ellipse) {
+        int w, h;
+        gpuSize(ctx, in, w, h);
+        const float hw = std::max(paramF(2) * w * 0.5f, 1e-3f), hh = std::max(paramF(3) * h * 0.5f, 1e-3f);
+        const float a = -paramF(4) * kPi / 180.0f;
+        std::string body = R"(
+    vec2 d = xy - vec2(P[0], P[1]);
+    float rx = d.x * P[4] - d.y * P[5], ry = d.x * P[5] + d.y * P[4];
+)";
+        body += ellipse ? "    float q = length(vec2(rx / P[2], ry / P[3]));\n"
+                        : "    float q = max(abs(rx) / P[2], abs(ry) / P[3]);\n";
+        body += "    float shape = 1.0 - smoothstepC(1.0 - P[6], 1.0 + 1e-4, q);\n";
+        MaskBase::runGpu(ctx, in, out, body, {paramF(0) * w, paramF(1) * h, hw, hh, std::cos(a), std::sin(a), paramF(5)},
+                         paramI(7));
+    }
 };
 
 #define SHAPE_PARAMS_D(wd, ht, fe)                                                                          \
@@ -117,6 +185,9 @@ public:
                   {{"Mask", PinType::Channel}},
                   SHAPE_PARAMS})
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override { run(ctx, in, out, false); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        runGpu(ctx, in, out, false);
+    }
 };
 
 class EllipseMaskNode : public ShapeMaskNode {
@@ -126,6 +197,9 @@ public:
                   {{"Mask", PinType::Channel}},
                   SHAPE_PARAMS})
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override { run(ctx, in, out, true); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        runGpu(ctx, in, out, true);
+    }
 };
 
 // Lightroom's Radial Gradient: an ellipse mask with a wide feather. Operation "Not" is its Invert.
@@ -136,6 +210,9 @@ public:
                   {{"Mask", PinType::Channel}},
                   SHAPE_PARAMS_D(0.6f, 0.6f, 0.5f)})
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override { run(ctx, in, out, true); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        runGpu(ctx, in, out, true);
+    }
 };
 
 // Lightroom's Linear Gradient: full strength before Start, fading to nothing at End.
@@ -166,6 +243,17 @@ public:
             float t = ((x + 0.5f - x0) * dx + (y + 0.5f - y0) * dy) / len2;
             return combineMask(op, sb(bx, by), sv(bx, by) * (1.0f - smoothstep(0.0f, 1.0f, t)));
         })));
+    }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        int w, h;
+        gpuSize(ctx, in, w, h);
+        const float x0 = paramF(0) * w, y0 = paramF(1) * h;
+        const float dx = paramF(2) * w - x0, dy = paramF(3) * h - y0;
+        runGpu(ctx, in, out,
+               R"(    float t = dot(xy - vec2(P[0], P[1]), vec2(P[2], P[3])) / P[4];
+    float shape = 1.0 - smoothstepC(0.0, 1.0, t);
+)",
+               {x0, y0, dx, dy, std::max(dx * dx + dy * dy, 1e-6f)}, paramI(5));
     }
 };
 
@@ -202,6 +290,15 @@ public:
             return 1.0f - smoothstep(lo, std::max(hi, lo + 1e-4f), v);
         });
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpuKey(ctx, *this, in, out, R"(
+    vec3 c = clamp01(s.rgb);
+    float v = CH < 3 ? s[min(CH, 2)] : (CH < 6 ? rgbToHsv(c)[clamp(CH - 3, 0, 2)] : rgbToYCbCr(c)[max(CH - 6, 0)]);
+    m = 1.0 - smoothstepC(P[0], max(P[1], P[0] + 1e-4), v);
+)",
+               {paramF(1), paramF(2)}, paramB(3), false, std::string(kGlslMatte) + "const int CH = " + std::to_string(paramI(0)) + ";\n");
+    }
 };
 
 class LuminanceKeyNode : public Node {
@@ -219,6 +316,11 @@ public:
         keyOutputs(*src, !paramB(2), out, [&](const float* s, int, int) {
             return smoothstep(lo, hi, luminance(s[0], s[1], s[2]));
         });
+    }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpuKey(ctx, *this, in, out, "    m = smoothstepC(P[0], P[1], luminance(s.rgb));\n",
+               {paramF(0), std::max(paramF(1), paramF(0) + 1e-4f)}, !paramB(2), false, kGlslMatte);
     }
 };
 
@@ -242,6 +344,16 @@ public:
             float diff = std::max({std::fabs(s[0] - k[0]), std::fabs(s[1] - k[1]), std::fabs(s[2] - k[2])});
             return (diff - tol) / fall;
         });
+    }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        float c[3];
+        paramC(0, c);
+        gpuKey(ctx, *this, in, out, R"(
+    vec3 d = abs(s.rgb - k);
+    m = (max(d.r, max(d.g, d.b)) - P[3]) / P[4];
+)",
+               {c[0], c[1], c[2], paramF(1), std::max(paramF(2), 1e-4f)}, false, true);
     }
 };
 
@@ -274,6 +386,17 @@ public:
             return (d - tol) / fall;
         });
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        float c[3];
+        paramC(0, c);
+        gpuKey(ctx, *this, in, out, R"(
+    float d = YCC ? length(rgbToYCbCr(s.rgb).yz - rgbToYCbCr(k).yz) * 2.0 : length(s.rgb - k) / 1.732;
+    m = (d - P[3]) / P[4];
+)",
+               {c[0], c[1], c[2], paramF(1), std::max(paramF(2), 1e-4f)}, false, true,
+               paramI(3) == 1 ? "const bool YCC = true;\n" : "const bool YCC = false;\n");
+    }
 };
 
 class ChromaKeyNode : public Node {
@@ -303,6 +426,18 @@ public:
             return (ang - acc) / fall;
         });
     }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        float c[3];
+        paramC(0, c);
+        gpuKey(ctx, *this, in, out, R"(
+    vec2 a = rgbToYCbCr(s.rgb).yz - 0.5, b = rgbToYCbCr(k).yz - 0.5;
+    float ma = length(a), mb = length(b);
+    if (mb < 1e-5 || ma < P[5] * mb) m = 1.0;
+    else m = (acos(clamp(dot(a, b) / (ma * mb), -1.0, 1.0)) * (180.0 / 3.14159265) - P[3]) / P[4];
+)",
+               {c[0], c[1], c[2], paramF(1), std::max(paramF(2), 1e-3f), paramF(3)}, false, true);
+    }
 };
 
 class ColorSpillNode : public Node {
@@ -329,6 +464,23 @@ public:
             float spill = std::max(0.0f, s[c] - limit * ratio);
             d[c] = s[c] - spill * sf(x, y);
         })));
+    }
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const int c = paramI(1);
+        gpu::PointOp g;
+        g.functions = "const int C = " + std::to_string(c) + ", O1 = " + std::to_string((c + 1) % 3) +
+                      ", O2 = " + std::to_string((c + 2) % 3) + ";\nconst bool AVG = " + (paramI(2) == 1 ? "true" : "false") + ";\n";
+        g.body = R"(
+    vec4 s = img0(p);
+    float limit = AVG ? (s[O1] + s[O2]) * 0.5 : s[O1];
+    float spill = max(0.0, s[C] - limit * P[0]);
+    out0 = s;
+    out0[C] = s[C] - spill * par1(p);
+)";
+        g.params = {paramF(3)};
+        g.defaults = {NAN, 1.0f};
+        gpu::runOver(ctx, *this, g, in, out);
     }
 };
 

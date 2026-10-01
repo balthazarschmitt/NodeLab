@@ -9,7 +9,7 @@ namespace gpu {
 
 namespace {
 
-constexpr int kChunk = 64;  // pixels per thread: its window sum is set up once per chunk
+constexpr int kChunk = 16;  // pixels per thread: its window sum is set up once per chunk
 
 // One box pass along an axis (0: rows, 1: columns): a thread per line chunk, 64 lines per group,
 // so neighbouring threads read neighbouring lines.

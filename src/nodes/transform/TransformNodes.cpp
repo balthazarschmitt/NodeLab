@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include "core/ColorMath.h"
+#include "gpu/PointOp.h"
 #include "nodes/ImageOps.h"
 #include "nodes/NodeUtil.h"
 
@@ -14,6 +15,16 @@ using namespace imageops;
 namespace {
 
 constexpr float kPi = 3.14159265f;
+
+// GPU versions read their source anywhere (gather pin 0) and have its size, like mapImage.
+gpu::PointOp gatherOp(const Value& src, std::string body, std::vector<float> params) {
+    gpu::PointOp op;
+    src.size(op.w, op.h);
+    op.body = std::move(body);
+    op.params = std::move(params);
+    op.gather = {0};
+    return op;
+}
 
 class TransformNode : public Node {
 public:
@@ -40,6 +51,24 @@ public:
             sampleBilinear(*src, sx, sy, d, !wrap);
         })));
     }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        int w, h;
+        in[0].size(w, h);
+        const float a = -paramF(2) * kPi / 180.0f;
+        gpu::runPoint(ctx, *this,
+                      gatherOp(in[0], R"(
+    vec2 c = vec2(size0) * 0.5;
+    vec2 d = vec2(p) + 0.5 - c - vec2(P[0], P[1]);
+    vec2 s = vec2(d.x * P[2] - d.y * P[3], d.x * P[3] + d.y * P[2]) / P[4] + c;
+    if (P[5] != 0.0) s = mod(s, vec2(size0));
+    out0 = bilinear0(s, P[5] == 0.0);
+)",
+                               {paramF(0) * ctx.scale, paramF(1) * ctx.scale, std::cos(a), std::sin(a), std::max(paramF(3), 1e-3f),
+                                paramB(4) ? 1.0f : 0.0f}),
+                      in, out);
+    }
 };
 
 class FlipNode : public Node {
@@ -65,6 +94,17 @@ public:
             const float* p = src->pixel(size_t(sy) * src->w + sx);
             std::copy(p, p + 4, d);
         })));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const int axis = paramI(0);
+        gpu::runPoint(ctx, *this, gatherOp(in[0], R"(
+    ivec2 q = p;
+    if (P[0] != 1.0) q.x = size0.x - 1 - p.x;
+    if (P[0] != 0.0) q.y = size0.y - 1 - p.y;
+    out0 = fetch0(q);
+)", {float(axis)}), in, out);
     }
 };
 
@@ -174,6 +214,35 @@ public:
         }
     }
 
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        int w, h;
+        in[0].size(w, h);
+        int x0, y0, x1, y1;
+        box(w, h, x0, y0, x1, y1);
+        const bool resize = paramB(crop::ResizeImage);
+        float ca = 1, sa = 0, cover = 1;
+        const bool rotate = paramF(crop::Angle) != 0.0f;
+        if (rotate) straighten(w, h, ca, sa, cover);
+        // As evaluateRegion: each output pixel's place in the straightened input, then the box.
+        gpu::PointOp op = gatherOp(in[0], R"(
+    ivec2 q = p + ivec2(P[4] != 0.0 ? vec2(P[0], P[1]) : vec2(0.0));
+    if (q.x < int(P[0]) || q.x >= int(P[2]) || q.y < int(P[1]) || q.y >= int(P[3])) {
+        out0 = vec4(0.0);
+    } else if (P[5] != 0.0) {
+        vec2 c = vec2(size0) * 0.5;
+        vec2 d = (vec2(q) + 0.5 - c) / P[8];
+        out0 = bilinear0(vec2(d.x * P[6] - d.y * P[7], d.x * P[7] + d.y * P[6]) + c, true);
+    } else {
+        out0 = fetch0(q);
+    }
+)",
+                                   {float(x0), float(y0), float(x1), float(y1), resize ? 1.0f : 0.0f, rotate ? 1.0f : 0.0f, ca, sa,
+                                    cover});
+        if (resize) op.w = x1 - x0, op.h = y1 - y0;
+        gpu::runPoint(ctx, *this, op, in, out);
+    }
+
 private:
     // The output region from the part of the input roiMap asked for (r.input): the same pixels as
     // the whole-image path above computes there.
@@ -238,6 +307,23 @@ public:
             d[3] = s[3];
         })));
     }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        int w, h;
+        in[0].size(w, h);
+        const float k = paramF(0), disp = paramF(1);
+        const float half = std::max(w, h) * 0.5f, cx = w * 0.5f, cy = h * 0.5f;
+        const float rmax2 = (cx * cx + cy * cy) / (half * half);
+        const float fit = paramB(2) && k > 0 ? 1.0f / (1.0f + (k + disp * 0.5f) * rmax2) : 1.0f;
+        gpu::runPoint(ctx, *this, gatherOp(in[0], R"(
+    vec2 c = vec2(size0) * 0.5;
+    vec2 q = (vec2(p) + 0.5 - c) / P[3] * P[4];
+    float r2 = q.x * q.x + q.y * q.y;
+    for (int k = 0; k < 3; ++k) out0[k] = bilinear0(q * (1.0 + P[k] * r2) * P[3] + c, true)[k];
+    out0.a = fetch0(p).a;
+)", {k - disp * 0.5f, k, k + disp * 0.5f, half, fit}), in, out);
+    }
 };
 
 // Lightroom's manual lens corrections: distortion, chromatic aberration fringes and vignetting.
@@ -288,6 +374,39 @@ public:
             for (int c = 0; c < 3; ++c) d[c] = clampColor(lin, d[c]);
         })));
     }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        int w, h;
+        in[0].size(w, h);
+        const float half = std::hypot(w * 0.5f, h * 0.5f);
+        const float k = -paramF(0) / 100.0f * 0.25f;
+        const float zoom = paramB(1) && k > 0 ? 1.0f / (1.0f + k) : 1.0f;
+        const float sr = 1.0f + paramF(2) / 100.0f * 0.005f, sb = 1.0f + paramF(3) / 100.0f * 0.005f;
+        const float vig = paramF(4) / 100.0f * 1.5f, power = 1.0f + 5.0f * paramF(5) / 100.0f;
+        const bool geometry = k != 0.0f || sr != 1.0f || sb != 1.0f;
+        gpu::runPoint(ctx, *this, gatherOp(in[0], R"(
+    vec2 c = vec2(size0) * 0.5;
+    vec2 q = (vec2(p) + 0.5 - c) / P[0];
+    float r2 = q.x * q.x + q.y * q.y;
+    vec4 d = fetch0(p);
+    if (P[7] != 0.0) {
+        float m = (1.0 + P[1] * r2) * P[2];
+        for (int k = 0; k < 3; ++k) {
+            vec4 smp = bilinear0(q * (m * P[3 + k] * P[0]) + c, P[8] == 0.0);
+            d[k] = smp[k];
+            if (k == 1) d.a = smp.a;
+        }
+    }
+    if (P[6] != 0.0) {
+        float g = exp2(P[6] * powPos(min(r2, 1.0), P[9] * 0.5));
+        d.rgb = uLinear ? d.rgb * g : linearToSrgb(srgbToLinear(clamp01(d.rgb)) * g);
+    }
+    out0 = vec4(clampColor(uLinear, d.rgb), d.a);
+)",
+                                           {half, k, zoom, sr, 1.0f, sb, vig, geometry ? 1.0f : 0.0f, paramB(1) ? 1.0f : 0.0f, power}),
+                      in, out);
+    }
 };
 
 class DisplaceNode : public Node {
@@ -307,6 +426,15 @@ public:
         out[0] = Value(ImagePtr(mapImage(*src, [&](int x, int y, const float*, float* d) {
             sampleBilinear(*src, x + 0.5f + (sx(x, y) - 0.5f) * kx, y + 0.5f + (sy(x, y) - 0.5f) * ky, d);
         })));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op = gatherOp(in[0], R"(
+    out0 = bilinear0(vec2(p) + 0.5 + (vec2(ch1(p), ch2(p)) - 0.5) * vec2(P[0], P[1]), false);
+)", {paramF(0) * ctx.scale * 2.0f, paramF(1) * ctx.scale * 2.0f});
+        op.defaults = {NAN, 0.5f, 0.5f};
+        gpu::runPoint(ctx, *this, op, in, out);
     }
 };
 
@@ -329,6 +457,18 @@ public:
             sampleBilinear(*src, t[0] * src->w, t[1] * src->h, d, true);
         })));
     }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override {
+        return gpu::sizedValue(in[0]) && gpu::sizedValue(in[1]);
+    }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op = gatherOp(in[0], R"(
+    vec4 t = img1(p);
+    out0 = bilinear0(t.xy * vec2(size0), true);
+)", {});
+        in[1].size(op.w, op.h);  // the UV image's size
+        gpu::runPoint(ctx, *this, op, in, out);
+    }
 };
 
 class CornerPinNode : public Node {
@@ -340,9 +480,23 @@ public:
                    ParamDesc::FloatFree("Upper Right X", 1.0f, 0.0f, 1.0f), ParamDesc::FloatFree("Upper Right Y", 0.0f, 0.0f, 1.0f),
                    ParamDesc::FloatFree("Lower Right X", 1.0f, 0.0f, 1.0f), ParamDesc::FloatFree("Lower Right Y", 1.0f, 0.0f, 1.0f),
                    ParamDesc::FloatFree("Lower Left X", 0.0f, 0.0f, 1.0f), ParamDesc::FloatFree("Lower Left Y", 1.0f, 0.0f, 1.0f)}})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
-        ImagePtr src = toImage(in[0], 0, 0);
-        if (!src) return;
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        double I[9];
+        inverse(I);
+        std::vector<float> m(I, I + 9);
+        gpu::runPoint(ctx, *this, gatherOp(in[0], R"(
+    vec2 uv = (vec2(p) + 0.5) / vec2(size0);
+    float w = P[6] * uv.x + P[7] * uv.y + P[8];
+    if (abs(w) < 1e-12) { out0 = vec4(0.0); return; }
+    vec2 st = vec2(P[0] * uv.x + P[1] * uv.y + P[2], P[3] * uv.x + P[4] * uv.y + P[5]) / w;
+    if (st.x < 0.0 || st.x > 1.0 || st.y < 0.0 || st.y > 1.0) { out0 = vec4(0.0); return; }
+    out0 = bilinear0(st * vec2(size0), false);
+)", m), in, out);
+    }
+
+    // The homography from output to source coordinates (both 0..1).
+    void inverse(double I[9]) const {
         // Homography mapping the unit square to the quad (Heckbert's square-to-quad), then inverted.
         double x0 = paramF(0), y0 = paramF(1), x1 = paramF(2), y1 = paramF(3);
         double x2 = paramF(4), y2 = paramF(5), x3 = paramF(6), y3 = paramF(7);
@@ -359,10 +513,18 @@ public:
             H[3] = y1 - y0 + g * y1, H[4] = y3 - y0 + h * y3, H[5] = y0;
             H[6] = g, H[7] = h, H[8] = 1;
         }
-        // Invert H (adjugate / determinant).
-        double I[9] = {H[4] * H[8] - H[5] * H[7], H[2] * H[7] - H[1] * H[8], H[1] * H[5] - H[2] * H[4],
-                       H[5] * H[6] - H[3] * H[8], H[0] * H[8] - H[2] * H[6], H[2] * H[3] - H[0] * H[5],
-                       H[3] * H[7] - H[4] * H[6], H[1] * H[6] - H[0] * H[7], H[0] * H[4] - H[1] * H[3]};
+        // Invert H (adjugate; the scale cancels in the projective divide).
+        const double A[9] = {H[4] * H[8] - H[5] * H[7], H[2] * H[7] - H[1] * H[8], H[1] * H[5] - H[2] * H[4],
+                             H[5] * H[6] - H[3] * H[8], H[0] * H[8] - H[2] * H[6], H[2] * H[3] - H[0] * H[5],
+                             H[3] * H[7] - H[4] * H[6], H[1] * H[6] - H[0] * H[7], H[0] * H[4] - H[1] * H[3]};
+        std::copy(A, A + 9, I);
+    }
+
+    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+        ImagePtr src = toImage(in[0], 0, 0);
+        if (!src) return;
+        double I[9];
+        inverse(I);
         out[0] = Value(ImagePtr(mapImage(*src, [&](int x, int y, const float*, float* d) {
             double u = (x + 0.5) / src->w, v = (y + 0.5) / src->h;
             double w = I[6] * u + I[7] * v + I[8];

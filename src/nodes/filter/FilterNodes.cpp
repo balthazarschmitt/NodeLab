@@ -16,6 +16,30 @@ constexpr float kPi = 3.14159265f;
 
 std::shared_ptr<Image> copyOf(const Image& src) { return std::make_shared<Image>(src); }
 
+// ---- GPU helpers
+
+// A single-output op over `src`'s pixels that reads the given pins anywhere.
+gpu::PointOp gatherOp(const Value& src, std::string body, std::vector<float> params, std::vector<int> gather = {0}) {
+    gpu::PointOp op;
+    src.size(op.w, op.h);
+    op.body = std::move(body);
+    op.params = std::move(params);
+    op.gather = std::move(gather);
+    return op;
+}
+
+// A GPU value's texture (running it if pending), and a texture as an image value.
+gpu::TexturePtr textureOf(const Value& v) {
+    if (auto i = std::get_if<GpuImagePtr>(&v.v); i && *i) return (*i)->texture();
+    if (auto c = std::get_if<GpuChannelPtr>(&v.v); c && *c) return (*c)->texture();
+    throw gpu::Error("GPU: expected pixels on the device");
+}
+Value imageValue(gpu::TexturePtr t) {
+    auto r = std::make_shared<GpuImage>();
+    r->w = t->w(), r->h = t->h(), r->tex = std::move(t);
+    return Value(GpuImagePtr(r));
+}
+
 // ---------------------------------------------------------------- blurs
 
 class BlurNode : public Node {
@@ -124,6 +148,31 @@ public:
             for (int k = 0; k < 4; ++k) d[k] = acc[k] / steps;
         })));
     }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        int w, h;
+        in[0].size(w, h);
+        const float dist = paramF(0) * ctx.scale, ang = paramF(1) * kPi / 180.0f;
+        const float spin = paramF(2) * kPi / 180.0f, zoom = paramF(3);
+        const int steps = std::clamp(int(std::max({dist, std::fabs(spin) * w * 0.5f, zoom * w * 0.5f})), 1, 96);
+        gpu::PointOp op = gatherOp(in[0], R"(
+    int steps = int(P[0]);
+    vec2 c = vec2(P[4], P[5]) * vec2(size0);
+    vec2 q = vec2(p) + 0.5 - c;
+    vec4 acc = vec4(0.0);
+    for (int s = 0; s < steps; ++s) {
+        float t = steps > 1 ? float(s) / float(steps - 1) : 0.0;
+        float a = P[1] * t, sc = 1.0 - P[2] * t;
+        float ca = cos(a), sa = sin(a);
+        acc += bilinear0(vec2(q.x * ca - q.y * sa, q.x * sa + q.y * ca) * sc + c + vec2(P[6], P[7]) * t, false);
+    }
+    out0 = acc / float(steps);
+)",
+                                   {float(steps), spin, zoom, 0.0f, paramF(4), paramF(5), std::cos(ang) * dist, std::sin(ang) * dist});
+        op.inlinable = false;
+        gpu::runPoint(ctx, *this, op, in, out);
+    }
 };
 
 class BilateralBlurNode : public Node {
@@ -160,6 +209,37 @@ public:
                 }
             for (int k = 0; k < 4; ++k) d[k] = wsum > 0 ? acc[k] / wsum : s[k];
         })));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        int w, h, dw = 0, dh = 0;
+        in[0].size(w, h);
+        // The edges come from the image itself unless a determinator of its size is connected.
+        const bool det = in[1].size(dw, dh) && dw == w && dh == h;
+        const float r = paramF(0) * ctx.scale, cs = paramF(1);
+        const int ri = int(std::ceil(r));
+        const float sr = std::max(r * 0.5f, 0.5f);
+        gpu::PointOp op = gatherOp(in[0], R"(
+    int ri = int(P[0]), step = int(P[1]);
+    bool det = P[4] != 0.0;
+    vec3 c0 = det ? fetch1(p).rgb : fetch0(p).rgb;
+    vec4 acc = vec4(0.0);
+    float wsum = 0.0;
+    for (int j = -ri; j <= ri; j += step)
+        for (int i = -ri; i <= ri; i += step) {
+            ivec2 q = p + ivec2(i, j);
+            vec3 c = (det ? fetch1(q).rgb : fetch0(q).rgb) - c0;
+            float wt = exp(-float(i * i + j * j) * P[2] - dot(c, c) * P[3]);
+            acc += fetch0(q) * wt;
+            wsum += wt;
+        }
+    out0 = wsum > 0.0 ? acc / wsum : fetch0(p);
+)",
+                                   {float(ri), float(std::max(1, ri / 7)), 1.0f / (2.0f * sr * sr), 1.0f / (2.0f * cs * cs), det ? 1.0f : 0.0f},
+                                   {0, 1});
+        op.inlinable = false;
+        gpu::runPoint(ctx, *this, op, in, out);
     }
 };
 
@@ -218,6 +298,35 @@ public:
             d[3] = s[3];
         })));
     }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op = gatherOp(in[0], R"(
+    const float K[72] = float[72](1, 2, 1, 2, 4, 2, 1, 2, 1,  -1, -1, -1, -1, 9, -1, -1, -1, -1,
+                                  0, -1, 0, -1, 5, -1, 0, -1, 0,  -1, -1, -1, -1, 8, -1, -1, -1, -1,
+                                  -1, 0, 1, -2, 0, 2, -1, 0, 1,  -1, 0, 1, -1, 0, 1, -1, 0, 1,
+                                  -3, -3, 5, -3, 0, 5, -3, -3, 5,  1, 2, 1, 0, 1, 0, -1, -2, -1);
+    int type = int(P[0]), base = type * 9;
+    vec3 a = vec3(0.0), b = vec3(0.0);  // the kernel and its transpose
+    for (int j = 0; j < 3; ++j)
+        for (int i = 0; i < 3; ++i) {
+            vec3 v = fetch0(p + ivec2(i - 1, j - 1)).rgb;
+            a += K[base + j * 3 + i] * v;
+            b += K[base + i * 3 + j] * v;
+        }
+    vec3 v;
+    if (type == 0) v = a / 16.0;
+    else if (type == 3) v = a / 8.0;
+    else if (type == 4) v = sqrt(a * a + b * b) * 0.25;
+    else if (type == 5) v = sqrt(a * a + b * b) / 3.0;
+    else if (type == 6) v = sqrt(a * a + b * b) / 15.0;
+    else v = a;
+    vec4 s = fetch0(p);
+    out0 = vec4(clampColor(uLinear, s.rgb + (v - s.rgb) * par1(p)), s.a);
+)", {float(paramI(1))});
+        op.defaults = {NAN, 1.0f};
+        gpu::runPoint(ctx, *this, op, in, out);
+    }
 };
 
 // ---------------------------------------------------------------- morphology
@@ -255,6 +364,42 @@ public:
             res->data[i] = v;
         }
         out[0] = Value(ChannelPtr(res));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const float dist = paramF(1) * ctx.scale, ad = std::max(std::fabs(dist), 1e-3f);
+        // The exact Euclidean distance transform, but only out to Distance (anything farther gives
+        // the same result): per column the nearest seed within reach, then per row the nearest of
+        // those. Seeds are mask pixels when dilating, background ones when eroding.
+        const float reach = std::ceil(ad) + 1.0f;
+        gpu::PointOp col = gatherOp(in[0], R"(
+    int r = int(P[0]);
+    float best = 1e4;
+    for (int dy = -r; dy <= r; ++dy) {
+        int y = p.y + dy;
+        if (y < 0 || y >= size0.y) continue;
+        bool inside = fetchCh0(ivec2(p.x, y)) >= 0.5;
+        if (inside == (P[1] != 0.0)) best = min(best, abs(float(dy)));
+    }
+    out0 = best;
+)", {reach, dist >= 0 ? 1.0f : 0.0f});
+        std::vector<Value> g = gpu::runPass(ctx, col, {in[0]}, {false});
+        gpu::PointOp row = gatherOp(in[0], R"(
+    int r = int(P[0]);
+    float best = 1e8;
+    for (int dx = -r; dx <= r; ++dx) {
+        int x = p.x + dx;
+        if (x < 0 || x >= size1.x) continue;
+        float gy = fetchCh1(ivec2(x, p.y));
+        best = min(best, float(dx * dx) + gy * gy);
+    }
+    float dt = sqrt(best), m = ch0(p), ad = P[2];
+    bool feather = P[3] != 0.0;
+    if (P[1] != 0.0) out0 = feather ? max(m, clamp01(1.0 - dt / ad)) : (dt <= ad ? 1.0 : 0.0);
+    else out0 = feather ? min(m, clamp01(dt / ad)) : (dt > ad ? 1.0 : 0.0);
+)", {reach, dist >= 0 ? 1.0f : 0.0f, ad, paramI(0) == 1 ? 1.0f : 0.0f}, {1});
+        gpu::runPoint(ctx, *this, row, {in[0], g[0]}, out);
     }
 };
 
@@ -309,6 +454,53 @@ public:
             d[3] = s[3];
         })));
     }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const int r = std::max(1, int(std::round(paramF(0) * ctx.scale)));
+        // Window sums of r, g, b, luminance and its square along rows, over the r + 1 pixels ending
+        // (L) and starting (R) at each pixel, clamped to the image as the CPU's table lookups are.
+        gpu::PointOp rows = gatherOp(in[0], R"(
+    int r = int(P[0]);
+    vec4 lo = vec4(0.0), hi = vec4(0.0);
+    vec2 sq = vec2(0.0);
+    for (int i = 0; i <= r; ++i) {
+        int a = p.x - i, b = p.x + i;
+        if (a >= 0) { vec3 c = fetch0(ivec2(a, p.y)).rgb; float l = luminance(c); lo += vec4(c, l); sq.x += l * l; }
+        if (b < size0.x) { vec3 c = fetch0(ivec2(b, p.y)).rgb; float l = luminance(c); hi += vec4(c, l); sq.y += l * l; }
+    }
+    out0 = lo;
+    out1 = hi;
+    out2 = vec4(sq, 0.0, 0.0);
+)", {float(r)});
+        rows.full = true;
+        std::vector<Value> sums = gpu::runPass(ctx, rows, {in[0]}, {true, true, true});
+        // Down the columns, the four quadrants' sums; the one with the least luminance variance
+        // gives its mean colour.
+        gpu::PointOp pick = gatherOp(in[0], R"(
+    int r = int(P[0]);
+    vec4 s[4] = vec4[4](vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0));  // TL TR BL BR
+    vec4 q2 = vec4(0.0);
+    for (int i = 0; i <= r; ++i) {
+        int a = p.y - i, b = p.y + i;
+        if (a >= 0) { ivec2 c = ivec2(p.x, a); s[0] += fetch1(c); s[1] += fetch2(c); q2.xy += fetch3(c).xy; }
+        if (b < size0.y) { ivec2 c = ivec2(p.x, b); s[2] += fetch1(c); s[3] += fetch2(c); q2.zw += fetch3(c).xy; }
+    }
+    float nl = float(min(p.x, r) + 1), nr = float(min(size0.x - 1 - p.x, r) + 1);
+    float nt = float(min(p.y, r) + 1), nb = float(min(size0.y - 1 - p.y, r) + 1);
+    float n[4] = float[4](nl * nt, nr * nt, nl * nb, nr * nb);
+    float best = 1e30;
+    vec3 col = vec3(0.0);
+    for (int q = 0; q < 4; ++q) {
+        float mean = s[q].a / n[q];
+        float var = q2[q] / n[q] - mean * mean;
+        if (var < best) { best = var; col = s[q].rgb / n[q]; }
+    }
+    out0 = vec4(col, fetch0(p).a);
+)", {float(r)}, {0, 1, 2, 3});
+        pick.inlinable = false;
+        gpu::runPoint(ctx, *this, pick, {in[0], sums[0], sums[1], sums[2]}, out);
+    }
 };
 
 class PixelateNode : public Node {
@@ -339,6 +531,38 @@ public:
         });
         out[0] = Value(ImagePtr(img));
     }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        int w, h;
+        in[0].size(w, h);
+        const int bs = std::max(1, int(std::round(paramF(0) * ctx.scale)));
+        const int bw = (w + bs - 1) / bs, bh = (h + bs - 1) / bs;
+        // Sums of each block's part of every row, then of those down each block.
+        gpu::PointOp rows = gatherOp(in[0], R"(
+    int bs = int(P[0]), x0 = p.x * bs, x1 = min(size0.x, x0 + bs);
+    vec4 acc = vec4(0.0);
+    for (int x = x0; x < x1; ++x) acc += fetch0(ivec2(x, p.y));
+    out0 = acc;
+)", {float(bs)});
+        rows.w = bw, rows.full = true;
+        std::vector<Value> r = gpu::runPass(ctx, rows, {in[0]}, {true});
+        gpu::PointOp blocks = gatherOp(r[0], R"(
+    int bs = int(P[0]), y0 = p.y * bs, y1 = min(int(P[1]), y0 + bs);
+    vec4 acc = vec4(0.0);
+    for (int y = y0; y < y1; ++y) acc += fetch0(ivec2(p.x, y));
+    out0 = acc;
+)", {float(bs), float(h)});
+        blocks.h = bh, blocks.full = true;
+        std::vector<Value> b = gpu::runPass(ctx, blocks, r, {true});
+        gpu::PointOp fill = gatherOp(in[0], R"(
+    int bs = int(P[0]);
+    ivec2 blk = p / bs, o = blk * bs;
+    ivec2 n = min(uSize, o + bs) - o;
+    out0 = fetch0(blk) * (1.0 / float(n.x * n.y));
+)", {float(bs)});
+        gpu::runPoint(ctx, *this, fill, b, out);
+    }
 };
 
 class PosterizeNode : public Node {
@@ -358,6 +582,19 @@ public:
             for (int k = 0; k < 3; ++k) d[k] = std::round(clamp01(s[k]) * n) / n;
             d[3] = s[3];
         })));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op;
+        // floor(x + 0.5) is std::round for x >= 0 (GLSL's round may go either way at .5).
+        op.body = R"(
+    vec4 s = img0(p);
+    float n = max(2.0, floor(par1(p) + 0.5)) - 1.0;
+    out0 = vec4(floor(clamp01(s.rgb) * n + 0.5) / n, s.a);
+)";
+        op.defaults = {NAN, 6.0f};
+        gpu::runOver(ctx, *this, op, in, out);
     }
 };
 
@@ -434,6 +671,70 @@ public:
         out[0] = Value(ImagePtr(result));
         out[1] = Value(ImagePtr(glare));
     }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        int w, h;
+        in[0].size(w, h);
+        const int type = paramI(0);
+        const float thr = paramF(1), size = paramF(2) * ctx.scale, strength = paramF(3);
+        gpu::PointOp hiOp;
+        hiOp.w = w, hiOp.h = h;
+        hiOp.body = "    out0 = vec4(max(img0(p).rgb - P[0], 0.0) / max(1.0 - P[0], 1e-3), 1.0);\n";
+        hiOp.params = {thr};
+        hiOp.full = true;
+        const Value hi = gpu::runPass(ctx, hiOp, {in[0]}, {true})[0];
+        gpu::PointOp sum;  // out0 = a * img0 + b * img1, alpha 1
+        sum.w = w, sum.h = h;
+        sum.body = "    out0 = vec4(img0(p).rgb * P[0] + img1(p).rgb * P[1], 1.0);\n";
+        sum.full = true;
+        Value glare;
+        if (type == FogGlow) {
+            const gpu::TexturePtr t = textureOf(hi);
+            sum.params = {0.7f, 0.6f};
+            glare = gpu::runPass(ctx, sum, {imageValue(gpu::boxBlur(t, size * 0.5f, size * 0.5f)),
+                                            imageValue(gpu::boxBlur(t, size * 0.12f, size * 0.12f))},
+                                 {true})[0];
+        } else {
+            // Streaks: shifted, faded copies at doubling offsets, as on the CPU.
+            const int n = type == SimpleStar ? 4 : std::max(2, int(paramF(4)));
+            const float angle0 = paramF(5) * kPi / 180.0f, fade = paramF(6);
+            gpu::PointOp streak = gatherOp(hi, R"(
+    vec2 c = vec2(p) + 0.5, d = vec2(P[0], P[1]);
+    vec4 o = bilinear0(c - d, true) + bilinear0(c + d, true);
+    out0 = vec4(fetch0(p).rgb + o.rgb * P[2], 1.0);
+)", {});
+            streak.full = true;
+            streak.inlinable = false;
+            const float share = 1.0f / (n * std::max(1.0f, std::log2(size)));
+            for (int s = 0; s < n; ++s) {
+                const float a = angle0 + (type == SimpleStar ? s * kPi / 4.0f : s * 2.0f * kPi / n);
+                Value cur = hi;
+                for (float step = 1.0f; step < size; step *= 2.0f) {
+                    streak.params = {std::cos(a) * step, std::sin(a) * step, std::pow(fade, step)};
+                    cur = gpu::runPass(ctx, streak, {cur}, {true})[0];
+                }
+                if (glare.empty()) {
+                    sum.params = {share, 0.0f};
+                    glare = gpu::runPass(ctx, sum, {cur, cur}, {true})[0];
+                } else {
+                    sum.params = {1.0f, share};
+                    glare = gpu::runPass(ctx, sum, {glare, cur}, {true})[0];
+                }
+                gpu::materialize(glare);  // keeps the running sum one texture deep
+            }
+        }
+        gpu::PointOp fin;
+        fin.w = w, fin.h = h;
+        fin.body = R"(
+    vec3 g = img1(p).rgb * P[0];
+    vec4 s = img0(p);
+    out0 = vec4(clampColor(uLinear, s.rgb + g), s.a);
+    out1 = vec4(clampColor(uLinear, g), 1.0);
+)";
+        fin.params = {strength};
+        gpu::runPoint(ctx, *this, fin, {in[0], glare}, out);
+    }
 };
 
 class SunBeamsNode : public Node {
@@ -463,6 +764,23 @@ public:
             for (int k = 0; k < 3; ++k) d[k] = acc[k] / wsum;
             d[3] = s[3];
         })));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp op = gatherOp(in[0], R"(
+    vec2 src = vec2(P[0], P[1]) * vec2(size0), q = vec2(p) + 0.5;
+    vec3 acc = vec3(0.0);
+    float wsum = 0.0;
+    for (int i = 0; i < 48; ++i) {
+        float t = P[2] * float(i) / 48.0, wt = 1.0 - float(i) / 48.0;
+        acc += bilinear0(q + (src - q) * t, false).rgb * wt;
+        wsum += wt;
+    }
+    out0 = vec4(acc / wsum, fetch0(p).a);
+)", {paramF(0), paramF(1), paramF(2)});
+        op.inlinable = false;
+        gpu::runPoint(ctx, *this, op, in, out);
     }
 };
 
