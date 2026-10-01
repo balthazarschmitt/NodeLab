@@ -87,7 +87,7 @@ src/graph     Node (params, flags, region policy), Graph (links, frames, JSON), 
 src/nodes     one file per family: io, color, math (Mix), converter (+Expression), filter, transform,
               matte, texture, utility, group; ImageOps (sampling, box blur, distance transform)
 src/io        image load (stb), ImageWrite (PNG/JPEG/TIFF/EXR, ICC, parallel zlib; Tiff.h IFD writer),
-              RawDecode (LibRaw), Exif (orientation, export EXIF), Export (Lanczos resize), ImageCache (proxies
+              RawDecode (LibRaw), Exif (orientation, export EXIF), Icc (embedded input profiles), Export (Lanczos resize), ImageCache (proxies
               per edge; full-res decoded on demand, scaled levels kept for regions; RAW proxies from a
               half-size decode), project files
 src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (custom canvas), Inspector,

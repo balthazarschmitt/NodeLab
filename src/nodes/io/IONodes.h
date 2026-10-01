@@ -11,7 +11,8 @@ public:
                   {ParamDesc::Path("File"), ParamDesc::Enum("Color Space", 0, {"sRGB", "Linear Rec.709", "Non-Color"}),
                    ParamDesc::Enum("Highlight Reconstruction", 2, {"Clip", "Blend", "Reconstruct"}),
                    ParamDesc::Float("Baseline Exposure", 0.0f, -4.0f, 4.0f),
-                   ParamDesc::Bool("Compensate Camera Exposure", false)}})
+                   ParamDesc::Bool("Compensate Camera Exposure", false),
+                   ParamDesc::Bool("Embedded Profile", true)}})
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override;
 
     // RAW files keep the exposure as shot, which looks about a stop darker than the camera's
@@ -30,14 +31,20 @@ public:
     // How the file's values are read. Legacy projects take them as they are, whatever the
     // Color Space; scene-linear ones decode sRGB files to linear light. RAW files are always
     // linear camera data, so Color Space doesn't apply to them.
+    // An sRGB-encoded file with an embedded ICC profile (Display P3, Adobe RGB) is decoded through
+    // it, like Lightroom, unless Embedded Profile is off.
     ImageCache::Decode decode(bool linearProject) const {
-        return {linearProject && paramI(1) == 0, linearProject, paramI(2)};
+        const bool srgb = linearProject && paramI(1) == 0;
+        return {srgb, linearProject, paramI(2), srgb && paramB(5)};
     }
     bool roiSourceSize(const EvalContext& ctx, int& w, int& h) const override;
-    // Color Space is for ordinary images; Highlight Reconstruction and the exposure only for RAW.
+    // Color Space and Embedded Profile are for ordinary images (the profile only with sRGB);
+    // Highlight Reconstruction and the exposure only for RAW.
     bool paramHidden(int i) const override {
         const bool isRaw = raw::isRawPath(paramS(0));
-        return (i == 1 && isRaw) || (i >= 2 && !isRaw);
+        if (i == 1) return isRaw;
+        if (i == 5) return isRaw || paramI(1) != 0;
+        return i >= 2 && !isRaw;
     }
 };
 

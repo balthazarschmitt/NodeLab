@@ -8,7 +8,7 @@
 namespace {
 std::string entryKey(const std::string& pathU8, const ImageCache::Decode& d) {
     return pathU8 + (d.srgbToLinear ? "|lin" : "|asis") + (d.sceneLinear ? "|scene" : "|legacy") + "|hl" +
-           std::to_string(d.rawHighlights);
+           std::to_string(d.rawHighlights) + (d.embeddedProfile ? "|icc" : "");
 }
 
 // Full-resolution levels kept for zoomed-in viewing: the full image and one smaller level, or two

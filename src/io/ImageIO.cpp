@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <map>
+#include <mutex>
 #include <vector>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -16,28 +18,66 @@
 #include "core/ColorMath.h"
 #include "core/Parallel.h"
 #include "io/Exif.h"
+#include "io/Icc.h"
 #include "io/Paths.h"
 #include "io/RawDecode.h"
 
 namespace {
 
 // Code value -> float for every value of an 8- or 16-bit channel, so decoding is one lookup.
-std::vector<float> decodeTable(int levels, bool srgbToLinear) {
+std::vector<float> decodeTable(int levels, bool srgbToLinear, const icc::Curve* curve = nullptr) {
     std::vector<float> t(static_cast<size_t>(levels));
     for (int i = 0; i < levels; ++i) {
         const float v = float(i) / float(levels - 1);
-        t[size_t(i)] = srgbToLinear ? float(colormath::srgbToLinear(v)) : v;
+        t[size_t(i)] = curve ? curve->eval(v) : srgbToLinear ? float(colormath::srgbToLinear(v)) : v;
     }
     return t;
 }
 
+// With a profile, each channel decodes through its own curve, then the profile's primaries are
+// converted to Rec.709 (colours outside Rec.709 go negative, as in RAW decoding).
 template <typename T>
-void decodePixels(const T* data, Image& img, int levels, bool srgbToLinear) {
-    const std::vector<float> rgb = decodeTable(levels, srgbToLinear), alpha = decodeTable(levels, false);
+void decodePixels(const T* data, Image& img, int levels, bool srgbToLinear, const icc::Profile* profile) {
+    const std::vector<float> alpha = decodeTable(levels, false);
+    if (!profile) {
+        const std::vector<float> rgb = decodeTable(levels, srgbToLinear);
+        parallelFor(img.h, [&](int y) {
+            const size_t i0 = size_t(y) * img.w * 4, i1 = i0 + size_t(img.w) * 4;
+            for (size_t i = i0; i < i1; ++i) img.px[i] = ((i & 3) == 3 ? alpha : rgb)[data[i]];
+        });
+        return;
+    }
+    const std::vector<float> t[3] = {decodeTable(levels, true, &profile->trc[0]),
+                                     decodeTable(levels, true, &profile->trc[1]),
+                                     decodeTable(levels, true, &profile->trc[2])};
+    const auto& m = profile->toRec709;
     parallelFor(img.h, [&](int y) {
         const size_t i0 = size_t(y) * img.w * 4, i1 = i0 + size_t(img.w) * 4;
-        for (size_t i = i0; i < i1; ++i) img.px[i] = ((i & 3) == 3 ? alpha : rgb)[data[i]];
+        for (size_t i = i0; i < i1; i += 4) {
+            const float r = t[0][data[i]], g = t[1][data[i + 1]], b = t[2][data[i + 2]];
+            float* d = &img.px[i];
+            d[0] = m[0][0] * r + m[0][1] * g + m[0][2] * b;
+            d[1] = m[1][0] * r + m[1][1] * g + m[1][2] * b;
+            d[2] = m[2][0] * r + m[2][1] * g + m[2][2] * b;
+            d[3] = alpha[data[i + 3]];
+        }
     });
+}
+
+// The embedded profile to decode with: null for none, sRGB ones, and ones that can't be applied.
+// info receives what embeddedProfileInfo reports.
+std::unique_ptr<icc::Profile> usableProfile(const std::string& pathU8, std::string* info = nullptr) {
+    const std::vector<uint8_t> bytes = icc::embeddedProfile(pathU8);
+    if (bytes.empty()) return nullptr;
+    auto p = std::make_unique<icc::Profile>();
+    std::string why;
+    if (!icc::parse(bytes, *p, &why)) {
+        if (info) *info = "unsupported profile (" + why + "), read as sRGB";
+        return nullptr;
+    }
+    if (icc::isSrgb(*p)) return nullptr;
+    if (info) *info = p->name.empty() ? std::string("embedded profile") : p->name;
+    return p;
 }
 
 std::string lowerExt(const std::string& pathU8) {
@@ -46,7 +86,8 @@ std::string lowerExt(const std::string& pathU8) {
     return e;
 }
 
-std::shared_ptr<Image> loadStb(const std::string& pathU8, std::string& err, bool srgbToLinear) {
+std::shared_ptr<Image> loadStb(const std::string& pathU8, std::string& err, bool srgbToLinear,
+                               const icc::Profile* profile) {
     int w = 0, h = 0, comp = 0;
     const char* p = pathU8.c_str();
     std::shared_ptr<Image> img;
@@ -57,7 +98,7 @@ std::shared_ptr<Image> loadStb(const std::string& pathU8, std::string& err, bool
             return nullptr;
         }
         img = std::make_shared<Image>(w, h);
-        decodePixels(data, *img, 65536, srgbToLinear);
+        decodePixels(data, *img, 65536, srgbToLinear, profile);
         stbi_image_free(data);
     } else {
         stbi_uc* data = stbi_load(p, &w, &h, &comp, 4);
@@ -66,7 +107,7 @@ std::shared_ptr<Image> loadStb(const std::string& pathU8, std::string& err, bool
             return nullptr;
         }
         img = std::make_shared<Image>(w, h);
-        decodePixels(data, *img, 256, srgbToLinear);
+        decodePixels(data, *img, 256, srgbToLinear, profile);
         stbi_image_free(data);
     }
     return img;
@@ -98,7 +139,9 @@ std::shared_ptr<Image> loadImage(const std::string& pathU8, std::string& err, co
         }
         return img;
     }
-    auto img = loadStb(pathU8, err, opt.srgbToLinear);
+    std::unique_ptr<icc::Profile> profile;
+    if (opt.srgbToLinear && opt.embeddedProfile) profile = usableProfile(pathU8);
+    auto img = loadStb(pathU8, err, opt.srgbToLinear, profile.get());
     if (img && opt.sceneLinear) {
         const std::string e = lowerExt(pathU8);
         if (e == ".jpg" || e == ".jpeg") img = exif::applyOrientation(img, exif::jpegOrientation(pathU8));
@@ -106,6 +149,20 @@ std::shared_ptr<Image> loadImage(const std::string& pathU8, std::string& err, co
     if (img && fullW) *fullW = img->w;
     if (img && fullH) *fullH = img->h;
     return img;
+}
+
+std::string embeddedProfileInfo(const std::string& pathU8) {
+    // Asked every frame by the Inspector; the file is read once.
+    static std::mutex mutex;
+    static std::map<std::string, std::string> cache;
+    {
+        std::lock_guard lock(mutex);
+        if (auto it = cache.find(pathU8); it != cache.end()) return it->second;
+    }
+    std::string info;
+    if (!raw::isRawPath(pathU8)) usableProfile(pathU8, &info);
+    std::lock_guard lock(mutex);
+    return cache[pathU8] = info;
 }
 
 bool saveImage(const std::string& pathU8, const Image& img, std::string& err, int jpegQuality) {

@@ -9,6 +9,7 @@
 #include <imgui.h>
 
 #include "core/ColorMath.h"
+#include "io/ImageIO.h"
 #include "nodes/matte/MatteNodes.h"
 #include "ui/ViewerOverlay.h"
 
@@ -224,6 +225,13 @@ bool drawNodeInspector(Node& n, const ParamRow& row, bool& changed) {
         changed |= colorGrading(n, row);
     } else if (auto* brush = dynamic_cast<BrushMaskNode*>(&n)) {
         changed |= brushMask(*brush, row);
+    } else if (t == "io.image_input") {
+        for (int i = 0; i < int(n.params.size()); ++i) row(i);
+        // Which profile Embedded Profile applies, so a P3 or Adobe RGB photo is recognisable.
+        if (n.paramVisible(5) && n.paramB(5)) {
+            const std::string profile = embeddedProfileInfo(n.paramS(0));
+            if (!profile.empty()) ImGui::TextDisabled("Profile: %s", profile.c_str());
+        }
     } else {
         return false;
     }

@@ -5,6 +5,16 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 ## Unreleased
 
+## 0.12.1 (2026-09-30)
+
+- **Embedded colour profiles on input:** JPEGs and PNGs with an ICC profile other than sRGB
+  (Display P3 from iPhones, Adobe RGB, ProPhoto) are decoded through it to linear Rec.709. Before,
+  they were read as sRGB, so their colours came out dull and shifted.
+  - New **Embedded Profile** option on Image Input (on by default), and the Inspector names the
+    profile it found.
+  - Untagged and sRGB-tagged files decode exactly as before, and legacy projects ignore profiles.
+  - Scene-linear projects with P3 or Adobe RGB images will look different (correct) when reopened.
+
 ## 0.12.0 (2026-09-30)
 
 - **RAW default look, like darktable:** RAWs looked flat and about a stop darker than the camera's

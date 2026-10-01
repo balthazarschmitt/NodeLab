@@ -292,6 +292,16 @@ value while nothing is connected.
   project: **sRGB** (photos and most images) converts to linear light; **Linear Rec.709** and
   **Non-Color** (masks, depth, data) load the values as they are. Legacy projects always load them
   as they are. It is hidden for RAW files, which are always linear camera data.
+- **Embedded Profile** (on by default, sRGB Color Space only): photos that carry an ICC colour
+  profile other than sRGB are decoded through it, as Lightroom does. iPhone photos (Display P3)
+  and camera or editor exports in Adobe RGB or ProPhoto otherwise look dull and shifted.
+  - The Inspector shows the profile it found, e.g. "Profile: Display P3". Nothing is shown for
+    untagged and sRGB files, which decode exactly as before.
+  - Colours outside Rec.709 (P3's saturated reds and greens) come out with negative channels,
+    which the Develop nodes and the view transform handle like a RAW's.
+  - Profiles built from lookup tables, and CMYK or Lab ones, can't be applied; the Inspector says
+    so and the file is read as sRGB.
+  - Legacy projects read files as stored and ignore profiles.
 - In scene-linear projects, JPEGs are turned upright from their EXIF orientation, as cameras and
   phones expect. Legacy projects keep the pixels as stored, so old edits still line up.
 - **RAW files** load as scene-linear light with the camera's "as shot" white balance, upright,

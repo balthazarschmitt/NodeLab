@@ -11,6 +11,9 @@ struct DecodeOptions {
     // projects load files as stored, and RAW is encoded to sRGB 0..1 like any other photo.
     bool sceneLinear = false;
     int rawHighlights = 2;  // raw::Highlights (Reconstruct, Image Input's default)
+    // With srgbToLinear: decode through the file's embedded ICC profile (Display P3, Adobe RGB...)
+    // to linear Rec.709 instead of assuming sRGB. sRGB-tagged and untagged files are unaffected.
+    bool embeddedProfile = false;
     bool operator==(const DecodeOptions&) const = default;
 };
 
@@ -23,6 +26,10 @@ std::shared_ptr<Image> loadImage(const std::string& pathU8, std::string& err, co
 inline std::shared_ptr<Image> loadImage(const std::string& pathU8, std::string& err, bool srgbToLinear = false) {
     return loadImage(pathU8, err, DecodeOptions{srgbToLinear});
 }
+
+// What DecodeOptions::embeddedProfile does with a file, for the Inspector: empty when it has no
+// profile or an sRGB one, otherwise the profile's name, or why it can't be used. Cached per path.
+std::string embeddedProfileInfo(const std::string& pathU8);
 
 // File dialog filter and drop check for every format loadImage reads.
 extern const char* const kImageFileFilter;
