@@ -112,9 +112,29 @@ struct NodeInfo {
     bool compact = false;
 };
 
+// A rectangle of pixels.
+struct PixelRect {
+    int x = 0, y = 0, w = 0, h = 0;
+    bool empty() const { return w <= 0 || h <= 0; }
+    bool operator==(const PixelRect&) const = default;
+};
+
+// Region of interest, like darktable's: when the viewer is zoomed in, only the visible part of the
+// image is evaluated, at the resolution the screen shows. A node then receives and returns
+// buffers covering `rect` of its full image (canvasW x canvasH) instead of the whole of it.
+struct RoiWindow {
+    PixelRect rect;
+    int canvasW = 0, canvasH = 0;
+    // For nodes that map regions (Node::roiMap): the part of their input (inputW x inputH) the
+    // input buffers hold.
+    PixelRect input;
+    int inputW = 0, inputH = 0;
+};
+
 struct EvalContext {
     int defaultW = 512, defaultH = 512;  // size used when a node has no sized inputs
     bool proxy = true;                   // preview-resolution sources
+    int proxyEdge = 1280;                // long edge of the preview sources (ImageCache::kProxyEdge)
     // Preview pixels per full-resolution pixel. Sizes in params (blur radius, offsets) are in
     // full-resolution pixels and multiplied by this, so previews match the exported image.
     float scale = 1.0f;
@@ -124,6 +144,15 @@ struct EvalContext {
     // File Output uses the view transform to write display images.
     ColorManagement colorManagement;
     bool linear() const { return colorManagement.linear; }
+
+    // Set while a node runs on part of its image (see RoiWindow and Node::roiPadding); null for
+    // whole images. Nodes that compute positions read it through nodeutil::frameOf.
+    const RoiWindow* roi = nullptr;
+    // Global statistics (Normalize's percentiles), as darktable does for its preview pipe: a
+    // preview run records them in statsOut, and a region run reuses them from previewStats, so a
+    // zoomed-in region looks the same as the whole image and needn't be computed in full.
+    std::vector<float>* statsOut = nullptr;
+    const std::vector<float>* previewStats = nullptr;
 };
 
 class Node {
@@ -138,6 +167,33 @@ public:
     virtual void loadExtra(const nlohmann::json&) {}
     // Folded into the evaluation cache key so changes to extra state trigger recomputation.
     virtual std::string signatureExtra() const { return {}; }
+
+    // ---- Region of interest (see RoiWindow). Each node says what it reads to produce a region.
+    static constexpr int kRoiWhole = -1;
+    // How far around each output pixel the node reads its inputs, in working pixels: 0 for
+    // per-pixel operations, a blur's reach, or kRoiWhole when it needs the whole image (geometry
+    // changes, global statistics). Padded nodes don't need to know about regions: they run on the
+    // padded window and the evaluator keeps the middle. The default covers the per-pixel families.
+    // ctx.roi holds the requested region and the node's full size (for sizes relative to it), and
+    // ctx.previewStats what the node recorded in the preview: nodes with global statistics run on
+    // their window when they have them, and need the whole image otherwise.
+    virtual int roiPadding(const EvalContext&) const {
+        const std::string& c = info().category;
+        return c == "Color" || c == "Mix" || c == "Converter" ? 0 : kRoiWhole;
+    }
+    // Nodes that move pixels without needing the whole image (Crop) map the region themselves:
+    // `in` is the part of their input (inW x inH) needed for `out`. They then run with ctx.roi
+    // set to their output region and must return buffers of exactly that size.
+    virtual bool roiMap(const EvalContext&, int /*inW*/, int /*inH*/, const PixelRect& /*out*/, PixelRect& /*in*/) const {
+        return false;
+    }
+    // Full output size for an input of inW x inH, for nodes that change it (Crop).
+    virtual void roiOutputSize(int inW, int inH, int& w, int& h) const {
+        w = inW;
+        h = inH;
+    }
+    // Full size of a source's image (Image Input) at the region's scale; false for other nodes.
+    virtual bool roiSourceSize(const EvalContext&, int& /*w*/, int& /*h*/) const { return false; }
 
     void initParams() {
         params.clear();

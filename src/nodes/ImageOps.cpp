@@ -126,6 +126,12 @@ void boxBlur(float* data, int w, int h, int ch, float sigmaX, float sigmaY) {
 
 }  // namespace
 
+int blurReach(float sigma) {
+    int r = 0;
+    for (int b : boxRadii(sigma)) r += std::max(0, b);
+    return r;
+}
+
 void blurImage(Image& img, float sigmaX, float sigmaY) {
     if (img.empty()) return;
     boxBlur(img.px.data(), img.w, img.h, 4, sigmaX, sigmaY);

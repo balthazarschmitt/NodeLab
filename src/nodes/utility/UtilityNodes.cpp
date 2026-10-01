@@ -22,7 +22,8 @@ namespace {
 template <typename Fn>
 ImagePtr colorFromChannel(const Node& node, EvalContext& ctx, const Value& v, float def, int pin, Fn&& fn) {
     ChannelPtr c = channelOr(v, def);
-    int w = c->constant ? ctx.defaultW : c->w, h = c->constant ? ctx.defaultH : c->h;
+    int w = c->w, h = c->h;
+    if (c->constant) resolveSize({}, ctx, w, h);
     ChannelSampler s = paramSampler(node, pin, c, w, h);
     auto img = std::make_shared<Image>(w, h);
     parallelFor(h, [&](int y) {
@@ -98,7 +99,9 @@ public:
                   {{"Value", PinType::Channel}},
                   {{"Value", PinType::Channel}},
                   {ParamDesc::Float("Low %", 0.0f, 0.0f, 100.0f), ParamDesc::Float("High %", 100.0f, 0.0f, 100.0f)}})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+    // The range comes from the whole image; a region reuses the preview's (see EvalContext::statsOut).
+    int roiPadding(const EvalContext& ctx) const override { return ctx.previewStats ? 0 : kRoiWhole; }
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         ChannelPtr c = toChannel(in[0]);
         if (!c || c->constant) {
             if (c) out[0] = Value(c);
@@ -106,13 +109,21 @@ public:
         }
         // Percentiles instead of plain min/max, so a few specular or black pixels don't set the
         // range (auto-exposure). 0 / 100 is Blender's min/max; the result is not clamped.
-        std::vector<float> sorted(c->data);
-        auto pct = [&](float p) {
-            size_t k = size_t(std::clamp(p / 100.0f, 0.0f, 1.0f) * float(sorted.size() - 1) + 0.5f);
-            std::nth_element(sorted.begin(), sorted.begin() + k, sorted.end());
-            return sorted[k];
-        };
-        const float lo = pct(std::min(paramF(0), paramF(1))), hi = pct(std::max(paramF(0), paramF(1)));
+        float lo, hi;
+        if (ctx.roi && ctx.previewStats && ctx.previewStats->size() == 2) {
+            lo = (*ctx.previewStats)[0];
+            hi = (*ctx.previewStats)[1];
+        } else {
+            std::vector<float> sorted(c->data);
+            auto pct = [&](float p) {
+                size_t k = size_t(std::clamp(p / 100.0f, 0.0f, 1.0f) * float(sorted.size() - 1) + 0.5f);
+                std::nth_element(sorted.begin(), sorted.begin() + k, sorted.end());
+                return sorted[k];
+            };
+            lo = pct(std::min(paramF(0), paramF(1)));
+            hi = pct(std::max(paramF(0), paramF(1)));
+            if (ctx.statsOut) *ctx.statsOut = {lo, hi};
+        }
         const float range = std::max(hi - lo, 1e-9f);
         out[0] = Value(ChannelPtr(makeChannel(c->w, c->h, [&](int x, int y) {
             return (c->data[size_t(y) * c->w + x] - lo) / range;
@@ -209,6 +220,7 @@ public:
                   {{"", PinType::Image}},
                   {}})
     // Passes the value through untouched (a channel stays a channel).
+    int roiPadding(const EvalContext&) const override { return 0; }
     void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override { out[0] = in[0]; }
 };
 
@@ -218,6 +230,7 @@ public:
                   {{"Off", PinType::Image}, {"On", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Bool("On", false)}})
+    int roiPadding(const EvalContext&) const override { return 0; }
     void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override { out[0] = in[paramB(0) ? 1 : 0]; }
 };
 
@@ -228,6 +241,7 @@ public:
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Position", 0.5f, 0.0f, 1.0f), ParamDesc::Enum("Orientation", 0, {"Vertical line", "Horizontal line"}),
                    ParamDesc::Bool("Show Line", true)}})
+    int roiPadding(const EvalContext&) const override { return 0; }  // the cut is placed in the full image
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         int w, h;
         resolveSize(in, ctx, w, h);
@@ -237,12 +251,13 @@ public:
             return;
         }
         const bool vertical = paramI(1) == 0, line = paramB(2);
-        const int cut = int(paramF(0) * (vertical ? w : h));
+        const PixelFrame fr = frameOf(ctx, w, h);
+        const int cut = int(paramF(0) * (vertical ? fr.fullW : fr.fullH));
         auto img = std::make_shared<Image>(w, h);
         parallelFor(h, [&](int y) {
             ImageSampler sa{a.get(), w, h}, sb{b.get(), w, h};
             for (int x = 0; x < w; ++x) {
-                int c = vertical ? x : y;
+                int c = vertical ? x + fr.x0 : y + fr.y0;
                 const float* p = c < cut ? sa(x, y) : sb(x, y);
                 float* d = img->pixel(size_t(y) * w + x);
                 std::copy(p, p + 4, d);

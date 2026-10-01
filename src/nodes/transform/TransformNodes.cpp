@@ -48,6 +48,14 @@ public:
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Enum("Axis", 0, {"Horizontal", "Vertical", "Both"})}})
+    // A region reads the mirrored region, which flipped is exactly the output.
+    bool roiMap(const EvalContext&, int inW, int inH, const PixelRect& o, PixelRect& in) const override {
+        const int axis = paramI(0);
+        in = o;
+        if (axis != 1) in.x = inW - o.x - o.w;
+        if (axis != 0) in.y = inH - o.y - o.h;
+        return true;
+    }
     void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
@@ -71,9 +79,62 @@ public:
                    ParamDesc::Enum("Aspect", 0, {"Free", "Original", "1:1", "4:5", "5:4", "2:3", "3:2", "3:4", "4:3",
                                                  "5:7", "7:5", "9:16", "16:9"}),
                    ParamDesc::Bool("Constrain to Image", true)}})
-    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+    // Straighten: the rotation around the centre and the scale that hides empty corners.
+    void straighten(int w, int h, float& ca, float& sa, float& cover) const {
+        const float a = -paramF(crop::Angle) * kPi / 180.0f;
+        ca = std::cos(a);
+        sa = std::sin(a);
+        cover = paramB(crop::Constrain) ? std::max((w * std::fabs(ca) + h * std::fabs(sa)) / w,
+                                                   (w * std::fabs(sa) + h * std::fabs(ca)) / h)
+                                        : 1.0f;
+    }
+    // The kept box in pixels of an image of w x h.
+    void box(int w, int h, int& x0, int& y0, int& x1, int& y1) const {
+        const crop::Rect rc = crop::effectiveRect(*this, w, h);
+        x0 = int(rc.l * w), x1 = int(rc.r * w);
+        y0 = int(rc.t * h), y1 = int(rc.b * h);
+        x1 = std::max(x1, x0 + 1), y1 = std::max(y1, y0 + 1);
+        x1 = std::min(x1, w), y1 = std::min(y1, h);
+        x0 = std::min(x0, x1 - 1), y0 = std::min(y0, y1 - 1);
+    }
+    void roiOutputSize(int inW, int inH, int& w, int& h) const override {
+        w = inW;
+        h = inH;
+        if (!paramB(crop::ResizeImage)) return;
+        int x0, y0, x1, y1;
+        box(inW, inH, x0, y0, x1, y1);
+        w = x1 - x0;
+        h = y1 - y0;
+    }
+    // A region reads the matching part of the input: shifted by the box, and through the
+    // straightening rotation (plus a pixel for bilinear sampling).
+    bool roiMap(const EvalContext&, int inW, int inH, const PixelRect& o, PixelRect& in) const override {
+        int x0 = 0, y0 = 0, x1, y1;
+        if (paramB(crop::ResizeImage)) box(inW, inH, x0, y0, x1, y1);
+        in = {o.x + x0, o.y + y0, o.w, o.h};
+        if (paramF(crop::Angle) == 0.0f) return true;
+        float ca, sa, cover;
+        straighten(inW, inH, ca, sa, cover);
+        const float cx = inW * 0.5f, cy = inH * 0.5f;
+        float lx = 1e30f, ly = 1e30f, hx = -1e30f, hy = -1e30f;
+        for (int c = 0; c < 4; ++c) {
+            const float px = (float(c & 1 ? in.x + in.w : in.x) - cx) / cover;
+            const float py = (float(c & 2 ? in.y + in.h : in.y) - cy) / cover;
+            const float sx = px * ca - py * sa + cx, sy = px * sa + py * ca + cy;
+            lx = std::min(lx, sx), hx = std::max(hx, sx);
+            ly = std::min(ly, sy), hy = std::max(hy, sy);
+        }
+        const int ix0 = int(std::floor(lx)) - 2, iy0 = int(std::floor(ly)) - 2;
+        in = {ix0, iy0, int(std::ceil(hx)) + 2 - ix0, int(std::ceil(hy)) + 2 - iy0};
+        return true;
+    }
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
+        if (ctx.roi) {
+            out[0] = Value(evaluateRegion(*ctx.roi, *src));
+            return;
+        }
         // Straighten first: rotate around the centre (positive = clockwise, like Lightroom), scaled up
         // just enough that no empty corners show when Constrain to Image is on.
         const float deg = paramF(crop::Angle);
@@ -111,6 +172,39 @@ public:
                 for (int k = 0; k < 4; ++k) d[k] = in ? s[k] : 0.0f;
             })));
         }
+    }
+
+private:
+    // The output region from the part of the input roiMap asked for (r.input): the same pixels as
+    // the whole-image path above computes there.
+    ImagePtr evaluateRegion(const RoiWindow& r, const Image& src) const {
+        const int inW = r.inputW, inH = r.inputH;
+        int x0, y0, x1, y1;
+        box(inW, inH, x0, y0, x1, y1);
+        const bool resize = paramB(crop::ResizeImage);
+        const int ox = resize ? x0 : 0, oy = resize ? y0 : 0;
+        const bool rotate = paramF(crop::Angle) != 0.0f;
+        float ca = 1, sa = 0, cover = 1;
+        if (rotate) straighten(inW, inH, ca, sa, cover);
+        const float cx = inW * 0.5f, cy = inH * 0.5f;
+        auto img = std::make_shared<Image>(r.rect.w, r.rect.h);
+        parallelFor(img->h, [&](int by) {
+            for (int bx = 0; bx < img->w; ++bx) {
+                // Pixel in the straightened input.
+                const int x = bx + r.rect.x + ox, y = by + r.rect.y + oy;
+                float* d = img->pixel(size_t(by) * img->w + bx);
+                if (!(x >= x0 && x < x1 && y >= y0 && y < y1)) {
+                    std::fill(d, d + 4, 0.0f);
+                } else if (rotate) {
+                    const float px = (x + 0.5f - cx) / cover, py = (y + 0.5f - cy) / cover;
+                    sampleBilinear(src, px * ca - py * sa + cx - r.input.x, px * sa + py * ca + cy - r.input.y, d, true);
+                } else {
+                    const float* p = src.pixel(size_t(y - r.input.y) * src.w + x - r.input.x);
+                    std::copy(p, p + 4, d);
+                }
+            }
+        });
+        return img;
     }
 };
 

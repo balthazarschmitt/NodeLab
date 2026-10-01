@@ -17,12 +17,25 @@
 
 namespace nodeutil {
 
-// Resolution of the first sized input, else the context default.
+// Resolution of the first sized input, else the context default (the region's window when a
+// region is evaluated).
 inline void resolveSize(const std::vector<Value>& in, const EvalContext& ctx, int& w, int& h) {
     for (const auto& v : in)
         if (v.size(w, h)) return;
-    w = ctx.defaultW;
-    h = ctx.defaultH;
+    w = ctx.roi ? ctx.roi->rect.w : ctx.defaultW;
+    h = ctx.roi ? ctx.roi->rect.h : ctx.defaultH;
+}
+
+// Where a node's w x h buffers sit in its full image: the whole of it normally, or the window of
+// a region (see RoiWindow). Nodes that compute positions (textures, masks, coordinates) work in
+// the full image's pixels, so a region looks the same as that part of the whole image.
+struct PixelFrame {
+    int x0 = 0, y0 = 0;          // buffer origin in the full image
+    int fullW = 1, fullH = 1;    // full image size
+};
+inline PixelFrame frameOf(const EvalContext& ctx, int w, int h) {
+    if (ctx.roi) return {ctx.roi->rect.x, ctx.roi->rect.y, ctx.roi->canvasW, ctx.roi->canvasH};
+    return {0, 0, w, h};
 }
 
 // Channel for an input, or a constant `def` when nothing usable is there.

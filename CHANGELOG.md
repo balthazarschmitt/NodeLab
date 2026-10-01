@@ -5,6 +5,23 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 ## Unreleased
 
+## 0.11.0 (2026-09-30)
+
+- **Full-resolution viewing:** zoom in past the preview and the Original and Result panels sharpen
+  to the photo's real pixels, up to 100%.
+  - Only the visible part is computed, from the full-resolution image, after the preview shows.
+    Nodes run on just the area they need, with a margin for blurs and other neighbourhood filters.
+  - Nodes that use whole-image statistics (Normalize, Basic's Dehaze) reuse the preview's, so
+    the zoomed-in part matches the rest of the image.
+  - A few nodes still need the whole image (groups, Pixelate, Directional Blur, Glare, Sun
+    Beams). Zoomed in, a graph with one of these keeps showing the preview.
+- **The preview follows the panel size:** from 768 to 2048 pixels on the long edge, instead of a
+  fixed 1280. Large panels look sharper, and small ones evaluate faster.
+- **Drafts while dragging:** when a preview takes longer than 100 ms, slider drags evaluate at half
+  size and refine when you let go, like darktable and Lightroom.
+- **Lower export memory:** exports drop each node's result once nothing else reads it, so a large
+  photo no longer holds one full-size image per node.
+
 ## 0.10.0 (2026-09-30)
 
 - **Export formats:** 16-bit PNG, 8/16-bit TIFF (Deflate) and **OpenEXR** (half or full float),

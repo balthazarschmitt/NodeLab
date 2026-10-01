@@ -30,9 +30,38 @@ public:
     ImagePtr evaluateDisplay(const Graph& g, int nodeId, EvalContext& ctx, int pin = 0);
     Value evaluateOutput(const Graph& g, int nodeId, int pin, EvalContext& ctx);
 
+    // Cache levels. Each keeps its own results, so moving between them throws no work away: the
+    // preview; a draft at half the preview's resolution while a slow graph is being dragged
+    // (progressive refinement, as in darktable and Lightroom); and regions for zoomed-in viewing.
+    enum Level { Preview, Draft, Region, kLevels };
+    void setLevel(Level l) { level_ = l; }
+    Level level() const { return level_; }
+
+    // The part of a top-level node's output a zoomed-in viewer shows, evaluated at ctx.scale
+    // (see initRegionContext) from full-resolution sources, without computing the rest: each node
+    // runs on the region its consumers need, grown by its Node::roiPadding. The region, in 0..1
+    // of the output, is rounded out to whole pixels. The preview of the same graph must have been
+    // evaluated first (it tells which values are sized, and holds the global statistics).
+    // Returns null when the graph can't be evaluated by region; the viewer then keeps the preview.
+    struct RegionResult {
+        ImagePtr image;
+        float u0 = 0, v0 = 0, u1 = 1, v1 = 1;  // where the image sits, in 0..1 of the whole output
+    };
+    std::optional<RegionResult> evaluateRegion(const Graph& g, int nodeId, int pin, EvalContext& ctx, float u0, float v0,
+                                               float u1, float v1);
+
     // Drop cache entries for nodes that no longer exist.
     void prune(const Graph& g);
-    void clearCache() { cache_.clear(); }
+    void clearCache() {
+        for (auto& c : cache_) c.clear();
+    }
+    void clearLevel(Level l) { cache_[l].clear(); }
+    // Memory held by a level's cached results.
+    size_t bytes(Level l) const;
+
+    // One-off renders (exports): drop each node's result once every node reading it has run, so a
+    // full-resolution render holds only the images still needed instead of one per node.
+    bool releaseIntermediates = false;
 
     int recomputeCount = 0;  // nodes actually evaluated (for tests / stats)
 
@@ -48,15 +77,24 @@ private:
         size_t sig = 0;
         std::vector<Value> outs;
         double ms = 0;
+        std::vector<float> stats;  // global statistics recorded by a preview run (EvalContext::statsOut)
     };
     size_t ensure(const Graph& g, int nodeId, EvalContext& ctx, std::unordered_map<int, size_t>& pass);
+    // Runs a node (or its bypass when muted) and stores the result in e.
+    void run(const Graph& g, Node& n, EvalContext& ctx, const std::vector<Value>& inputs, Entry& e, size_t sig);
+    std::string baseKey(const Node& n, const EvalContext& ctx) const;
 
-    std::unordered_map<int, Entry> cache_;
+    Level level_ = Preview;
+    std::unordered_map<int, Entry> cache_[kLevels];
+    std::unordered_map<int, int> readers_;  // releaseIntermediates: reads of each node still to come
 };
 
 // Sets the context's colour management from the root graph, and its size and scale from the first
 // Image Input that loads.
 void initContextSize(const Graph& g, EvalContext& ctx);
+// For Evaluator::evaluateRegion: full-resolution sources scaled by `scale`, with the working size
+// of the first Image Input's level at that scale. False when no Image Input has loaded.
+bool initRegionContext(const Graph& g, EvalContext& ctx, float scale);
 
 // Runs evaluation on a background thread. Newer submissions replace queued ones; the UI keeps
 // showing the last completed result meanwhile. A running job is normally left to finish, so a
@@ -64,12 +102,36 @@ void initContextSize(const Graph& g, EvalContext& ctx);
 // result is the one that matters (a finished gesture, undo, a typed value).
 class AsyncEvaluator {
 public:
+    // A zoomed-in view: the part of a top-level node's output it shows, evaluated sharper than the
+    // preview from the full-resolution sources (Evaluator::evaluateRegion).
+    struct Detail {
+        int tag = 0;  // the caller's, copied to the tile (which view it is for)
+        int node = 0, pin = 0;
+        float u0 = 0, v0 = 0, u1 = 1, v1 = 1;  // visible part, in 0..1 of the output
+        float screenW = 0;                     // screen pixels across the whole output's width
+    };
+    struct Options {
+        int proxyEdge = 1280;  // long edge of the preview sources (ImageCache::kProxyEdge)
+        // Half the proxy edge, in its own cache level: quick feedback while dragging a slider on a
+        // slow graph, refined by the next full submission (progressive refinement).
+        bool draft = false;
+        std::vector<Detail> details;  // evaluated after the preview (not for drafts)
+    };
+    struct Tile {
+        int tag = 0;        // Detail::tag
+        ImagePtr image;     // null: the preview is already as sharp, or the graph can't do regions
+        float u0 = 0, v0 = 0, u1 = 1, v1 = 1;  // where it sits, in 0..1 of the output
+    };
     struct Result {
-        std::vector<ImagePtr> images;    // one per submitted target
+        std::vector<ImagePtr> images;    // one per submitted target (empty: only tiles)
         std::vector<std::string> errors;  // one per submitted target (empty = ok)
         double ms = 0;
         uint64_t generation = 0;
+        bool draft = false;
         std::unordered_map<int, double> nodeMs;  // top-level node timings (see Evaluator::timings)
+        // Details, delivered after the images (merged into them if those weren't polled yet).
+        std::vector<Tile> tiles;
+        bool tilesDone = false;
     };
 
     explicit AsyncEvaluator(ImageCache& cache);
@@ -79,7 +141,11 @@ public:
 
     // Evaluates several display targets in one pass (they share the node cache).
     // pins[i]: which output of targets[i] to show (defaults to 0).
-    void submit(nlohmann::json graphJson, std::vector<NodePath> targets, std::vector<int> pins = {}, bool preempt = false);
+    void submit(nlohmann::json graphJson, std::vector<NodePath> targets, std::vector<int> pins, bool preempt,
+                Options options);
+    void submit(nlohmann::json graphJson, std::vector<NodePath> targets, std::vector<int> pins = {}, bool preempt = false) {
+        submit(std::move(graphJson), std::move(targets), std::move(pins), preempt, Options());
+    }
     // Cancels the running job if a newer one is queued (e.g. when a drag ends: the running job
     // shows an intermediate value and the queued one the final value). Nodes it already finished
     // stay cached.
@@ -93,9 +159,13 @@ private:
         nlohmann::json graph;
         std::vector<NodePath> targets;
         std::vector<int> pins;
+        Options options;
         uint64_t generation = 0;
     };
     void run();
+    std::vector<Tile> evaluateDetails(const Graph& g, const Job& job, EvalContext& ctx);
+    // Drops cached levels beyond the memory budget.
+    void trimCache();
 
     ImageCache& cache_;
     Evaluator evaluator_;
@@ -108,4 +178,5 @@ private:
     bool quit_ = false;
     std::atomic<bool> cancel_{false};
     std::atomic<bool> busy_{false};
+    bool inDetails_ = false;  // a new submission cancels detail work (guarded by mutex_)
 };

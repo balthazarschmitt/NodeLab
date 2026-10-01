@@ -1,5 +1,7 @@
 #include "core/Value.h"
 
+#include <algorithm>
+
 #include "core/Parallel.h"
 
 const char* pinTypeName(PinType t) {
@@ -86,4 +88,48 @@ bool canConvert(PinType from, PinType to) {
         case PinType::Number: return false;                     // only numbers are numbers
     }
     return false;
+}
+
+ImagePtr cropImage(const Image& src, int x0, int y0, int w, int h) {
+    auto out = std::make_shared<Image>(w, h);
+    for (int y = 0; y < h; ++y) {
+        const float* s = src.pixel(size_t(y + y0) * src.w + x0);
+        std::copy(s, s + size_t(w) * 4, out->pixel(size_t(y) * w));
+    }
+    return out;
+}
+
+Value cropValue(const Value& v, int x0, int y0, int w, int h) {
+    int vw, vh;
+    if (!v.size(vw, vh) || (x0 == 0 && y0 == 0 && w == vw && h == vh)) return v;
+    if (auto p = std::get_if<ImagePtr>(&v.v)) return Value(cropImage(**p, x0, y0, w, h));
+    const Channel& c = *std::get<ChannelPtr>(v.v);
+    auto out = std::make_shared<Channel>(Channel::makeSized(w, h));
+    for (int y = 0; y < h; ++y) {
+        const float* s = c.data.data() + size_t(y + y0) * c.w + x0;
+        std::copy(s, s + w, out->data.data() + size_t(y) * w);
+    }
+    return Value(ChannelPtr(out));
+}
+
+Value resampleValue(const Value& v, int w, int h) {
+    int vw, vh;
+    if (!v.size(vw, vh) || (vw == w && vh == h)) return v;
+    // Nearest neighbour, as nodes sample inputs of another size (nodeutil::ImageSampler).
+    auto sx = [&](int x) { return std::min(vw - 1, x * vw / std::max(1, w)); };
+    auto sy = [&](int y) { return std::min(vh - 1, y * vh / std::max(1, h)); };
+    if (auto p = std::get_if<ImagePtr>(&v.v)) {
+        auto out = std::make_shared<Image>(w, h);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                const float* s = (*p)->pixel(size_t(sy(y)) * vw + sx(x));
+                std::copy(s, s + 4, out->pixel(size_t(y) * w + x));
+            }
+        return Value(ImagePtr(out));
+    }
+    const Channel& c = *std::get<ChannelPtr>(v.v);
+    auto out = std::make_shared<Channel>(Channel::makeSized(w, h));
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) out->data[size_t(y) * w + x] = c.data[size_t(sy(y)) * vw + sx(x)];
+    return Value(ChannelPtr(out));
 }

@@ -70,11 +70,25 @@ struct Histogram {
 // Average RGB of the pixels in the inclusive rectangle (clamped to the image).
 void averageColor(const Image& img, int x0, int y0, int x1, int y1, float rgb[3]);
 
+// A sharper texture of part of the image (a zoomed-in view's detail), drawn over it.
+struct ViewDetail {
+    const GLTexture* tex = nullptr;
+    float u0 = 0, v0 = 0, u1 = 1, v1 = 1;  // where it sits, in 0..1 of the image
+};
+
+// What a view showed, in framebuffer pixels (for the proxy size and detail requests).
+struct ViewInfo {
+    float panelW = 0, panelH = 0;          // the view's area
+    float imageW = 0;                      // width the whole image is drawn at
+    float u0 = 0, v0 = 0, u1 = 1, v1 = 1;  // visible part of the image, in 0..1
+};
+
 // Draws the texture fitted to the current region with zoom/pan interaction.
 // Wheel zooms around the cursor, left/middle drag pans, double-click resets.
 // With pick set (and pick->image non-null), left mouse picks colours instead of panning.
 void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const char* emptyText,
-                   PickRequest* pick = nullptr, ImageOverlay* overlay = nullptr);
+                   PickRequest* pick = nullptr, ImageOverlay* overlay = nullptr, const ViewDetail* detail = nullptr,
+                   ViewInfo* info = nullptr);
 
 // Histogram box (RGB + luminance) drawn at `pos`, with Lightroom's clipping triangles in the top
 // corners. Returns true when a triangle was clicked (toggles the clipping warning).

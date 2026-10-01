@@ -261,10 +261,12 @@ void validate(const std::string& label, const Program& p, const std::string& src
 }
 
 // Shared driver: runs every program over spans of a row, then calls
-// emit(results, firstPixelIndex, count) with one result array per program.
+// emit(results, firstPixelIndex, count) with one result array per program. Coordinates (x y u v
+// w h) are of the full image, so a region (see RoiWindow) computes the same as the whole image.
 template <typename Emit>
-void runExpressions(const Node& node, const std::vector<Value>& in, int in1Pin, int in2Pin,
+void runExpressions(const Node& node, const EvalContext& ctx, const std::vector<Value>& in, int in1Pin, int in2Pin,
                     const std::vector<const Program*>& progs, int w, int h, Emit&& emit) {
+    const PixelFrame fr = frameOf(ctx, w, h);
     ImagePtr img = toImage(in[0], w, h);
     ChannelPtr c1 = channelOr(in[in1Pin], 0.0f), c2 = channelOr(in[in2Pin], 0.0f);
     ChannelSampler s1 = paramSampler(node, in1Pin, c1, w, h), s2 = paramSampler(node, in2Pin, c2, w, h);
@@ -274,8 +276,8 @@ void runExpressions(const Node& node, const std::vector<Value>& in, int in1Pin, 
         for (size_t k = 0; k < progs.size(); ++k) {
             progs[k]->bind(ws[k]);
             // Sizes are the same for every pixel.
-            if (double* v = progs[k]->var(ws[k], exprvm::W)) std::fill_n(v, kSpan, double(w));
-            if (double* v = progs[k]->var(ws[k], exprvm::H)) std::fill_n(v, kSpan, double(h));
+            if (double* v = progs[k]->var(ws[k], exprvm::W)) std::fill_n(v, kSpan, double(fr.fullW));
+            if (double* v = progs[k]->var(ws[k], exprvm::H)) std::fill_n(v, kSpan, double(fr.fullH));
         }
         std::vector<const double*> results(progs.size());
         for (int y = y0; y < y1; ++y)
@@ -294,10 +296,10 @@ void runExpressions(const Node& node, const std::vector<Value>& in, int in1Pin, 
                     fill(exprvm::A, [&](int x) { return img ? double(si(x, y)[3]) : 1.0; });
                     fill(exprvm::In1, [&](int x) { return double(s1(x, y)); });
                     fill(exprvm::In2, [&](int x) { return double(s2(x, y)); });
-                    fill(exprvm::X, [&](int x) { return double(x); });
-                    fill(exprvm::Y, [&](int) { return double(y); });
-                    fill(exprvm::U, [&](int x) { return (x + 0.5) / w; });
-                    fill(exprvm::V, [&](int) { return (y + 0.5) / h; });
+                    fill(exprvm::X, [&](int x) { return double(x + fr.x0); });
+                    fill(exprvm::Y, [&](int) { return double(y + fr.y0); });
+                    fill(exprvm::U, [&](int x) { return (x + fr.x0 + 0.5) / fr.fullW; });
+                    fill(exprvm::V, [&](int) { return (y + fr.y0 + 0.5) / fr.fullH; });
                     results[k] = p.run(ws[k], n);
                 }
                 emit(results, size_t(y) * w + x0, n);
@@ -321,7 +323,7 @@ public:
         int w, h;
         resolveSize(in, ctx, w, h);
         auto ch = std::make_shared<Channel>(Channel::makeSized(w, h));
-        runExpressions(*this, in, 1, 2, {&prog}, w, h, [&](const auto& res, size_t i0, int n) {
+        runExpressions(*this, ctx, in, 1, 2, {&prog}, w, h, [&](const auto& res, size_t i0, int n) {
             for (int i = 0; i < n; ++i) ch->data[i0 + size_t(i)] = finite(res[0][i]);
         });
         out[0] = Value(ChannelPtr(ch));
@@ -345,7 +347,7 @@ public:
         auto img = std::make_shared<Image>(w, h);
         ImagePtr src = toImage(in[0], w, h);
         const bool keepAlpha = src && src->w == w && src->h == h;
-        runExpressions(*this, in, 1, 2, {&pr, &pg, &pb}, w, h, [&](const auto& res, size_t i0, int n) {
+        runExpressions(*this, ctx, in, 1, 2, {&pr, &pg, &pb}, w, h, [&](const auto& res, size_t i0, int n) {
             for (int i = 0; i < n; ++i) {
                 const size_t p = i0 + size_t(i);
                 float* d = img->pixel(p);

@@ -174,7 +174,7 @@ int App::run(const RunOptions& opt) {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         std::string shotPath;
-        if (script.active()) shotPath = script.step(!eval_->busy() && !evalDirty_, quit_);
+        if (script.active()) shotPath = script.step(idle(), quit_);
         ImGui::NewFrame();
         drawFrame();
         ImGui::Render();
@@ -189,7 +189,7 @@ int App::run(const RunOptions& opt) {
         if (!opt.screenshot.empty() && !script.active()) {
             // Plain --screenshot: wait for evaluation to settle and layout to stabilize.
             ++frame;
-            settled = (!eval_->busy() && !evalDirty_) ? settled + 1 : 0;
+            settled = idle() ? settled + 1 : 0;
             if ((frame > 30 && settled > 10) || frame > 600) {
                 shotPath = opt.screenshot;
                 quit_ = true;
@@ -262,6 +262,36 @@ void App::drawFrame() {
 
     // Kick evaluation after the UI had a chance to change the graph this frame.
     const bool gesture = ImGui::IsAnyItemActive() || ImGui::IsMouseDown(ImGuiMouseButton_Left) || editor_.interacting();
+    // The proxy follows the views' size; changed when no gesture (such as resizing a panel) is on.
+    if (!gesture) {
+        const int edge = wantedProxyEdge();
+        if (edge != proxyEdge_) {
+            proxyEdge_ = edge;
+            evalDirty_ = true;
+        }
+    }
+    // Zoomed-in views ask for details of what they show once the view has settled.
+    const std::vector<AsyncEvaluator::Detail> wanted = wantedDetails();
+    for (Viewer* v : detailViews()) {
+        const int tag = v == &left_ ? -1 : v->id;
+        if (std::none_of(wanted.begin(), wanted.end(), [&](const auto& d) { return d.tag == tag; })) {
+            v->detailTex.reset();  // not zoomed in (any more)
+            v->detailShown.reset();
+        }
+        v->info = ViewInfo{};  // refilled when the view is drawn next frame
+    }
+    const double now = ImGui::GetTime();
+    if (!sameDetails(wanted, lastWanted_)) {
+        lastWanted_ = wanted;
+        detailsChangedAt_ = now;
+    }
+    if (!gesture && !wanted.empty() && !sameDetails(wanted, details_) && now - detailsChangedAt_ > 0.25)
+        evalDirty_ = true;
+    // A gesture ended: replace its drafts with the full preview and its details.
+    if (!gesture && refineAfterGesture_) {
+        refineAfterGesture_ = false;
+        evalDirty_ = true;
+    }
     if (evalDirty_) {
         submittedTargets_.clear();
         std::vector<int> pins;
@@ -286,7 +316,18 @@ void App::drawFrame() {
         } else {
             gj = graph_.toJson();
         }
-        eval_->submit(std::move(gj), submittedTargets_, pins, !gesture);
+        submittedPins_ = pins;
+        AsyncEvaluator::Options opt;
+        opt.proxyEdge = proxyEdge_;
+        // A slow graph shows a half-size draft while dragging (progressive refinement), and
+        // details wait for the gesture to end.
+        opt.draft = gesture && previewMs_ > kDraftAfterMs;
+        if (!gesture) {
+            opt.details = wanted;
+            details_ = wanted;
+        }
+        refineAfterGesture_ = gesture && (opt.draft || !wanted.empty());
+        eval_->submit(std::move(gj), submittedTargets_, pins, !gesture, std::move(opt));
         evalDirty_ = false;
     }
     // A drag just ended: its last value is queued behind an intermediate one; skip the latter.
@@ -332,7 +373,8 @@ void App::drawOriginalWindow() {
     if (ImGui::Begin("Original###Original", &showOriginal_, kCanvasFlags)) {
         PickRequest pick{leftShown_.get()};
         drawImageView("##leftview", leftTex_, view_, "Drop an image here or use File > Import Image",
-                      eyedropper().active() ? &pick : nullptr);
+                      eyedropper().active() ? &pick : nullptr, nullptr,
+                      left_.detailTex.valid() ? &left_.detail : nullptr, &left_.info);
         finishPick(pick);
     }
     ImGui::End();
@@ -480,7 +522,8 @@ void App::drawViewerWindow(Viewer& v, bool isMain) {
         overlay_.set(ov, maskWanted_ && maskTex_.valid() ? &maskTex_ : nullptr);
         const ImVec2 viewMin = ImGui::GetCursorScreenPos();
         drawImageView(isMain ? "##result" : "##viewer", v.tex, isMain || v.sync ? view_ : v.view, emptyMsg,
-                      eyedropper().active() ? &pick : nullptr, ov ? &overlay_ : nullptr);
+                      eyedropper().active() ? &pick : nullptr, ov ? &overlay_ : nullptr,
+                      v.detailTex.valid() ? &v.detail : nullptr, &v.info);
         finishPick(pick);
         if (ov && overlay_.takeChanged()) markChanged(true);
         if (isMain && showHistogram_ && histogram_.valid) {
@@ -492,6 +535,7 @@ void App::drawViewerWindow(Viewer& v, bool isMain) {
                               histogram_, clipping_)) {
                 clipping_ = !clipping_;
                 if (v.display) v.tex.upload(*v.display, clipping_);
+                refreshDetail(v, true);
             }
         }
     }
@@ -1301,6 +1345,69 @@ NodePath App::resultTarget() {
     return out ? NodePath{out} : NodePath{};
 }
 
+std::vector<App::Viewer*> App::detailViews() {
+    std::vector<Viewer*> out{&left_};
+    for (auto& v : viewers_) out.push_back(v.get());
+    return out;
+}
+
+bool App::sameDetails(const std::vector<AsyncEvaluator::Detail>& a, const std::vector<AsyncEvaluator::Detail>& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        const auto &x = a[i], &y = b[i];
+        // Within a fraction of a screen pixel: the same view.
+        const float tol = 0.5f / std::max(x.screenW, 1.0f);
+        if (x.tag != y.tag || x.node != y.node || x.pin != y.pin || std::fabs(x.u0 - y.u0) > tol ||
+            std::fabs(x.u1 - y.u1) > tol || std::fabs(x.v0 - y.v0) > tol || std::fabs(x.v1 - y.v1) > tol ||
+            std::fabs(x.screenW - y.screenW) > 0.5f)
+            return false;
+    }
+    return true;
+}
+
+std::vector<AsyncEvaluator::Detail> App::wantedDetails() {
+    std::vector<AsyncEvaluator::Detail> out;
+    auto want = [&](const Viewer& v, int tag, int node, int pin, const ImagePtr& shown) {
+        // Only views zoomed in past the preview's pixels; the evaluator decides whether the full
+        // resolution has more to show.
+        if (!node || !shown || shown->w <= 0 || v.info.imageW <= shown->w * 1.15f) return;
+        AsyncEvaluator::Detail d;
+        d.tag = tag;
+        d.node = node;
+        d.pin = pin;
+        d.u0 = v.info.u0, d.v0 = v.info.v0, d.u1 = v.info.u1, d.v1 = v.info.v1;
+        d.screenW = v.info.imageW;
+        out.push_back(d);
+    };
+    if (showOriginal_) want(left_, -1, leftNode_, 0, leftShown_);
+    // Top-level nodes only: regions are evaluated in the root graph.
+    for (size_t i = 0; i < std::min({viewers_.size(), submittedViewers_, submittedTargets_.size()}); ++i)
+        if (submittedTargets_[i].size() == 1)
+            want(*viewers_[i], viewers_[i]->id, submittedTargets_[i][0], i < submittedPins_.size() ? submittedPins_[i] : 0,
+                 viewers_[i]->shown);
+    return out;
+}
+
+int App::wantedProxyEdge() const {
+    // Enough pixels to fill the largest view when fitted, in steps so resizing a panel doesn't
+    // re-evaluate for every pixel. Capped, because every cached node holds an image of this
+    // size; zoomed-in views get full-resolution details instead.
+    float edge = std::max(left_.info.panelW, left_.info.panelH);
+    for (const auto& v : viewers_) edge = std::max({edge, v->info.panelW, v->info.panelH});
+    if (edge <= 0) return proxyEdge_;
+    return std::clamp(int(std::ceil(edge / 256.0f)) * 256, kMinProxyEdge, kMaxProxyEdge);
+}
+
+void App::refreshDetail(Viewer& v, bool main) {
+    ImagePtr d = colormgmt::displayImage(v.detailShown, graph_.colorManagement);
+    if (!d) {
+        v.detailTex.reset();
+        return;
+    }
+    v.detailTex.upload(*d, main && clipping_);
+    v.detail.tex = &v.detailTex;
+}
+
 void App::refreshDisplay(Viewer& v, bool main) {
     v.display = colormgmt::displayImage(v.shown, graph_.colorManagement);
     if (v.display) v.tex.upload(*v.display, main && clipping_);
@@ -1317,28 +1424,46 @@ void App::updateTextures() {
     ImagePtr left;
     const ColorManagement& cm = graph_.colorManagement;
     if (src && !src->paramS(0).empty())
-        left = cache_.get(src->paramS(0), true, nullptr, static_cast<const ImageInputNode&>(*src).decode(cm.linear));
+        left = cache_.get(src->paramS(0), true, nullptr, static_cast<const ImageInputNode&>(*src).decode(cm.linear),
+                          proxyEdge_);
+    leftNode_ = src && graph_.find(src->id) == src ? src->id : 0;
     // Changing the view transform only redraws; the graph's values are unaffected.
     const bool cmChanged = !(cm == shownCm_);
     shownCm_ = cm;
+    if (left != leftShown_) {
+        left_.detailTex.reset();
+        left_.detailShown.reset();
+    }
     if (left != leftShown_ || cmChanged) {
         leftShown_ = left;
         if (left) leftTex_.upload(*colormgmt::displayImage(left, cm));
         else leftTex_.reset();
     }
     if (cmChanged) {
-        for (size_t i = 0; i < viewers_.size(); ++i) refreshDisplay(*viewers_[i], i == 0);
+        for (size_t i = 0; i < viewers_.size(); ++i) {
+            refreshDisplay(*viewers_[i], i == 0);
+            refreshDetail(*viewers_[i], i == 0);
+        }
+        refreshDetail(left_, false);
         histogram_.valid = false;
     }
 
-    if (auto res = eval_->poll()) {
+    auto res = eval_->poll();
+    if (res && !res->images.empty()) {
         evalMs_ = res->ms;
         nodeMs_ = res->nodeMs;
+        if (!res->draft) previewMs_ = res->ms;
         // Results are in submission order; match them to the viewers that still exist.
         const size_t nv = std::min({viewers_.size(), res->images.size(), submittedViewers_});
         for (size_t i = 0; i < nv; ++i) {
             Viewer& v = *viewers_[i];
             v.error = res->errors[i];
+            // A changed image makes the detail stale; its new one follows (unchanged: the
+            // evaluation was only for the view, so the old detail stays until replaced).
+            if (res->images[i] != v.shown) {
+                v.detailTex.reset();
+                v.detailShown.reset();
+            }
             v.shown = res->images[i];
             refreshDisplay(v, i == 0);
         }
@@ -1348,6 +1473,17 @@ void App::updateTextures() {
         // A mask target follows the viewers (see drawFrame).
         if (maskWanted_ && res->images.size() > submittedViewers_ && res->images[submittedViewers_])
             maskTex_.uploadTint(*res->images[submittedViewers_], 1.0f, 0.25f, 0.2f, 0.45f);
+    }
+    if (res && res->tilesDone) {
+        for (const AsyncEvaluator::Tile& t : res->tiles) {
+            Viewer* v = nullptr;
+            for (Viewer* c : detailViews())
+                if ((c == &left_ ? -1 : c->id) == t.tag) v = c;
+            if (!v) continue;
+            v->detailShown = t.image;
+            v->detail = ViewDetail{nullptr, t.u0, t.v0, t.u1, t.v1};
+            refreshDetail(*v, v != &left_ && v->id == 0);
+        }
     }
 }
 

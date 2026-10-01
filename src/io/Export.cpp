@@ -287,6 +287,12 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
                 initContextSize(g, ctx);
             }
             Evaluator ev;
+            // File Output nodes have fixed paths, so a batch would overwrite them on every item.
+            const bool fileOutputs = !batch && (s.fileOutputs || item.output.empty());
+            // A full-resolution render needs only the outputs still to be read: dropping the rest
+            // keeps a big photo's peak memory to a few images instead of one per node. File
+            // Outputs read the graph again afterwards, so they keep everything.
+            ev.releaseIntermediates = !fileOutputs;
             if (!item.output.empty()) {
                 setStage("Rendering " + outName);
                 ImagePtr img = outId ? ev.evaluateDisplay(g, outId, ctx) : nullptr;
@@ -300,8 +306,7 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
                 if (!saveRendered(item.output, img, ctx.colorManagement, opt, err)) throw std::runtime_error(err);
                 log("Wrote " + item.output + " (" + std::to_string(img->w) + " x " + std::to_string(img->h) + ")");
             }
-            // File Output nodes have fixed paths, so a batch would overwrite them on every item.
-            if (!batch && (s.fileOutputs || item.output.empty())) {
+            if (fileOutputs) {
                 setStage("Writing File Outputs");
                 for (const std::string& line : writeFileOutputs(g, ev, ctx)) log(line);
             }

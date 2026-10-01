@@ -24,6 +24,25 @@ public:
                   {ParamDesc::Float("Size X", 10.0f, 0.0f, 200.0f).when(2, 0), ParamDesc::Float("Size Y", 10.0f, 0.0f, 200.0f).when(2, 0),
                    ParamDesc::Bool("Relative", false), ParamDesc::Enum("Aspect Correction", 0, {"None", "Y", "X"}).when(2),
                    ParamDesc::Float("Factor X", 1.0f, 0.0f, 100.0f).when(2), ParamDesc::Float("Factor Y", 1.0f, 0.0f, 100.0f).when(2)}})
+    // Blur sizes (pixels) for an image of w x h.
+    void sizes(const EvalContext& ctx, int w, int h, float& sx, float& sy) const {
+        sx = paramF(0) * ctx.scale;
+        sy = paramF(1) * ctx.scale;
+        if (paramB(2)) {
+            // Blender's Relative: percent of the image size, so one setting fits any resolution
+            // (the working image is already proxy-sized, so no ctx.scale). Aspect Correction Y
+            // measures Y against the width too (round blur on non-square images), X the reverse.
+            const int ac = paramI(3);
+            sx = paramF(4) * 0.01f * float(ac == 2 ? h : w);
+            sy = paramF(5) * 0.01f * float(ac == 1 ? w : h);
+        }
+    }
+    int roiPadding(const EvalContext& ctx) const override {
+        const PixelFrame fr = frameOf(ctx, ctx.defaultW, ctx.defaultH);
+        float sx, sy;
+        sizes(ctx, fr.fullW, fr.fullH, sx, sy);
+        return std::max(blurReach(sx * 0.5f), blurReach(sy * 0.5f)) + 1;
+    }
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         // A channel (e.g. a mask) is blurred as one plane and passed on as a channel: converting
         // it to a grey RGBA image first would blur four identical planes. Consumers convert it
@@ -37,15 +56,9 @@ public:
         ImagePtr src = srcCh ? nullptr : toImage(in[0], 0, 0);
         if (!src && !srcCh) return;
         const int w = srcCh ? srcCh->w : src->w, h = srcCh ? srcCh->h : src->h;
-        float sx = paramF(0) * ctx.scale, sy = paramF(1) * ctx.scale;
-        if (paramB(2)) {
-            // Blender's Relative: percent of the image size, so one setting fits any resolution
-            // (the working image is already proxy-sized, so no ctx.scale). Aspect Correction Y
-            // measures Y against the width too (round blur on non-square images), X the reverse.
-            const int ac = paramI(3);
-            sx = paramF(4) * 0.01f * float(ac == 2 ? h : w);
-            sy = paramF(5) * 0.01f * float(ac == 1 ? w : h);
-        }
+        const PixelFrame fr = frameOf(ctx, w, h);
+        float sx, sy;
+        sizes(ctx, fr.fullW, fr.fullH, sx, sy);
         if (srcCh) {
             auto c = std::make_shared<Channel>(*srcCh);
             blurChannel(c->data, w, h, sx * 0.5f, sy * 0.5f);
@@ -97,6 +110,7 @@ public:
                   {{"Image", PinType::Image}, {"Determinator", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Radius", 8.0f, 0.0f, 60.0f), ParamDesc::Float("Color Sigma", 0.1f, 0.001f, 1.0f)}})
+    int roiPadding(const EvalContext& ctx) const override { return int(std::ceil(paramF(0) * ctx.scale)) + 1; }
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
@@ -138,6 +152,7 @@ public:
                   {ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f),
                    ParamDesc::Enum("Type", Sobel, {"Soften", "Box Sharpen", "Diamond Sharpen", "Laplace", "Sobel", "Prewitt",
                                                    "Kirsch", "Shadow"})}})
+    int roiPadding(const EvalContext&) const override { return 1; }  // 3x3 kernels
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
@@ -191,6 +206,8 @@ public:
                   {{"Mask", PinType::Channel}},
                   {{"Mask", PinType::Channel}},
                   {ParamDesc::Enum("Mode", 0, {"Distance", "Feather"}), ParamDesc::Float("Distance", 5.0f, -100.0f, 100.0f)}})
+    // Only distances up to Distance matter: anything farther gives the same result.
+    int roiPadding(const EvalContext& ctx) const override { return int(std::ceil(std::fabs(paramF(1) * ctx.scale))) + 2; }
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         ChannelPtr m = toChannel(in[0]);
         if (!m || m->constant) {
@@ -227,6 +244,9 @@ public:
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Size", 6.0f, 1.0f, 50.0f)}})
+    int roiPadding(const EvalContext& ctx) const override {
+        return std::max(1, int(std::round(paramF(0) * ctx.scale))) + 1;
+    }
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
@@ -305,6 +325,7 @@ public:
                   {{"Image", PinType::Image}, {"Steps", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Steps", 6.0f, 2.0f, 64.0f)}})
+    int roiPadding(const EvalContext&) const override { return 0; }  // per pixel
     void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;

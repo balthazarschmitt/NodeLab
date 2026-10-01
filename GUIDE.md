@@ -42,9 +42,19 @@ Results below). **View > Node Timings** shows how long each node took above it (
   Ctrl+click it again (or use **View > Clear Node Preview**) to go back.
 - **Ctrl+Shift+click** cycles through the outputs of a node that has several (for example the
   R, G and B outputs of Split RGB).
-- The preview works on a copy of the image scaled to at most 1280 pixels on the long edge, so it
-  stays fast. Export always renders at full resolution. Pixel sizes (blur radius, offsets) are
-  measured in full-resolution pixels, so the preview matches the export.
+- **Preview size:** the preview works on a copy of the image sized to the panels (768 to 2048
+  pixels on the long edge), so it stays fast.
+  - Pixel sizes (blur radius, offsets) are measured in full-resolution pixels, so the preview
+    matches the export.
+  - Export always renders at full resolution.
+- **Zooming in:** past the preview's pixels, the Original and Result panels sharpen to the
+  photo's real pixels (up to 100%) once the view stops moving. Only the visible part is computed.
+  - Statistics over the whole image (Normalize, Dehaze) come from the preview, so the detail
+    matches the rest of the image.
+  - A few nodes need the whole image (groups, Pixelate, Directional Blur, Glare, Sun Beams). In
+    a graph with one of these, a zoomed-in view keeps showing the preview.
+- **Slow graphs:** when a preview takes longer than 100 ms, dragging a slider shows a half-size
+  draft that refines when you let go.
 
 ### Viewing Intermediate Results
 
@@ -879,7 +889,8 @@ doesn't pile up. Sideways pushes take the pushed node's downstream (or upstream)
 wires keep flowing left to right.
 
 In the image panels, drag to pan and scroll to zoom. The Original and Result panels move together.
-Double-click to reset the view.
+Double-click to reset the view. Zoomed in past the preview, they sharpen to full resolution once
+the view stops moving.
 
 ## Exporting
 

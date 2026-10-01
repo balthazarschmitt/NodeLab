@@ -41,6 +41,11 @@ private:
         std::string error;
         ImagePtr shown;     // the node's output (scene values), for the eyedropper
         ImagePtr display;   // shown through the view transform: what tex, histogram and clipping use
+        // Zoomed in: a sharper image of the visible part (AsyncEvaluator::Detail) over tex.
+        ViewDetail detail;
+        GLTexture detailTex;
+        ImagePtr detailShown;  // scene values of detailTex
+        ViewInfo info;         // what the view showed last frame
     };
 
     // project lifecycle
@@ -50,6 +55,18 @@ private:
     void importImage(const std::string& path);
     void drawColorMenu();
     void refreshDisplay(Viewer& v, bool main);
+    void refreshDetail(Viewer& v, bool main);
+    // Detail requests for the zoomed-in views, and the proxy size the views call for.
+    std::vector<AsyncEvaluator::Detail> wantedDetails();
+    int wantedProxyEdge() const;
+    // Nothing evaluating or about to be (scripts and screenshots wait for it).
+    bool idle() const {
+        return !eval_->busy() && !evalDirty_ && !refineAfterGesture_ && (lastWanted_.empty() || sameDetails(lastWanted_, details_));
+    }
+    std::vector<Viewer*> detailViews();  // the Original's (left_) and the viewers
+    static bool sameDetails(const std::vector<AsyncEvaluator::Detail>& a, const std::vector<AsyncEvaluator::Detail>& b);
+    static constexpr int kMinProxyEdge = 768, kMaxProxyEdge = 2048;
+    static constexpr double kDraftAfterMs = 100;  // previews slower than this draft while dragging
     void openExportWindow();
     void drawExportWindow();
     void startExport(std::vector<ExportItem> items, int inputNode);
@@ -109,6 +126,8 @@ private:
 
     GLTexture leftTex_;
     ImagePtr leftShown_;    // scene values, for the eyedropper
+    int leftNode_ = 0;      // the Image Input it shows, if in the root graph (for its detail)
+    Viewer left_;           // the Original's detail and view info (its tex is leftTex_)
     ColorManagement shownCm_;  // the colour management the textures were made with
     ViewState view_;  // shared by Original and Result so they stay in sync
     std::vector<std::unique_ptr<Viewer>> viewers_;
@@ -131,6 +150,16 @@ private:
     bool modified_ = false;
     bool evalDirty_ = true;
     bool gestureWas_ = false;  // a drag/slider/text gesture was active last frame
+    // Full-resolution viewing (Phase F): the preview's proxy follows the view size; a slow graph
+    // shows a half-size draft while dragging and is refined once the gesture ends; zoomed-in
+    // views get sharp details of their visible part after the preview.
+    int proxyEdge_ = ImageCache::kProxyEdge;
+    double previewMs_ = 0;       // the last full preview's time
+    bool refineAfterGesture_ = false;
+    std::vector<AsyncEvaluator::Detail> details_;  // as last submitted (or dropped)
+    std::vector<AsyncEvaluator::Detail> lastWanted_;
+    double detailsChangedAt_ = -1;  // when the wanted details last changed (they settle first)
+    std::vector<int> submittedPins_;
     std::string lastTitle_;
 
     std::string status_;

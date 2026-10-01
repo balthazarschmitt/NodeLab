@@ -11,16 +11,23 @@ namespace {
 
 constexpr float kPi = 3.14159265f;
 
-// Fills a Fac channel and a Color image of the context size from fn(u, v, fac, rgb).
+// Fills a Fac channel and a Color image of the context size from fn(u, v, x, y, fac, rgb), with
+// x, y in the full image's pixels (a region renders only its window).
 template <typename Fn>
 void texture(EvalContext& ctx, std::vector<Value>& out, int facPin, int colorPin, Fn&& fn) {
-    const int w = std::max(1, ctx.defaultW), h = std::max(1, ctx.defaultH);
+    int bw, bh;
+    resolveSize({}, ctx, bw, bh);
+    bw = std::max(1, bw);
+    bh = std::max(1, bh);
+    const PixelFrame fr = frameOf(ctx, bw, bh);
+    const int w = std::max(1, fr.fullW), h = std::max(1, fr.fullH);
     const float aspect = float(w) / h;
-    auto fac = std::make_shared<Channel>(Channel::makeSized(w, h));
-    auto img = std::make_shared<Image>(w, h);
-    parallelFor(h, [&](int y) {
-        for (int x = 0; x < w; ++x) {
-            size_t i = size_t(y) * w + x;
+    auto fac = std::make_shared<Channel>(Channel::makeSized(bw, bh));
+    auto img = std::make_shared<Image>(bw, bh);
+    parallelFor(bh, [&](int by) {
+        for (int bx = 0; bx < bw; ++bx) {
+            size_t i = size_t(by) * bw + bx;
+            const int x = bx + fr.x0, y = by + fr.y0;
             float u = ((x + 0.5f) / w - 0.5f) * aspect, v = (y + 0.5f) / h - 0.5f;
             float f = 0, c[3] = {0, 0, 0};
             fn(u, v, x, y, f, c);
@@ -33,9 +40,15 @@ void texture(EvalContext& ctx, std::vector<Value>& out, int facPin, int colorPin
     if (colorPin >= 0) out[colorPin] = Value(ImagePtr(img));
 }
 
+// Textures are generated per pixel from its position, so a region renders just its window.
+class TextureBase : public Node {
+public:
+    int roiPadding(const EvalContext&) const override { return 0; }
+};
+
 uint32_t seedOf(const Node& n, int param) { return uint32_t(std::max(0, int(std::round(n.paramF(param))))); }
 
-class NoiseTextureNode : public Node {
+class NoiseTextureNode : public TextureBase {
 public:
     NODELAB_NODE({"tex.noise", "Noise Texture", "Texture",
                   {},
@@ -60,7 +73,7 @@ public:
     }
 };
 
-class VoronoiTextureNode : public Node {
+class VoronoiTextureNode : public TextureBase {
 public:
     NODELAB_NODE({"tex.voronoi", "Voronoi Texture", "Texture",
                   {},
@@ -78,7 +91,7 @@ public:
     }
 };
 
-class GradientTextureNode : public Node {
+class GradientTextureNode : public TextureBase {
 public:
     enum { Linear, Quadratic, Easing, Diagonal, Spherical, QuadraticSphere, Radial };
     NODELAB_NODE({"tex.gradient", "Gradient Texture", "Texture",
@@ -90,7 +103,8 @@ public:
     void evaluate(EvalContext& ctx, const std::vector<Value>&, std::vector<Value>& out) override {
         const int type = paramI(0);
         const float a = paramF(1) * kPi / 180.0f, ca = std::cos(a), sa = std::sin(a);
-        const float aspect = float(ctx.defaultW) / std::max(1, ctx.defaultH);
+        const float aspect = float(std::max(1, ctx.roi ? ctx.roi->canvasW : ctx.defaultW)) /
+                             std::max(1, ctx.roi ? ctx.roi->canvasH : ctx.defaultH);
         texture(ctx, out, 0, 1, [&](float u, float v, int, int, float& f, float* c) {
             float ru = u * ca + v * sa;                       // rotated axis, spans about -aspect/2..aspect/2
             float t = ru / std::max(aspect, 1e-3f) + 0.5f;    // 0..1 across the image at angle 0
@@ -110,7 +124,7 @@ public:
     }
 };
 
-class WaveTextureNode : public Node {
+class WaveTextureNode : public TextureBase {
 public:
     NODELAB_NODE({"tex.wave", "Wave Texture", "Texture",
                   {},
@@ -138,7 +152,7 @@ public:
     }
 };
 
-class CheckerTextureNode : public Node {
+class CheckerTextureNode : public TextureBase {
 public:
     NODELAB_NODE({"tex.checker", "Checker Texture", "Texture",
                   {},
@@ -159,7 +173,7 @@ public:
     }
 };
 
-class WhiteNoiseNode : public Node {
+class WhiteNoiseNode : public TextureBase {
 public:
     NODELAB_NODE({"tex.white_noise", "White Noise", "Texture",
                   {},

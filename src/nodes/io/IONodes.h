@@ -18,6 +18,7 @@ public:
     ImageCache::Decode decode(bool linearProject) const {
         return {linearProject && paramI(1) == 0, linearProject, paramI(2)};
     }
+    bool roiSourceSize(const EvalContext& ctx, int& w, int& h) const override;
     // Color Space is for ordinary images; Highlight Reconstruction only for RAW.
     bool paramHidden(int i) const override {
         const bool isRaw = raw::isRawPath(paramS(0));
@@ -32,6 +33,7 @@ public:
                   {},
                   {}})
     void evaluate(EvalContext&, const std::vector<Value>&, std::vector<Value>&) override {}
+    int roiPadding(const EvalContext&) const override { return 0; }
 };
 
 class NumberNode : public Node {

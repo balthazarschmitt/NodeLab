@@ -82,12 +82,14 @@ build\nodelab_tests.exe
 ```
 src/core      Image/Channel/Value types + conversions, ColorMath, ColorScience (Oklab, CAT16 white
               balance, gamut compression), Curve, Ramp, Noise, Parallel
-src/graph     Node (params, flags), Graph (links, frames, JSON), Evaluator (+AsyncEvaluator), NodeRegistry
+src/graph     Node (params, flags, region policy), Graph (links, frames, JSON), Evaluator (cache levels,
+              region evaluation, +AsyncEvaluator with drafts and details), NodeRegistry
 src/nodes     one file per family: io, color, math (Mix), converter (+Expression), filter, transform,
               matte, texture, utility, group; ImageOps (sampling, box blur, distance transform)
 src/io        image load (stb), ImageWrite (PNG/JPEG/TIFF/EXR, ICC, parallel zlib; Tiff.h IFD writer),
-              RawDecode (LibRaw), Exif (orientation, export EXIF), Export (Lanczos resize), ImageCache (proxy only;
-              full-res decoded on demand; RAW proxies from a half-size decode), project files
+              RawDecode (LibRaw), Exif (orientation, export EXIF), Export (Lanczos resize), ImageCache (proxies
+              per edge; full-res decoded on demand, scaled levels kept for regions; RAW proxies from a
+              half-size decode), project files
 src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (custom canvas), Inspector,
               GuideWindow (renders the embedded GUIDE.md), Eyedropper (pick state),
               ParamWidgets (curve/ramp editors), ImageView, FileDialog (Win32), UiScript
@@ -125,6 +127,23 @@ src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (
   coordinates.
 - **Evaluation cache key:** `Evaluator::ensure` keys on type, params, `signatureExtra()`, the muted
   flag, working size/scale, and upstream signatures. Node state that affects output must feed into it.
+- **Cache levels:** the Evaluator caches the Preview, a Draft (half the proxy edge, while dragging
+  slow graphs) and a Region level separately. `AsyncEvaluator` trims the draft and region levels
+  to a memory budget. Exports set `releaseIntermediates`.
+- **Region evaluation** (zoomed-in detail, `Evaluator::evaluateRegion`) runs each node on part of
+  its image, with `ctx.roi` set (the window and the node's full size).
+  - **Padding:** override `roiPadding()` with how far the node reads around each pixel. Use 0 for
+    per-pixel nodes, and `kRoiWhole` (the default outside Color/Mix/Converter) if it needs the
+    whole image.
+  - **Coordinates:** anything that depends on position or image size (generators, Relative
+    sizes, longEdge) must use `nodeutil::frameOf(ctx, w, h)` for the global origin and full size,
+    never the buffer's.
+  - **Mapping nodes:** nodes that move pixels (Crop, Flip) implement `roiMap`, and
+    `roiOutputSize` if they change the size.
+  - **Global statistics:** record them through `ctx.statsOut` in a preview run, and read
+    `ctx.previewStats` in a region (Normalize, Basic's Dehaze).
+  - **Test:** `test_roi.cpp` checks that every node's region matches the same part of its whole
+    image. Add a variant for any new size- or position-dependent param.
 - **Node state:** `Node::muted`, `collapsed` and `label` persist in JSON. `Graph::cloneNode` copies them.
 - **Groups:** a `GroupNode` owns an inner `Graph`, and its interface pins are pushed to the inner
   Group Input/Output nodes by `syncInner()`. Use `GroupNode::removePin`/`movePin`/`setPinType`, which

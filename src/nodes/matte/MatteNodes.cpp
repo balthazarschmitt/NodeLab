@@ -58,34 +58,47 @@ float combineMask(int op, float b, float v) {
     }
 }
 
-// Size of a mask node's output: its Mask input's, else the working size.
+// Size of a mask node's output: its Mask input's, else the working size (or region window).
 void maskSize(const ChannelPtr& base, const EvalContext& ctx, int& w, int& h) {
-    w = base && !base->constant ? base->w : ctx.defaultW;
-    h = base && !base->constant ? base->h : ctx.defaultH;
+    if (base && !base->constant) {
+        w = base->w;
+        h = base->h;
+    } else {
+        resolveSize({}, ctx, w, h);
+    }
 }
 
-class ShapeMaskNode : public Node {
+// Masks are drawn per pixel from its position (in the full image), so a region draws its window.
+class MaskBase : public Node {
+public:
+    int roiPadding(const EvalContext&) const override { return 0; }
+};
+
+class ShapeMaskNode : public MaskBase {
 protected:
     // pinned param indices: 0 X, 1 Y, 2 Width, 3 Height, 4 Rotation, 5 Feather, 6 Value, 7 Operation
     void run(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out, bool ellipse) {
         ChannelPtr base = toChannel(in[0]);
-        int w, h;
-        maskSize(base, ctx, w, h);
+        int bw, bh;
+        maskSize(base, ctx, bw, bh);
+        const PixelFrame fr = frameOf(ctx, bw, bh);
+        const int w = fr.fullW, h = fr.fullH;
         if (!base) base = std::make_shared<Channel>(Channel::makeConstant(0.0f));
         ChannelPtr val = channelOr(in[1], 1.0f);
-        ChannelSampler sb{base.get(), w, h}, sv = paramSampler(*this, 1, val, w, h);
+        ChannelSampler sb{base.get(), bw, bh}, sv = paramSampler(*this, 1, val, bw, bh);
         const float cx = paramF(0) * w, cy = paramF(1) * h;
         const float hw = std::max(paramF(2) * w * 0.5f, 1e-3f), hh = std::max(paramF(3) * h * 0.5f, 1e-3f);
         const float a = -paramF(4) * kPi / 180.0f, ca = std::cos(a), sa = std::sin(a);
         const float feather = paramF(5);
         const int op = paramI(7);
-        out[0] = Value(ChannelPtr(makeChannel(w, h, [&](int x, int y) {
+        out[0] = Value(ChannelPtr(makeChannel(bw, bh, [&](int bx, int by) {
+            const int x = bx + fr.x0, y = by + fr.y0;
             float px = x + 0.5f - cx, py = y + 0.5f - cy;
             float rx = px * ca - py * sa, ry = px * sa + py * ca;
             // Normalized "radius": <1 inside. Box uses the max norm, ellipse the Euclidean one.
             float q = ellipse ? std::hypot(rx / hw, ry / hh) : std::max(std::fabs(rx) / hw, std::fabs(ry) / hh);
             float shape = 1.0f - smoothstep(1.0f - feather, 1.0f + 1e-4f, q);
-            return combineMask(op, sb(x, y), sv(x, y) * shape);
+            return combineMask(op, sb(bx, by), sv(bx, by) * shape);
         })));
     }
 };
@@ -126,7 +139,7 @@ public:
 };
 
 // Lightroom's Linear Gradient: full strength before Start, fading to nothing at End.
-class LinearGradientNode : public Node {
+class LinearGradientNode : public MaskBase {
 public:
     NODELAB_NODE({"matte.linear_gradient", "Linear Gradient", "Matte",
                   {{"Mask", PinType::Channel}, {"Value", PinType::Channel, 4}},
@@ -136,19 +149,22 @@ public:
                    ParamDesc::Float("Value", 1.0f, 0.0f, 1.0f), ParamDesc::Enum("Operation", 0, {"Add", "Subtract", "Multiply", "Not"})}})
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         ChannelPtr base = toChannel(in[0]);
-        int w, h;
-        maskSize(base, ctx, w, h);
+        int bw, bh;
+        maskSize(base, ctx, bw, bh);
+        const PixelFrame fr = frameOf(ctx, bw, bh);
+        const int w = fr.fullW, h = fr.fullH;
         if (!base) base = std::make_shared<Channel>(Channel::makeConstant(0.0f));
         ChannelPtr val = channelOr(in[1], 1.0f);
-        ChannelSampler sb{base.get(), w, h}, sv = paramSampler(*this, 1, val, w, h);
+        ChannelSampler sb{base.get(), bw, bh}, sv = paramSampler(*this, 1, val, bw, bh);
         // In pixels, so the fade stays perpendicular to the Start-End line on non-square images.
         const float x0 = paramF(0) * w, y0 = paramF(1) * h;
         const float dx = paramF(2) * w - x0, dy = paramF(3) * h - y0;
         const float len2 = std::max(dx * dx + dy * dy, 1e-6f);
         const int op = paramI(5);
-        out[0] = Value(ChannelPtr(makeChannel(w, h, [&](int x, int y) {
+        out[0] = Value(ChannelPtr(makeChannel(bw, bh, [&](int bx, int by) {
+            const int x = bx + fr.x0, y = by + fr.y0;
             float t = ((x + 0.5f - x0) * dx + (y + 0.5f - y0) * dy) / len2;
-            return combineMask(op, sb(x, y), sv(x, y) * (1.0f - smoothstep(0.0f, 1.0f, t)));
+            return combineMask(op, sb(bx, by), sv(bx, by) * (1.0f - smoothstep(0.0f, 1.0f, t)));
         })));
     }
 };
@@ -157,6 +173,7 @@ public:
 
 class ChannelKeyNode : public Node {
 public:
+    int roiPadding(const EvalContext&) const override { return 0; }  // per pixel
     NODELAB_NODE({"matte.channel_key", "Channel Key", "Matte",
                   {{"Image", PinType::Image}},
                   {{"Matte", PinType::Channel}, {"Image", PinType::Image}},
@@ -189,6 +206,7 @@ public:
 
 class LuminanceKeyNode : public Node {
 public:
+    int roiPadding(const EvalContext&) const override { return 0; }  // per pixel
     NODELAB_NODE({"matte.luminance_key", "Luminance Key", "Matte",
                   {{"Image", PinType::Image}},
                   {{"Matte", PinType::Channel}, {"Image", PinType::Image}},
@@ -206,6 +224,7 @@ public:
 
 class DifferenceKeyNode : public Node {
 public:
+    int roiPadding(const EvalContext&) const override { return 0; }  // per pixel
     NODELAB_NODE({"matte.difference_key", "Difference Key", "Matte",
                   {{"Image", PinType::Image}, {"Key", PinType::Image}},
                   {{"Matte", PinType::Channel}, {"Image", PinType::Image}},
@@ -228,6 +247,7 @@ public:
 
 class DistanceKeyNode : public Node {
 public:
+    int roiPadding(const EvalContext&) const override { return 0; }  // per pixel
     NODELAB_NODE({"matte.distance_key", "Distance Key", "Matte",
                   {{"Image", PinType::Image}, {"Key", PinType::Image}},
                   {{"Matte", PinType::Channel}, {"Image", PinType::Image}},
@@ -258,6 +278,7 @@ public:
 
 class ChromaKeyNode : public Node {
 public:
+    int roiPadding(const EvalContext&) const override { return 0; }  // per pixel
     NODELAB_NODE({"matte.chroma_key", "Chroma Key", "Matte",
                   {{"Image", PinType::Image}, {"Key", PinType::Image}},
                   {{"Matte", PinType::Channel}, {"Image", PinType::Image}},
@@ -286,6 +307,7 @@ public:
 
 class ColorSpillNode : public Node {
 public:
+    int roiPadding(const EvalContext&) const override { return 0; }  // per pixel
     NODELAB_NODE({"matte.color_spill", "Color Spill", "Matte",
                   {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},

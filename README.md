@@ -89,7 +89,7 @@ dark sky (see Help > Guide > Recipes).
 | Extra viewers | Right-click a node → Open in New Viewer (or View > New Viewer) to watch an intermediate result; the viewer's drop-down switches node, "Sync view" pans with the other panes |
 | Eyedropper | "Pick" next to a colour setting (or Pick from Image in the node's colour popup), then click a pixel or drag a rectangle on any image panel for the area's average; right-click / Esc cancels |
 | Guide | Help > Guide or F1 (opens at the selected node's entry); also the Inspector's Guide button |
-| Zoom / pan images | Mouse wheel / drag; double-click resets. Both panes stay in sync |
+| Zoom / pan images | Mouse wheel / drag; double-click resets. Both panes stay in sync and sharpen to full resolution when zoomed in |
 | Colour management | Color menu: View Transform (Standard, AgX, Raw), Look, view Exposure and Gamma, as in Blender's Render Properties. New projects are scene-linear; Convert Project to Scene-Linear upgrades a legacy one |
 | Histogram / clipping | Result toolbar, or H / J with the mouse over the Result: RGB histogram, and clipped highlights in red and crushed shadows in blue |
 | On-image controls | Select a Crop, gradient, shape or Brush Mask node and edit it on the Result: drag handles; Crop shows the whole frame (drag outside to straighten); Brush paints, Alt erases, `[` `]` size; O toggles the red mask overlay |

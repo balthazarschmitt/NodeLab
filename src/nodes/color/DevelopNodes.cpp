@@ -51,18 +51,26 @@ std::vector<float> guidedSmooth(const std::vector<float>& I, int w, int h, float
 // are solved at 1/s resolution and upsampled before applying them to the full-resolution guide, so
 // edges stay sharp while the cost drops by about s^2. s is chosen so the filter radius stays at
 // least ~4 low-res pixels (the coefficients are smooth at that scale).
-std::vector<float> fastGuidedSmooth(const std::vector<float>& I, int w, int h, float sigma, float eps) {
-    const int s = std::clamp(int(sigma / 4.0f), 1, 8);
+// (ox, oy): where the buffer sits in the full image. The low-res grid is anchored to the full
+// image, so a region (see RoiWindow) gets the same coefficients as the whole image.
+int guidedScale(float sigma) { return std::clamp(int(sigma / 4.0f), 1, 8); }
+
+std::vector<float> fastGuidedSmooth(const std::vector<float>& I, int w, int h, float sigma, float eps, int ox = 0,
+                                    int oy = 0) {
+    const int s = guidedScale(sigma);
     if (s == 1) return guidedSmooth(I, w, h, sigma, eps);
-    const int lw = (w + s - 1) / s, lh = (h + s - 1) / s;
+    // Low-res cells overlapping the buffer, from the one holding its first pixel.
+    const int cx0 = ox / s, cy0 = oy / s;
+    const int lw = (ox + w + s - 1) / s - cx0, lh = (oy + h + s - 1) / s - cy0;
     const size_t ln = size_t(lw) * lh;
     std::vector<float> mean(ln), sq(ln);
     parallelFor(lh, [&](int ly) {
         for (int lx = 0; lx < lw; ++lx) {
             float sum = 0, sum2 = 0;
             int cnt = 0;
-            for (int y = ly * s; y < std::min((ly + 1) * s, h); ++y)
-                for (int x = lx * s; x < std::min((lx + 1) * s, w); ++x) {
+            const int ys = std::max((ly + cy0) * s - oy, 0), xs = std::max((lx + cx0) * s - ox, 0);
+            for (int y = ys; y < std::min((ly + cy0 + 1) * s - oy, h); ++y)
+                for (int x = xs; x < std::min((lx + cx0 + 1) * s - ox, w); ++x) {
                     const float v = I[size_t(y) * w + x];
                     sum += v, sum2 += v * v, ++cnt;
                 }
@@ -84,9 +92,9 @@ std::vector<float> fastGuidedSmooth(const std::vector<float>& I, int w, int h, f
     std::vector<float> q(I.size());
     const float inv = 1.0f / s;
     parallelFor(h, [&](int y) {
-        const float ly = (y + 0.5f) * inv;
+        const float ly = (y + oy + 0.5f) * inv - cy0;
         for (int x = 0; x < w; ++x) {
-            const float lx = (x + 0.5f) * inv;
+            const float lx = (x + ox + 0.5f) * inv - cx0;
             const size_t i = size_t(y) * w + x;
             q[i] = imageops::sampleBilinear(a, lw, lh, lx, ly) * I[i] + imageops::sampleBilinear(b, lw, lh, lx, ly);
         }
@@ -100,6 +108,14 @@ constexpr float kMidGreyEv = -2.4739312f;  // log2(0.18)
 
 // Exposure of a luminance in stops relative to 1.0 (white in the Standard view).
 float evOf(float y) { return std::log2(std::max(y, 1.0f / 65536.0f)); }
+
+// How far (pixels) fastGuidedSmooth reads from each pixel: two blurs in a row, at 1/s resolution,
+// plus the cells and their interpolation.
+int guidedReach(float sigma) {
+    const int s = guidedScale(sigma);
+    if (s == 1) return 2 * imageops::blurReach(sigma) + 2;
+    return s * (2 * imageops::blurReach(sigma / s) + 3) + 2;
+}
 
 std::vector<float> logLuminance(const Image& img) {
     std::vector<float> ev(size_t(img.w) * img.h);
@@ -201,11 +217,30 @@ public:
                    ParamDesc::Float("Dehaze", 0.0f, -100.0f, 100.0f), ParamDesc::Float("Vibrance", 0.0f, -100.0f, 100.0f),
                    ParamDesc::Float("Saturation", 0.0f, -100.0f, 100.0f)},
                   false, true})
+    // Its local filters read around each pixel; sizes follow the full image's long edge. Dehaze's
+    // airlight is global: a region reuses the preview's.
+    int roiPadding(const EvalContext& ctx) const override {
+        const PixelFrame fr = frameOf(ctx, ctx.defaultW, ctx.defaultH);
+        const float longEdge = float(std::max(fr.fullW, fr.fullH));
+        const bool lin = ctx.linear();
+        int pad = 1;
+        if (paramF(11) != 0.0f) {
+            if (!ctx.previewStats) return kRoiWhole;
+            pad += imageops::blurReach(std::max(longEdge * 0.01f, 1.0f));
+        }
+        if (lin && (paramF(5) != 0.0f || paramF(6) != 0.0f)) pad += guidedReach(std::max(longEdge * 0.02f, 1.0f));
+        if (paramF(10) != 0.0f) {
+            const float sigma = std::max(longEdge * 0.012f, 1.0f);
+            pad += lin ? guidedReach(sigma) : 2 * imageops::blurReach(sigma) + 2;
+        }
+        if (paramF(9) != 0.0f) pad += imageops::blurReach(std::max(longEdge * 0.0025f, 0.7f));
+        return pad;
+    }
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
         if (ctx.linear()) {
-            out[0] = Value(evaluateLinear(src, in[1]));
+            out[0] = Value(evaluateLinear(ctx, src, in[1]));
             return;
         }
         const float temp = paramF(1) / 100, tint = paramF(2) / 100, stops = paramF(3);
@@ -213,7 +248,8 @@ public:
         const float texture = paramF(9) / 100, clarity = paramF(10) / 100, dehaze = paramF(11) / 100;
         const float vibrance = paramF(12) / 100, saturation = paramF(13) / 100;
         const int w = src->w, h = src->h;
-        const float longEdge = float(std::max(w, h));
+        const PixelFrame fr = frameOf(ctx, w, h);
+        const float longEdge = float(std::max(fr.fullW, fr.fullH));
 
         // White balance and exposure in linear light. Temperature warms (more red, less blue),
         // Tint goes toward magenta (less green); the gains are normalised so white keeps its
@@ -226,7 +262,7 @@ public:
             d[3] = s[3];
         });
 
-        if (dehaze != 0.0f) dehazeImage(*img, dehaze, longEdge, 0.3f);
+        if (dehaze != 0.0f) dehazeImage(ctx, *img, dehaze, longEdge, 0.3f);
 
         parallelFor(h, [&](int y) {
             for (int x = 0; x < w; ++x) {
@@ -302,14 +338,15 @@ public:
     }
 
 private:
-    ImagePtr evaluateLinear(const ImagePtr& src, const Value& facIn) const {
+    ImagePtr evaluateLinear(const EvalContext& ctx, const ImagePtr& src, const Value& facIn) const {
         const float temp = paramF(1) / 100, tint = paramF(2) / 100, stops = paramF(3);
         const float contrast = paramF(4) / 100, highlights = paramF(5) / 100, shadows = paramF(6) / 100;
         const float whites = paramF(7) / 100, blacks = paramF(8) / 100;
         const float texture = paramF(9) / 100, clarity = paramF(10) / 100, dehaze = paramF(11) / 100;
         const float vibrance = paramF(12) / 100, saturation = paramF(13) / 100;
         const int w = src->w, h = src->h;
-        const float longEdge = float(std::max(w, h));
+        const PixelFrame fr = frameOf(ctx, w, h);
+        const float longEdge = float(std::max(fr.fullW, fr.fullH));
 
         // White balance adapts the assumed light to D65 (CAT16); exposure is a plain multiply.
         colorsci::Mat3 wb;
@@ -324,7 +361,7 @@ private:
         });
 
         // Haze is additive light, so removing it is most accurate on linear values.
-        if (dehaze != 0.0f) dehazeImage(*img, dehaze, longEdge, 0.1f);
+        if (dehaze != 0.0f) dehazeImage(ctx, *img, dehaze, longEdge, 0.1f);
 
         // Tone: every slider becomes a gain in stops, applied as a ratio to RGB so hue and
         // saturation hold. Contrast bends the exposure scale around middle grey (softly limited,
@@ -336,7 +373,7 @@ private:
         if (contrast != 0.0f || highlights != 0.0f || shadows != 0.0f || whites != 0.0f || blacks != 0.0f) {
             const std::vector<float> ev = logLuminance(*img);
             std::vector<float> mask;
-            if (highlights != 0.0f || shadows != 0.0f) mask = fastGuidedSmooth(ev, w, h, std::max(longEdge * 0.02f, 1.0f), 0.5f);
+            if (highlights != 0.0f || shadows != 0.0f) mask = fastGuidedSmooth(ev, w, h, std::max(longEdge * 0.02f, 1.0f), 0.5f, fr.x0, fr.y0);
             const float slope = 1.0f + contrast * (contrast > 0 ? 0.6f : 0.45f);
             const float hA = highlights * (highlights < 0 ? 1.5f : 1.0f), sA = shadows * (shadows > 0 ? 2.0f : 1.5f);
             const float wA = whites, bA = blacks * 1.5f;
@@ -365,7 +402,7 @@ private:
         if (clarity != 0.0f || texture != 0.0f) {
             const std::vector<float> L = logLuminance(*img);
             std::vector<float> coarse, fine;
-            if (clarity != 0.0f) coarse = fastGuidedSmooth(L, w, h, std::max(longEdge * 0.012f, 1.0f), 0.1f);
+            if (clarity != 0.0f) coarse = fastGuidedSmooth(L, w, h, std::max(longEdge * 0.012f, 1.0f), 0.1f, fr.x0, fr.y0);
             if (texture != 0.0f) {
                 fine = L;
                 const float sg = std::max(longEdge * 0.0025f, 0.7f);
@@ -422,7 +459,7 @@ private:
     // Dark channel prior (He et al.): haze lifts the darkest channel of every patch toward the
     // airlight colour. Positive amounts remove that veil, negative ones add haze.
     // minAir: the airlight's floor (0.3 is mid grey in encoded values; linear ones need less).
-    static void dehazeImage(Image& img, float amount, float longEdge, float minAir) {
+    static void dehazeImage(const EvalContext& ctx, Image& img, float amount, float longEdge, float minAir) {
         const int w = img.w, h = img.h;
         const size_t n = size_t(w) * h;
         std::vector<float> dark(n);
@@ -434,21 +471,26 @@ private:
         });
         const float sg = std::max(longEdge * 0.01f, 1.0f);
         imageops::blurChannel(dark, w, h, sg, sg);
-        // Airlight: average colour of the haziest 0.1% of pixels.
-        std::vector<float> sorted = dark;
-        const size_t top = std::max<size_t>(1, n / 1000);
-        std::nth_element(sorted.begin(), sorted.begin() + (n - top), sorted.end());
-        const float thresh = sorted[n - top];
-        double acc[3] = {0, 0, 0};
-        size_t cnt = 0;
-        for (size_t i = 0; i < n; ++i)
-            if (dark[i] >= thresh) {
-                const float* p = img.pixel(i);
-                for (int k = 0; k < 3; ++k) acc[k] += std::clamp(p[k], 0.0f, 1.0f);
-                ++cnt;
-            }
+        // Airlight: average colour of the haziest 0.1% of pixels; a region reuses the preview's.
         float A[3];
-        for (int k = 0; k < 3; ++k) A[k] = std::max(float(acc[k] / double(std::max<size_t>(cnt, 1))), minAir);
+        if (ctx.roi && ctx.previewStats && ctx.previewStats->size() == 3) {
+            for (int k = 0; k < 3; ++k) A[k] = (*ctx.previewStats)[size_t(k)];
+        } else {
+            std::vector<float> sorted = dark;
+            const size_t top = std::max<size_t>(1, n / 1000);
+            std::nth_element(sorted.begin(), sorted.begin() + (n - top), sorted.end());
+            const float thresh = sorted[n - top];
+            double acc[3] = {0, 0, 0};
+            size_t cnt = 0;
+            for (size_t i = 0; i < n; ++i)
+                if (dark[i] >= thresh) {
+                    const float* p = img.pixel(i);
+                    for (int k = 0; k < 3; ++k) acc[k] += std::clamp(p[k], 0.0f, 1.0f);
+                    ++cnt;
+                }
+            for (int k = 0; k < 3; ++k) A[k] = std::max(float(acc[k] / double(std::max<size_t>(cnt, 1))), minAir);
+            if (ctx.statsOut) *ctx.statsOut = {A[0], A[1], A[2]};
+        }
         const float amax = std::max({A[0], A[1], A[2]});
         parallelFor(h, [&](int y) {
             for (int x = 0; x < w; ++x) {

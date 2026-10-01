@@ -232,11 +232,17 @@ void drawPicker(PickRequest& pick, ImGuiID id, ImVec2 imgMin, float scale, const
 }  // namespace
 
 void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const char* emptyText, PickRequest* pick,
-                   ImageOverlay* overlay) {
+                   ImageOverlay* overlay, const ViewDetail* detail, ViewInfo* info) {
     ImVec2 origin = ImGui::GetCursorScreenPos();
     ImVec2 avail = ImGui::GetContentRegionAvail();
     avail.x = std::max(avail.x, 1.0f);
     avail.y = std::max(avail.y, 1.0f);
+    const ImVec2 fbScale = ImGui::GetIO().DisplayFramebufferScale;
+    if (info) {
+        *info = ViewInfo{};
+        info->panelW = avail.x * fbScale.x;
+        info->panelH = avail.y * fbScale.y;
+    }
 
     ImGui::InvisibleButton(id, avail, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -276,6 +282,19 @@ void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const 
     const float cx = center.x + view.panX * view.zoom, cy = center.y + view.panY * view.zoom;
     dl->PushClipRect(origin, end, true);
     dl->AddImage((ImTextureID)(intptr_t)tex.id(), ImVec2(cx - hw, cy - hh), ImVec2(cx + hw, cy + hh));
+    if (detail && detail->tex && detail->tex->valid()) {
+        // Pixel edges of the detail land on the image's, so it lines up exactly with the preview.
+        const float x0 = cx - hw, y0 = cy - hh;
+        dl->AddImage((ImTextureID)(intptr_t)detail->tex->id(), ImVec2(x0 + detail->u0 * 2 * hw, y0 + detail->v0 * 2 * hh),
+                     ImVec2(x0 + detail->u1 * 2 * hw, y0 + detail->v1 * 2 * hh));
+    }
+    if (info) {
+        info->imageW = 2 * hw * fbScale.x;
+        info->u0 = std::clamp((origin.x - (cx - hw)) / (2 * hw), 0.0f, 1.0f);
+        info->u1 = std::clamp((end.x - (cx - hw)) / (2 * hw), 0.0f, 1.0f);
+        info->v0 = std::clamp((origin.y - (cy - hh)) / (2 * hh), 0.0f, 1.0f);
+        info->v1 = std::clamp((end.y - (cy - hh)) / (2 * hh), 0.0f, 1.0f);
+    }
     bool captured = false;
     if (picking) drawPicker(*pick, ImGui::GetItemID(), ImVec2(cx - hw, cy - hh), scale, tex, dl);
     else if (overlay) captured = overlay->update(dl, ImVec2(cx - hw, cy - hh), ImVec2(cx + hw, cy + hh), hovered, active);
