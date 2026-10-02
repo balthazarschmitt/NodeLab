@@ -4,6 +4,7 @@
 #include <cstdio>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include "io/ImageIO.h"
 #include "io/ImageWrite.h"
@@ -17,6 +18,60 @@
 #include "ui/ParamWidgets.h"
 
 
+namespace {
+
+// Blender's number fields: double-click types a value, and Backspace over one (or right-click >
+// Reset to Default) resets it. ImGui sliders only type on Ctrl+click, and their first click
+// already moved the value to the mouse, so a double-click puts back the value from before it.
+struct SliderClick {
+    ImGuiID id = 0;
+    nlohmann::json before;
+};
+SliderClick g_firstClick;
+ImGuiID g_typeNext = 0;  // slider to open for typing on its next frame
+
+// Call before the slider: opens it for typing when a double-click asked for that.
+void beginNumberField(const char* label) {
+    if (g_typeNext && g_typeNext == ImGui::GetID(label)) {
+        ImGui::SetKeyboardFocusHere();
+        g_typeNext = 0;
+    }
+}
+
+// Call right after the slider (the last item). Returns true if it changed the param.
+bool endNumberField(Node& node, int i, const nlohmann::json& before, bool isSlider) {
+    bool changed = false;
+    const ImGuiID id = ImGui::GetItemID();
+    if (isSlider && ImGui::IsItemActivated()) {
+        if (ImGui::GetIO().MouseClickedCount[ImGuiMouseButton_Left] >= 2 && g_firstClick.id == id) {
+            node.params[i] = g_firstClick.before;
+            g_typeNext = id;
+            // Let go of the slider, or it keeps dragging to the mouse while the button is held.
+            ImGui::ClearActiveID();
+            changed = true;
+        } else {
+            g_firstClick = {id, before};
+        }
+    }
+    const bool hovered = ImGui::IsItemHovered();
+    if (hovered && !ImGui::IsItemActive() && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) {
+        node.resetParam(i);
+        changed = true;
+    }
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) ImGui::OpenPopup("##numberMenu");
+    if (ImGui::BeginPopup("##numberMenu")) {
+        if (ImGui::MenuItem("Reset to Default", "Backspace")) {
+            node.resetParam(i);
+            changed = true;
+        }
+        if (ImGui::MenuItem("Edit Value", "Double-click")) g_typeNext = id;
+        ImGui::EndPopup();
+    }
+    return changed;
+}
+
+}  // namespace
+
 bool editParam(Node& node, int i, float width, bool compact) {
     const ParamDesc& d = node.info().params[i];
     std::string label = compact ? "##" + d.name : d.name;
@@ -25,8 +80,11 @@ bool editParam(Node& node, int i, float width, bool compact) {
     ImGui::SetNextItemWidth(width);
     switch (d.kind) {
         case ParamKind::Float: {
+            const nlohmann::json before = node.params[i];
             float v = node.paramF(i);
-            if (compact || d.hardMax > d.max || d.hardMin < d.min) {
+            beginNumberField(label.c_str());
+            const bool drag = compact || d.hardMax > d.max || d.hardMin < d.min;
+            if (drag) {
                 // Unbounded (math) values: drag field whose speed follows the soft range.
                 changed = ImGui::DragFloat(label.c_str(), &v, (d.max - d.min) / 300.0f, d.hardMin, d.hardMax, "%.3f",
                                            ImGuiSliderFlags_AlwaysClamp);
@@ -35,12 +93,16 @@ bool editParam(Node& node, int i, float width, bool compact) {
                                              ImGuiSliderFlags_AlwaysClamp);
             }
             if (changed) node.params[i] = v;
+            changed |= endNumberField(node, i, before, !drag);
             break;
         }
         case ParamKind::Int: {
+            const nlohmann::json before = node.params[i];
             int v = node.paramI(i);
+            beginNumberField(label.c_str());
             changed = ImGui::SliderInt(label.c_str(), &v, int(d.min), int(d.max), "%d", ImGuiSliderFlags_AlwaysClamp);
             if (changed) node.params[i] = v;
+            changed |= endNumberField(node, i, before, true);
             break;
         }
         case ParamKind::Bool: {
@@ -242,7 +304,15 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
                 owner->renamePin(output, v->pin, buf);
                 changed = true;
             }
-            if (!output && v->pin < int(owner->ranges.size())) {
+            // The socket's type: Number for a slider, Channel for a mask, Image for pixels.
+            static const char* kTypes[] = {"Image", "Channel", "Number"};
+            int t = int(pins[size_t(v->pin)].type);
+            ImGui::SetNextItemWidth(240);
+            if (ImGui::Combo("Type", &t, kTypes, 3)) {
+                owner->setPinType(*ownerParent, output, v->pin, PinType(t));
+                changed = true;
+            }
+            if (!output && pins[size_t(v->pin)].type != PinType::Image && v->pin < int(owner->ranges.size())) {
                 GroupNode::InputRange r = owner->ranges[size_t(v->pin)];
                 float vals[3] = {r.def, r.min, r.max};
                 ImGui::SetNextItemWidth(240);

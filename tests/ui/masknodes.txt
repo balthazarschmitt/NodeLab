@@ -1,0 +1,21 @@
+# NodeLab.exe tests\ui\interact.nlproj --script tests\ui\masknodes.txt
+# Splice Invert, then right-click > Mask Selected Nodes > Radial Gradient.
+settle
+drag 739 345 789 115
+settle
+move 820 104
+wait 2
+click 820 104 1
+wait 3
+move 922 508
+wait 5
+shot build/smoke/mn1_submenu.png
+move 1180 539
+wait 3
+move 1240 539
+wait 3
+click 1240 539
+wait 5
+settle
+shot build/smoke/mn2_masked.png
+quit

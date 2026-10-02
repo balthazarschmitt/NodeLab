@@ -609,7 +609,10 @@ Converters work on channels and numbers. They don't clamp unless they have a Cla
 - Selects a colour range, like a colour-range selection in a photo editor.
 - Hue (0..360°) and Hue Range pick the hues; Sat Min/Max and Value Min/Max limit the saturation
   and brightness; Softness blurs the edge of the range.
-- Outputs a Mask (1 = selected) and the Image with everything else transparent. Invert flips it.
+- The Inspector shows Hue as a colour wheel: click or drag on it to pick the hue (double-click
+  resets it). The keyed region is outlined on the wheel: Hue ± Hue Range around it, from Sat Min
+  to Sat Max out from the grey centre.
+- Outputs a Mask (1 = selected) and the Image with everything else black. Invert flips it.
 - **Uses:** "only the greens" or "only the sky" as a mask for Mix or for any node's Factor.
 
 **Map Range**
@@ -964,8 +967,8 @@ Coordinates are relative to the image, so textures look the same in the preview 
 ### Utility
 
 **Reroute**
-- A small dot that passes a wire through, to tidy up the layout. Shift+right-drag across a wire
-  adds one.
+- A small node that passes a wire through, to tidy up the layout. Shift+right-drag across a wire
+  adds one. Drag its bar to move it, as any node; its pins are on the ends.
 
 **Switch**
 - Passes On or Off through, depending on the On checkbox. Good for A/B testing two branches.
@@ -1009,14 +1012,14 @@ Coordinates are relative to the image, so textures look the same in the preview 
   instead of wiring everything from the Group Input node. Only offered inside a group: Add menu >
   Group.
 - Adding one adds a Number input to the group (a slider on the group node). Rename it with F2 or
-  in the Inspector, which also sets its Default, Min and Max. Several Value Input nodes can read
-  the same socket (duplicate one).
+  in the Inspector, which also sets its Default, Min and Max, and its Type: Number, Channel (a
+  mask) or Image. Several Value Input nodes can read the same socket (duplicate one).
 - Deleting the last Value Input of a socket it made removes the socket again, unless the Group
   Input node still uses it.
 
 **Value Output**
 - One of the group's output sockets as a node: what is wired into it comes out of the group.
-  Adding one adds a Number output; change its type in the Inspector to pass images or channels.
+  Adding one adds a Number output; its Type in the Inspector switches it to Channel or Image.
 - If the Group Output node's pin for the same socket is wired too, that wire wins.
 
 ### Presets
@@ -1051,8 +1054,11 @@ Coordinates are relative to the image, so textures look the same in the preview 
 | Mute | M: the node passes its input straight through (shown with a red line). |
 | Collapse | H: hides the node's settings. |
 | Rename | F2, or right-click > Rename. |
+| Edit a value | Double-click a slider in the Inspector (or click a node's value box) to type a number. Backspace over one resets it to its default, and right-click offers Reset to Default and Edit Value. |
 | Reset to defaults | Right-click > Reset to Defaults (or Edit > Reset to Defaults) puts every setting of the selected nodes back to its default. File paths are kept, and a RAW gets its RAW defaults again. |
-| Make links | F: connects the selected nodes in a chain. |
+| Make links | F connects the selected nodes in a chain, left to right (top to bottom in a column). Nodes already wired together are skipped, and when every matching input is taken, F replaces one. Afterwards a hint at the bottom of the canvas names the new wire: press 1 for the next output, 2 for the next input, or F again for the next pair (taken inputs are skipped, and an input F replaced gets its wire back). Esc, a click or a new selection ends it. |
+| Detach links | Alt+D (or right-click > Detach Links) removes the wires between the selected nodes. Their wires to unselected nodes stay. To take a node out of a chain instead, Alt+drag it. |
+| Swap links | Alt+S (or right-click > Swap Links), as in Node Wrangler. With two nodes selected they trade places, wires and position. With one, its two wired inputs trade wires (a Mix's A and B), or its one wire moves to the next input that takes it. |
 | Reroute | Shift+right-drag across wires. |
 | Preview | Ctrl+click a node; Ctrl+Shift+click for its next output. |
 | Group / ungroup / enter | Ctrl+G / Ctrl+Alt+G / Tab |
@@ -1125,10 +1131,8 @@ saved straight away, in `%APPDATA%\NodeLab\preferences.json`.
 - **New Projects:** the view transform (Standard or AgX, with a look) new projects and library
   photos start with. RAW photos always start with AgX.
 - **Save & Load:** **Auto Save** (on by default) and its **Timer** (5 minutes by default). Unsaved
-  changes are saved that long after the first one. A project that has a file, and a library
-  photo's edit, are saved in place. An untitled project is saved to
-  `%APPDATA%\NodeLab\autosave\Untitled.nlproj` instead; **File > Recover Auto Save** opens it
-  (as an untitled project, so Save asks where to keep it).
+  changes are saved that long after the first one, in place. Only a project that has been saved
+  once, or a library photo's edit, is auto saved; an untitled project waits for its first Save.
 
 ## Library
 
@@ -1269,6 +1273,12 @@ look.
    stacks another adjustment after the last.
 
 The same graph can be built by hand: any colour node with a mask wired into its Factor.
+
+**Masking any nodes:** to limit the edit of nodes that have no Factor (Sharpen, Blur, a whole
+chain), select them, right-click one and pick **Mask Selected Nodes** and a mask. A **Mix**
+labelled "Mask N" goes after them, with the image entering the chain in A, their result in B
+and the new mask in Factor: the edit shows where the mask is white and the original elsewhere.
+This is the Blender compositor way of splitting a matte area off, editing it and recombining.
 
 ### Thermal Camera
 

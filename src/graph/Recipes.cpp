@@ -1,6 +1,8 @@
 #include "graph/Recipes.h"
 
+#include <algorithm>
 #include <string>
+#include <vector>
 
 namespace recipes {
 
@@ -9,6 +11,8 @@ namespace {
 constexpr const char* kOutput = "io.output";
 constexpr const char* kBasic = "color.basic";
 constexpr int kBasicFactorPin = 1;
+constexpr const char* kMix = "math.mix";
+constexpr int kMixFactorPin = 2;
 
 const char* maskType(MaskKind k) {
     switch (k) {
@@ -77,6 +81,79 @@ AddedMask addMask(Graph& g, MaskKind kind) {
     if (kind == MaskKind::Range) g.connect(srcNode, srcPin, mask->id, 0);
     if (kind == MaskKind::Brush) g.connect(srcNode, srcPin, mask->id, 1);
     return {basic->id, mask->id};
+}
+
+AddedMask maskNodes(Graph& g, const std::set<int>& ids, MaskKind kind) {
+    std::vector<Node*> chain;
+    for (int id : ids)
+        if (Node* n = g.find(id)) chain.push_back(n);
+    if (chain.empty()) return {};
+    std::sort(chain.begin(), chain.end(), [](Node* a, Node* b) { return a->x != b->x ? a->x < b->x : a->y < b->y; });
+    auto inside = [&](int id) { return ids.count(id) > 0; };
+
+    // The exit: the rightmost node's image output that leaves the chain (else its first image
+    // output, for a chain at the end of the graph).
+    int exitNode = 0, exitPin = -1;
+    for (auto it = chain.rbegin(); it != chain.rend() && exitPin < 0; ++it) {
+        for (const Link& l : g.links())
+            if (l.fromNode == (*it)->id && !inside(l.toNode) && (*it)->info().outputs[size_t(l.fromPin)].type == PinType::Image) {
+                exitNode = l.fromNode, exitPin = l.fromPin;
+                break;
+            }
+    }
+    if (exitPin < 0) {
+        const auto& outs = chain.back()->info().outputs;
+        for (int o = 0; o < int(outs.size()) && exitPin < 0; ++o)
+            if (outs[size_t(o)].type == PinType::Image) exitNode = chain.back()->id, exitPin = o;
+    }
+    if (exitPin < 0) return {};
+
+    // The entry: the first image wire coming in from outside, leftmost node first.
+    int entryNode = 0, entryPin = 0;
+    for (Node* n : chain) {
+        const auto& ins = n->info().inputs;
+        for (int i = 0; i < int(ins.size()) && !entryNode; ++i)
+            if (const Link* l = g.inputLink(n->id, i); l && !inside(l->fromNode) && ins[size_t(i)].type == PinType::Image)
+                entryNode = l->fromNode, entryPin = l->fromPin;
+        if (entryNode) break;
+    }
+
+    Node* exit = g.find(exitNode);
+    const float x = exit->x + 230.0f, y = exit->y;
+    float bottom = y;
+    for (Node* n : chain) bottom = std::max(bottom, n->y);
+
+    // Everything downstream of the exit moves right, so the Mix has room.
+    std::set<int> down;
+    std::vector<int> todo{exitNode};
+    while (!todo.empty()) {
+        const int id = todo.back();
+        todo.pop_back();
+        for (const Link& l : g.links())
+            if (l.fromNode == id && !inside(l.toNode) && down.insert(l.toNode).second) todo.push_back(l.toNode);
+    }
+    std::vector<Link> outgoing;
+    for (const Link& l : g.links())
+        if (l.fromNode == exitNode && l.fromPin == exitPin && !inside(l.toNode)) outgoing.push_back(l);
+
+    Node* mix = g.addNode(kMix, x, y);
+    Node* mask = g.addNode(maskType(kind), chain.front()->x, bottom + 260.0f);
+    if (!mix || !mask) {
+        if (mix) g.removeNode(mix->id);
+        if (mask) g.removeNode(mask->id);
+        return {};
+    }
+    for (int id : down)
+        if (Node* n = g.find(id)) n->x += 230.0f;
+    freeSpot(g, mask->id, mask->x, mask->y);
+    mix->label = nextLabel(g);
+    for (const Link& l : outgoing) g.connect(mix->id, 0, l.toNode, l.toPin);
+    if (entryNode) g.connect(entryNode, entryPin, mix->id, 0);
+    g.connect(exitNode, exitPin, mix->id, 1);
+    g.connect(mask->id, 0, mix->id, kMixFactorPin);
+    if (entryNode && kind == MaskKind::Range) g.connect(entryNode, entryPin, mask->id, 0);
+    if (entryNode && kind == MaskKind::Brush) g.connect(entryNode, entryPin, mask->id, 1);
+    return {mix->id, mask->id};
 }
 
 }  // namespace recipes

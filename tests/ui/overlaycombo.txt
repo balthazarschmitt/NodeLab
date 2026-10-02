@@ -1,0 +1,31 @@
+# NodeLab.exe tests\ui\interact.nlproj --script tests\ui\overlaycombo.txt
+# The Inspector overlay's dropdowns open in front of it: change a group socket's type there.
+settle
+drag 739 345 789 115
+settle
+ctrl on
+key g
+ctrl off
+settle
+move 147 18
+wait 2
+click 147 18
+wait 3
+move 198 344
+wait 2
+click 198 344
+wait 3
+settle
+shot build/smoke/oc1_overlay.png
+move 960 257
+wait 2
+click 960 257
+wait 3
+shot build/smoke/oc2_open.png
+move 966 360
+wait 2
+click 966 360
+wait 3
+settle
+shot build/smoke/oc3_number.png
+quit

@@ -1,0 +1,37 @@
+# NodeLab.exe tests\ui\interact.nlproj --script tests\ui\linkcycle.txt
+# F (Make Links) then 1 / 2 / F to step the new wire's pins; Alt+S, Alt+D.
+settle
+move 520 104
+wait 2
+click 520 104
+wait 2
+shift on
+move 700 344
+wait 2
+click 700 344
+wait 2
+shift off
+key f
+settle
+shot build/smoke/lc1_made.png
+key 2
+settle
+shot build/smoke/lc2_next_input.png
+key escape
+settle
+shot build/smoke/lc3_done.png
+alt on
+key s
+alt off
+settle
+shot build/smoke/lc4_swap.png
+move 700 344
+wait 2
+click 700 344
+wait 2
+alt on
+key d
+alt off
+settle
+shot build/smoke/lc5_detach.png
+quit

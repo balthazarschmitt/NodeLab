@@ -75,18 +75,9 @@ void colorMixer(Node& n, const ParamRow& row) {
 
 // ---------------------------------------------------------------- Color Grading
 
-// Hue/saturation wheel: angle is hue (0 = red at the right, counter-clockwise), distance from the
-// centre is saturation. Drag to set both; double-click resets saturation; Shift drags finely.
-bool colorWheel(const char* id, Node& n, int hueParam, int satParam, float size) {
-    ImGui::PushID(id);
-    const ImVec2 p0 = ImGui::GetCursorScreenPos();
-    ImGui::InvisibleButton("##wheel", ImVec2(size, size));
-    const bool active = ImGui::IsItemActive(), hovered = ImGui::IsItemHovered();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 c(p0.x + size * 0.5f, p0.y + size * 0.5f);
-    const float r = size * 0.5f - 4.0f;
-
-    // Disc: triangles fanning from a grey centre to the fully saturated rim.
+// Hue disc: triangles fanning from a grey centre to the saturated rim, hue by angle (0 = red at
+// the right, counter-clockwise).
+void drawHueDisc(ImDrawList* dl, ImVec2 c, float r) {
     const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
     const int seg = 72;
     dl->PrimReserve(seg * 3, seg * 3);
@@ -97,6 +88,19 @@ bool colorWheel(const char* id, Node& n, int hueParam, int satParam, float size)
         dl->PrimVtx(ImVec2(c.x + std::cos(a1) * r, c.y - std::sin(a1) * r), uv, hueColor(a1 * 180 / kPi, 0.7f, 0.85f));
     }
     dl->AddCircle(c, r, IM_COL32(20, 20, 24, 255), 0, 2.0f);
+}
+
+// Hue/saturation wheel: angle is hue (0 = red at the right, counter-clockwise), distance from the
+// centre is saturation. Drag to set both; double-click resets saturation; Shift drags finely.
+bool colorWheel(const char* id, Node& n, int hueParam, int satParam, float size) {
+    ImGui::PushID(id);
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##wheel", ImVec2(size, size));
+    const bool active = ImGui::IsItemActive(), hovered = ImGui::IsItemHovered();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 c(p0.x + size * 0.5f, p0.y + size * 0.5f);
+    const float r = size * 0.5f - 4.0f;
+    drawHueDisc(dl, c, r);
     dl->AddLine(ImVec2(c.x - 4, c.y), ImVec2(c.x + 4, c.y), IM_COL32(40, 40, 40, 200));
     dl->AddLine(ImVec2(c.x, c.y - 4), ImVec2(c.x, c.y + 4), IM_COL32(40, 40, 40, 200));
 
@@ -211,6 +215,76 @@ bool brushMask(BrushMaskNode& n, const ParamRow& row) {
 
 }  // namespace
 
+// ---------------------------------------------------------------- Color Key
+
+// Color Key's Hue as a colour wheel: click or drag on it to pick the hue. The keyed region (Hue
+// +- Hue Range, from Sat Min to Sat Max out from the grey centre) is outlined on it.
+bool colorKey(Node& n, const ParamRow& row) {
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const float size = std::clamp(avail, 60.0f, 170.0f);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, (avail - size) * 0.5f));
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##keyWheel", ImVec2(size, size));
+    const bool active = ImGui::IsItemActive(), hovered = ImGui::IsItemHovered();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 c(p0.x + size * 0.5f, p0.y + size * 0.5f);
+    const float r = size * 0.5f - 4.0f;
+    drawHueDisc(dl, c, r);
+
+    bool changed = false;
+    const ImGuiIO& io = ImGui::GetIO();
+    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        n.resetParam(0);
+        changed = true;
+    } else if (active && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
+        const float dx = io.MousePos.x - c.x, dy = io.MousePos.y - c.y;
+        if (std::hypot(dx, dy) > 2.0f) {
+            float hue = std::atan2(-dy, dx) * 180.0f / kPi;
+            if (hue < 0) hue += 360.0f;
+            n.params[0] = std::clamp(hue, 0.0f, 360.0f);
+            changed = true;
+        }
+    }
+
+    // The keyed region: an annular sector, filled faintly and outlined.
+    const float hue = n.paramF(0), range = n.paramF(1);
+    const float r0 = std::clamp(n.paramF(2), 0.0f, 1.0f) * r, r1 = std::clamp(n.paramF(3), 0.0f, 1.0f) * r;
+    const bool whole = range >= 180.0f;
+    const float a0 = (whole ? 0.0f : hue - range) * kPi / 180, a1 = (whole ? 360.0f : hue + range) * kPi / 180;
+    const int seg = std::max(2, int(std::ceil((a1 - a0) / (2 * kPi) * 72)));
+    auto at = [&](float a, float d) { return ImVec2(c.x + std::cos(a) * d, c.y - std::sin(a) * d); };
+    // Without anti-aliasing, or each translucent quad's fringe shows as a seam.
+    const ImDrawListFlags flags = dl->Flags;
+    dl->Flags &= ~ImDrawListFlags_AntiAliasedFill;
+    for (int i = 0; i < seg; ++i) {
+        const float b0 = a0 + (a1 - a0) * i / seg, b1 = a0 + (a1 - a0) * (i + 1) / seg;
+        dl->AddQuadFilled(at(b0, r0), at(b0, r1), at(b1, r1), at(b1, r0), IM_COL32(255, 255, 255, 40));
+    }
+    dl->Flags = flags;
+    for (int i = 0; i <= seg; ++i) dl->PathLineTo(at(a0 + (a1 - a0) * i / seg, r1));
+    if (r0 > 0.5f || whole)
+        for (int i = seg; i >= 0; --i) dl->PathLineTo(at(a0 + (a1 - a0) * i / seg, r0));
+    else
+        dl->PathLineTo(c);
+    if (whole) dl->PathStroke(IM_COL32(255, 255, 255, 200), 0, 1.5f);
+    else dl->PathStroke(IM_COL32(255, 255, 255, 200), ImDrawFlags_Closed, 1.5f);
+
+    // The picked hue: a handle on the rim in its own colour.
+    const float ha = hue * kPi / 180;
+    const ImVec2 pt = at(ha, r);
+    dl->AddLine(c, pt, IM_COL32(255, 255, 255, 120));
+    dl->AddCircleFilled(pt, 6.0f, hueColor(hue, 1.0f, 1.0f));
+    dl->AddCircle(pt, 6.0f, IM_COL32(255, 255, 255, 255), 0, 1.5f);
+    dl->AddCircle(pt, 7.5f, IM_COL32(0, 0, 0, 200), 0, 1.0f);
+    if (hovered || active) ImGui::SetTooltip("Hue %.0f\nClick or drag to pick the hue, double-click to reset", hue);
+
+    pushBandColor(hue);
+    row(0);
+    ImGui::PopStyleColor(3);
+    for (int i = 1; i < int(n.params.size()); ++i) row(i);
+    return changed;
+}
+
 bool drawNodeInspector(Node& n, const ParamRow& row, bool& changed) {
     if (NodeOverlay::supports(n)) {
         const char* hint = n.info().type == "xform.crop"
@@ -234,6 +308,8 @@ bool drawNodeInspector(Node& n, const ParamRow& row, bool& changed) {
         colorMixer(n, row);
     } else if (t == "color.color_grading") {
         changed |= colorGrading(n, row);
+    } else if (t == "conv.color_key") {
+        changed |= colorKey(n, row);
     } else if (auto* brush = dynamic_cast<BrushMaskNode*>(&n)) {
         changed |= brushMask(*brush, row);
     } else if (auto* spots = dynamic_cast<SpotRemovalNode*>(&n)) {

@@ -32,7 +32,7 @@ public:
     int run(const RunOptions& opt);
 
 private:
-    enum class Pending { None, New, Open, OpenFolder, OpenPhoto, RecoverAutosave, Quit };
+    enum class Pending { None, New, Open, OpenFolder, OpenPhoto, Quit };
 
     // An image panel showing a node's output. viewers_[0] is the main "Result" viewer, which
     // follows the Ctrl+click preview (or the Output node); extra viewers can pin any node.
@@ -243,13 +243,12 @@ private:
     std::string gpuError_;  // why the GPU is unavailable, or the last node that fell back
     void loadPreferences();
     // Auto Save (Preferences > Save & Load, as in Blender): unsaved changes are saved this many
-    // minutes after the first one. A project with a file is saved in place; an untitled one goes
-    // to %APPDATA%\NodeLab\autosave, which File > Recover Auto Save opens.
+    // minutes after the first one, in place. Only projects with a file and library photos: an
+    // untitled project is never written anywhere until the user saves it.
     bool autosave_ = true;
     int autosaveMinutes_ = 5;
     double unsavedSince_ = -1;  // ImGui time of the first change since the last save
     void tickAutosave();
-    void recoverAutosave();
     void savePreferences() const;
 
     // Edit > Preferences (preferences.json, like the compositor settings above).

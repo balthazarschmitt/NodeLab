@@ -501,10 +501,10 @@ void App::drawFrame() {
     tickAutosave();
 }
 
-static fs::path autosavePath() { return settingsDir() / "autosave" / "Untitled.nlproj"; }
-
 void App::tickAutosave() {
-    if (!modified_) {
+    // Only a project that has been saved once (or a library photo, whose sidecar is its file):
+    // an untitled one waits for the first Save to say where it belongs.
+    if (!modified_ || (projectPath_.empty() && !libraryPhotoOpen())) {
         unsavedSince_ = -1;
         return;
     }
@@ -520,31 +520,12 @@ void App::tickAutosave() {
         return;
     }
     std::string err;
-    if (!projectPath_.empty()) {
-        if (::saveProject(projectPath_, graph_, uiState(), err)) {
-            modified_ = false;
-            status_ = "Auto saved " + pathToU8(u8ToPath(projectPath_).filename());
-        } else {
-            status_ = "Auto save failed: " + err;
-        }
-        return;
-    }
-    // Untitled: a copy to recover from; the project itself stays unsaved.
-    std::error_code ec;
-    fs::create_directories(autosavePath().parent_path(), ec);
-    if (::saveProject(pathToU8(autosavePath()), graph_, uiState(), err))
-        status_ = "Auto saved to " + pathToU8(autosavePath()) + " (File > Recover Auto Save)";
-    else
+    if (::saveProject(projectPath_, graph_, uiState(), err)) {
+        modified_ = false;
+        status_ = "Auto saved " + pathToU8(u8ToPath(projectPath_).filename());
+    } else {
         status_ = "Auto save failed: " + err;
-}
-
-void App::recoverAutosave() {
-    if (!openProject(pathToU8(autosavePath()))) return;
-    // Like an untitled project with changes: Save asks where to keep it.
-    projectPath_.clear();
-    library_.setCurrentProject(projectPath_);
-    modified_ = true;
-    status_ = "Recovered the auto save";
+    }
 }
 
 // ---------------------------------------------------------------- layout & panels
@@ -700,6 +681,20 @@ void App::drawEditorWindow() {
             pin.push_back(r.openViewer);
             openViewer(std::move(pin));
         }
+        if (r.maskSelection >= 0) {
+            Graph& g = currentGraph();
+            const recipes::AddedMask m =
+                recipes::maskNodes(g, std::set<int>(r.maskNodes.begin(), r.maskNodes.end()), recipes::MaskKind(r.maskSelection));
+            if (m.ok()) {
+                selected_ = m.mask;
+                editor_.select(m.mask);
+                status_ = "Added " + g.find(m.adjust)->label + ": the selected nodes apply only where " +
+                          g.find(m.mask)->info().displayName + " is white";
+                markChanged(true);
+            } else {
+                status_ = "Mask Selected Nodes needs nodes with an image output";
+            }
+        }
         if (r.enterGroup) enterGroup(r.enterGroup);
         else if (r.exitGroup) exitGroup();
         else if (r.findNode) {
@@ -740,8 +735,11 @@ void App::drawInspectorOverlay() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
     if (ImGui::Begin("Inspector##overlay", nullptr, flags)) {
-        // Clicking the editor raises it over everything docked; keep the overlay on top.
-        ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+        // Clicking the editor raises it over everything docked; keep the overlay on top. Not
+        // while a popup is open, though: raising the overlay would cover its own dropdown lists
+        // (a combo's items opened behind it and couldn't be clicked).
+        if (!ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
+            ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
         drawInspectorContents();
     }
     ImGui::End();
@@ -1067,13 +1065,6 @@ void App::drawMainMenu() {
         if (ImGui::MenuItem("Open Folder...", "Ctrl+Shift+O")) requestAction(Pending::OpenFolder);
         if (ImGui::MenuItem("Save", "Ctrl+S")) saveProject(false);
         if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) saveProject(true);
-        {
-            std::error_code ec;
-            if (ImGui::MenuItem("Recover Auto Save", nullptr, false, fs::exists(autosavePath(), ec)))
-                requestAction(Pending::RecoverAutosave);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip("Open the last auto save of an untitled project");
-        }
         ImGui::Separator();
         if (ImGui::MenuItem("Import Image...", "Ctrl+I"))
             if (auto p = openFileDialog("Import image", kImageFileFilter)) importImage(*p);
@@ -1429,7 +1420,6 @@ void App::performAction(Pending action) {
             if (auto d = folderDialog("Open folder")) openFolder(*d);
             break;
         case Pending::OpenPhoto: loadLibraryPhoto(pendingPhoto_); break;
-        case Pending::RecoverAutosave: recoverAutosave(); break;
         case Pending::Quit: quit_ = true; break;
         case Pending::None: break;
     }
@@ -2017,9 +2007,8 @@ void App::drawPreferencesWindow() {
             changed |= ImGui::SliderInt("Timer (Minutes)", &autosaveMinutes_, 1, 60, "%d", ImGuiSliderFlags_AlwaysClamp);
             ImGui::EndDisabled();
             ImGui::TextDisabled("Unsaved changes are saved this long after the first one.\n"
-                                "A project with a file (or a library photo's edit) is saved in place.\n"
-                                "An untitled project is kept in %%APPDATA%%\\NodeLab\\autosave;\n"
-                                "File > Recover Auto Save opens it.");
+                                "Only a project saved once (or a library photo's edit) is auto saved,\n"
+                                "in place; an untitled project waits for its first Save.");
             break;
         }
     }

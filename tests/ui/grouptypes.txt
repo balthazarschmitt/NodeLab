@@ -1,0 +1,24 @@
+# NodeLab.exe tests\ui\interact.nlproj --script tests\ui\grouptypes.txt
+# Group Invert, then change the group input's type in the Inspector.
+settle
+drag 739 345 789 115
+settle
+ctrl on
+key g
+ctrl off
+settle
+move 789 115
+wait 2
+click 789 115
+wait 3
+move 650 833
+wait 2
+click 650 833
+wait 3
+move 648 761
+wait 3
+click 648 761
+wait 5
+settle
+shot build/smoke/gt3_channel.png
+quit

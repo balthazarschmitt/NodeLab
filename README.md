@@ -4,6 +4,13 @@ Node-based image manipulation. Import a photo, wire color data between nodes, an
 (left) and the result (right) update live. Aimed at channel mixing, IR/UV camera emulation, and
 glitch/experimental looks.
 
+## Download
+
+Get `NodeLab.exe` from the [latest release](https://github.com/balthazarschmitt/NodeLab/releases/latest).
+It's a single portable exe for 64-bit Windows 10/11 (OpenGL 3.0 or newer) and needs no install.
+The zip also has the guide, the changelog and example projects. Help > Guide shows the same guide
+inside the app.
+
 ## Build (Windows)
 
 Requires CMake ≥ 3.24 and a C++20 compiler. CLion's bundled MinGW toolchain works out of the box:
@@ -80,7 +87,10 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Move / duplicate-and-move | G / Shift+D, then click to place (right-click or Esc cancels) |
 | Pull a node out of a chain | Alt+drag it |
 | Mute / collapse / rename | M / H / F2 |
-| Make links | F connects the selected nodes left to right |
+| Make links | F connects the selected nodes left to right; then 1 / 2 step the new wire's output / input, F the next pair, Esc keeps it |
+| Detach links | Alt+D removes the wires between the selected nodes (wires to other nodes stay) |
+| Swap links | Alt+S: two nodes trade places and wires; one node swaps its two wired inputs |
+| Mask selected nodes | right-click → Mask Selected Nodes: a Mix after them blends their edit with the original through a new mask |
 | Select linked | L upstream, Shift+L downstream |
 | Cut wires / add reroutes | Ctrl+right-drag / Shift+right-drag across wires |
 | Preview another output | Ctrl+Shift+click a node cycles through its outputs |
@@ -95,6 +105,7 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Move nodes between frames | right-click a node → Move to Frame, or select nodes and right-click a frame title → Move Selected Nodes Here; Alt+P removes from frame |
 | Panels | Drag a panel's tab to dock it elsewhere, or out of the window; View > Layout picks a preset (Default, Compositing, Photo, Side by Side, Node Focus); View > Reset Layout |
 | Inspector | Floats in the Node Editor's corner while a node is selected; Preferences > Interface (or View > Inspector Overlay) makes it a panel |
+| Edit a value | Double-click a slider (or click a node's value box) to type; Backspace over it, or right-click, resets it |
 | Reset to defaults | Right-click a node → Reset to Defaults (keeps its file) |
 | Preferences | Edit > Preferences: layout, Inspector, themes (NodeLab Dark, Blender, Darkroom, Midnight, High Contrast, Light, or your own colours), viewer background, compositor device, new projects' view transform |
 | Extra viewers | Right-click a node → Open in New Viewer (or View > New Viewer) to watch an intermediate result; the viewer's drop-down switches node, "Sync view" pans with the other panes |
@@ -108,7 +119,7 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | On-image controls | Select a Crop, gradient, shape or Brush Mask node and edit it on the Result: drag handles; Crop shows the whole frame (drag outside to straighten); Brush paints, Alt erases, `[` `]` size; O toggles the red mask overlay |
 | Spot removal | Select a Spot Removal node, click a blemish on the Result, drag its source onto clean texture; drag a spot to move it, its edge to resize; Alt+click or Delete removes one |
 | Auto tone | Basic's Inspector → Auto sets Exposure, Contrast, Highlights, Shadows, Whites and Blacks from the image |
-| Auto save | Every 5 minutes by default (Edit > Preferences > Save & Load); untitled projects go to `%APPDATA%\NodeLab\autosave`, File > Recover Auto Save opens them |
+| Auto save | Every 5 minutes by default (Edit > Preferences > Save & Load), once a project has been saved (library photos always) |
 | Add Mask | Result toolbar → Add Mask (Shift+M over the Result), or M linear, Shift+R radial, K brush: inserts a Basic labelled "Mask N" before the Output, driven by a new mask; the Inspector shows the mask with the Basic's sliders below it |
 | Import image | File > Import Image, or drop a file on the window |
 | Library | File > Open Folder (Ctrl+Shift+O), drop a folder on the window, or `NodeLab.exe <folder>`: a filmstrip of the folder's photos. Click or ←/→ to open one; its edit is saved automatically in `<photo>.nlproj` beside it. New photos start as Image Input → Denoise → Basic → Output |
@@ -174,3 +185,9 @@ tests       doctest unit tests
 
 Adding a node: write a class with a `NODELAB_NODE({...})` descriptor and `evaluate()`, then
 `r.add<YourNode>()` in its family's register function.
+
+## License
+
+NodeLab is released under the [MIT License](LICENSE). The release exe statically links GLFW (zlib),
+Dear ImGui (MIT), nlohmann/json (MIT), stb (public domain / MIT), tinyexpr (zlib), zlib-ng (zlib)
+and LibRaw (LGPL 2.1 / CDDL 1.0, used under CDDL).

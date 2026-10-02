@@ -45,10 +45,11 @@ build\nodelab_tests.exe
   - `cmake/GitVersion.cmake` stamps the git hash at build time, with `-dirty` for uncommitted changes.
   - It appears in the window title, the Help menu, `NodeLab.exe --version`, and the exe's
     Properties > Details (`cmake/NodeLab.rc.in`).
-- **Bumping (semver while 0.x):**
-  - Minor (0.3.0 → 0.4.0) when a feature set lands; patch (0.3.0 → 0.3.1) for fixes only.
+- **Bumping (semver):**
+  - Minor (1.0.0 → 1.1.0) when a feature set lands; patch (1.0.0 → 1.0.1) for fixes only. A major
+    bump is for breaking changes (projects that no longer load as before).
   - Bump when the user asks to commit a finished feature set, not on every commit.
-  - Update `CHANGELOG.md` under the new version, commit, then tag it: `git tag -a v0.4.0 -m "NodeLab 0.4.0"`.
+  - Update `CHANGELOG.md` under the new version, commit, then tag it: `git tag -a v1.1.0 -m "NodeLab 1.1.0"`.
   - Add changes that aren't released yet under `## Unreleased` in `CHANGELOG.md`.
 - **Project file format:** `.nlproj` has `version` (the format, `kProjectVersion` in
   `io/ProjectFile.h`) and `appVersion` (the app that saved it).
@@ -247,5 +248,8 @@ src/gpu       Device (hidden GL 4.3 context sharing textures with the UI, textur
 
 ## Git
 
-- Branch `main`, no remote.
+- Branch `main`, remote `origin` = https://github.com/balthazarschmitt/NodeLab (public, MIT).
+- `saves/` holds the user's own projects and exports: it is gitignored and must never be pushed.
+- Releases: `gh release create vX.Y.Z` with `NodeLab.exe`, `GUIDE.md` and a zip (exe, docs,
+  LICENSE, examples). Push and release only when the user asks.
 - Commit when the user asks, with descriptive messages ending with the Co-Authored-By trailer.

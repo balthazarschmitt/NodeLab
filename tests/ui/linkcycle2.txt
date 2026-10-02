@@ -1,0 +1,32 @@
+# Alt+D removes only the wires between the selected nodes; the node menu has Mask Selected Nodes.
+settle
+drag 739 345 789 115
+settle
+# Invert is selected alone: nothing to detach.
+alt on
+key d
+alt off
+settle
+shot build/smoke/ld1_alone.png
+# Select Image Input too: only Input -> Invert goes, Invert -> Output stays.
+move 520 104
+wait 2
+shift on
+click 520 104
+shift off
+wait 2
+alt on
+key d
+alt off
+settle
+shot build/smoke/ld2_detached.png
+ctrl on
+key z
+ctrl off
+settle
+move 820 104
+wait 2
+click 820 104 1
+wait 3
+shot build/smoke/ld3_menu.png
+quit

@@ -220,6 +220,16 @@ public:
             if (ps[i].kind != ParamKind::Path && ps[i].kind != ParamKind::SavePath) params[i] = ps[i].def;
     }
 
+    // One param back to its default, as resetParams would set it (a RAW's own defaults too).
+    void resetParam(int i) {
+        if (i < 0 || i >= int(params.size())) return;
+        nlohmann::json keep = params;
+        resetParams();
+        nlohmann::json v = std::move(params[size_t(i)]);
+        params = std::move(keep);
+        params[size_t(i)] = std::move(v);
+    }
+
     float paramF(int i) const { return params[i].is_number() ? params[i].get<float>() : 0.0f; }
     int paramI(int i) const { return params[i].is_number() ? params[i].get<int>() : 0; }
     bool paramB(int i) const { return params[i].is_boolean() ? params[i].get<bool>() : false; }

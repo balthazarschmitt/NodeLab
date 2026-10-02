@@ -193,6 +193,51 @@ TEST_CASE("Add Mask inserts a Basic before the Output, driven by a new mask") {
     CHECK(empty.nodes().size() == 1);
 }
 
+TEST_CASE("Mask Selected Nodes blends the chain's edit through a Mix") {
+    Graph g;
+    Node* in = g.addNode("io.image_input");
+    Node* a = g.addNode("color.basic", 200, 0);
+    Node* b = g.addNode("filter.denoise", 400, 0);
+    Node* out = g.addNode("io.output", 600, 0);
+    Node* view = g.addNode("util.file_output", 600, 200);
+    g.connect(in->id, 0, a->id, 0);
+    g.connect(a->id, 0, b->id, 0);
+    g.connect(b->id, 0, out->id, 0);
+    g.connect(b->id, 0, view->id, 0);
+
+    const recipes::AddedMask m = recipes::maskNodes(g, {a->id, b->id}, recipes::MaskKind::Range);
+    REQUIRE(m.ok());
+    CHECK(g.find(m.adjust)->info().type == "math.mix");
+    CHECK(g.find(m.adjust)->label == "Mask 1");
+    // A = what entered the chain, B = its edit, Factor = the mask; both of the chain's outgoing
+    // wires now leave the Mix, and the Range looks at the unedited image.
+    CHECK(g.inputLink(m.adjust, 0)->fromNode == in->id);
+    CHECK(g.inputLink(m.adjust, 1)->fromNode == b->id);
+    CHECK(g.inputLink(m.adjust, 2)->fromNode == m.mask);
+    CHECK(g.inputLink(out->id, 0)->fromNode == m.adjust);
+    CHECK(g.inputLink(view->id, 0)->fromNode == m.adjust);
+    CHECK(g.inputLink(m.mask, 0)->fromNode == in->id);
+    CHECK(g.inputLink(a->id, 0)->fromNode == in->id);  // the chain itself is untouched
+    CHECK(out->x == doctest::Approx(830.0f));          // downstream moved right
+    CHECK(in->x == doctest::Approx(0.0f));
+
+    // A chain at the end of the graph still gets its Mix; gradients take no image.
+    Graph g2;
+    Node* i2 = g2.addNode("io.image_input");
+    Node* c2 = g2.addNode("color.basic", 200, 0);
+    g2.connect(i2->id, 0, c2->id, 0);
+    const recipes::AddedMask m2 = recipes::maskNodes(g2, {c2->id}, recipes::MaskKind::Linear);
+    REQUIRE(m2.ok());
+    CHECK(g2.inputLink(m2.adjust, 1)->fromNode == c2->id);
+    CHECK(g2.inputLink(m2.mask, 0) == nullptr);
+
+    // Nothing with an image output: no change.
+    Graph g3;
+    Node* v3 = g3.addNode("io.number");
+    CHECK_FALSE(recipes::maskNodes(g3, {v3 ? v3->id : 0}, recipes::MaskKind::Radial).ok());
+    CHECK(g3.nodes().size() == (v3 ? 1u : 0u));
+}
+
 TEST_CASE("Brush Mask's paint cache matches painting every stroke") {
     const int w = 96, h = 64;
     const ImagePtr img = halves(kRed, kBlue, w, h);

@@ -1,7 +1,38 @@
 # Changelog
 
-NodeLab uses [semantic versioning](https://semver.org). While it is 0.x, minor versions add
+NodeLab uses [semantic versioning](https://semver.org): minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
+
+## 1.0.0 (2026-10-02)
+
+The first stable release, and the first one published on GitHub with a Windows build.
+
+- **Make Links (F)** is smarter: nodes already wired together are skipped, nodes in a column
+  connect top to bottom, and a taken input is replaced when no free one matches. Afterwards 1
+  steps the new wire to the next output, 2 to the next input and F to the next pair, with a hint
+  at the bottom of the canvas (Esc ends it). A replaced wire comes back when the cycle moves on.
+- **Detach Links** (Alt+D) removes the wires between the selected nodes; their wires to other
+  nodes stay.
+- **Swap Links** (Alt+S, Node Wrangler): two nodes trade places and wires; one node swaps its two
+  wired inputs, or moves its one wire to the next input.
+- **Mask Selected Nodes** (node right-click): limits any nodes' edit to a new mask with a Mix
+  after them (the image entering them in A, their result in B, the mask in Factor).
+- **Sliders type on double-click**, as in Blender, and Backspace over any value (or right-click >
+  Reset to Default) resets just that setting, in the Inspector and on the nodes.
+- **Value Input / Value Output** have a Type in the Inspector (Number, Channel or Image), so they
+  can carry masks and images, like the group's own socket list.
+- Fixed: dropdowns in the floating Inspector overlay opened behind it and couldn't be clicked
+  (a group socket's type, Value Input's Type, blend modes...).
+- **Color Key** shows its Hue as a colour wheel in the Inspector, with the keyed hue and
+  saturation range outlined on it; click or drag the wheel to pick the hue.
+- **Reroutes** are a small bar with their pins on the ends instead of a dot, so they select and
+  drag like any node (clicking the dot used to start a wire from one of its pins).
+- Fixed: a green or yellow line along one edge of RAW previews (CR3s and other sensors with an
+  odd width or height). The half-size preview decode left the last row and column a colour short;
+  full-resolution renders and exports were not affected.
+- **Auto Save** now saves only projects that have been saved once (and library photos). Untitled
+  projects are no longer written to `%APPDATA%\NodeLab\autosave`, and File > Recover Auto Save
+  is gone.
 
 ## 0.21.0 (2026-10-02)
 

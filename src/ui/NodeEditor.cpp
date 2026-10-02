@@ -71,11 +71,13 @@ int paramRows(const Node& n, int i) {
     return 0;
 }
 
-constexpr float kRerouteSize = 20.0f;
+// A reroute is a small title-bar-only node, its pins on the ends: the body selects and drags it
+// like any node (a dot with both pins inside it mostly started wires instead).
+constexpr float kRerouteW = 90.0f;
 bool isReroute(const Node& n) { return n.info().type == "util.reroute"; }
 
 float nodeHeightGrid(const Node& n) {
-    if (isReroute(n)) return kRerouteSize;
+    if (isReroute(n)) return kTitleH;
     if (n.collapsed) {
         int pins = int(std::max(n.info().inputs.size(), n.info().outputs.size()));
         return std::max(kTitleH + 6.0f, kTitleH * 0.5f + pins * 8.0f + 8.0f);
@@ -87,7 +89,7 @@ float nodeHeightGrid(const Node& n) {
 }
 
 // Drawn size in grid units, for automatic spacing.
-NodeSize gridSize(const Node& n) { return {isReroute(n) ? kRerouteSize : kNodeW, nodeHeightGrid(n)}; }
+NodeSize gridSize(const Node& n) { return {isReroute(n) ? kRerouteW : kNodeW, nodeHeightGrid(n)}; }
 
 void bezierPoints(ImVec2 a, ImVec2 b, float zoom, ImVec2& c1, ImVec2& c2) {
     float d = std::max(std::fabs(b.x - a.x) * 0.5f, 40.0f * zoom);
@@ -164,11 +166,10 @@ NodeEditor::Layout NodeEditor::layoutFor(const Node& n) const {
     Layout L;
     L.min = toScreen(ImVec2(n.x, n.y));
     if (isReroute(n)) {
-        const float s = kRerouteSize * z;
-        L.max = ImVec2(L.min.x + s, L.min.y + s);
-        L.titleH = 0;
-        L.outPins.emplace_back(L.max.x - s * 0.25f, L.min.y + s * 0.5f);
-        L.inPins.emplace_back(L.min.x + s * 0.25f, L.min.y + s * 0.5f);
+        L.max = ImVec2(L.min.x + kRerouteW * z, L.min.y + kTitleH * z);
+        L.titleH = kTitleH * z;
+        L.outPins.emplace_back(L.max.x, L.min.y + L.titleH * 0.5f);
+        L.inPins.emplace_back(L.min.x, L.min.y + L.titleH * 0.5f);
         L.valueBoxes.push_back(ImRect());
         L.paramBoxes.resize(info.params.size());
         return L;
@@ -379,6 +380,18 @@ bool NodeEditor::drawValueBox(Node& n, int param, const ImRect& box, ImDrawList*
         dragged = true;
     }
     if (ImGui::IsItemDeactivated() && !dragged) editing_ = EditState{n.id, param, 0, false};
+    if (ImGui::IsItemHovered()) {
+        // Blender: Backspace over a field resets it; right-click offers the same.
+        valueHovered_ = true;
+        if (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) {
+            n.resetParam(param);
+            changed = true;
+        }
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            valueMenuNode_ = n.id, valueMenuParam_ = param;
+            openValueMenu_ = true;
+        }
+    }
 
     drawValueField(dl, box, label, n.paramF(param), d, fs, zoom_, ImGui::IsItemHovered() || ImGui::IsItemActive());
     ImGui::PopID();
@@ -602,18 +615,8 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
     const NodeInfo& info = n.info();
     const Layout L = layoutFor(n);
     const float z = zoom_;
-    if (isReroute(n)) {
-        // A dot: the wire's color (or amber when unconnected), outlined when selected.
-        ImVec2 c((L.min.x + L.max.x) * 0.5f, (L.min.y + L.max.y) * 0.5f);
-        ImU32 col = pinColor(PinType::Image);
-        if (const Link* l = g.inputLink(n.id, 0))
-            if (const Node* from = g.find(l->fromNode)) col = pinColor(from->info().outputs[l->fromPin].type);
-        dl->AddCircleFilled(c, 6.0f * z + 1.0f, col);
-        dl->AddCircle(c, 6.0f * z + 1.0f, selection_.count(n.id) ? theme::col(theme::Selection) : theme::col(theme::NodeOutline), 0,
-                      selection_.count(n.id) ? 2.0f : 1.0f);
-        (void)r;
-        return false;
-    }
+    // Collapsed nodes and reroutes are just a title bar with their pins on its ends.
+    const bool bar = n.collapsed || isReroute(n);
     const float fs = ImGui::GetFontSize() * z;
     const bool showText = fs >= 5.0f;
     const bool interactive = z >= 0.45f;
@@ -628,14 +631,14 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
     ImU32 titleCol = n.id == preview ? theme::col(theme::PreviewTitle) : categoryColor(info.category);
     if (n.muted) titleCol = theme::col(theme::MutedTitle);
     dl->AddRectFilled(L.min, ImVec2(L.max.x, L.min.y + L.titleH), titleCol, round,
-                      n.collapsed ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersTop);
+                      bar ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersTop);
     if (showText) {
         std::string title = n.label.empty() ? info.displayName : n.label;
         if (n.muted) title += "  (muted)";
-        dl->AddText(ImGui::GetFont(), fs, ImVec2(L.min.x + (n.collapsed ? 14 : 8) * z, L.min.y + (L.titleH - fs) * 0.5f),
+        dl->AddText(ImGui::GetFont(), fs, ImVec2(L.min.x + (bar ? 14 : 8) * z, L.min.y + (L.titleH - fs) * 0.5f),
                     n.muted ? IM_COL32(200, 170, 170, 255) : theme::col(theme::TitleText), title.c_str(), nullptr, 0.0f, &clip);
     }
-    if (n.muted && !n.collapsed && !L.inPins.empty() && !L.outPins.empty()) {
+    if (n.muted && !bar && !L.inPins.empty() && !L.outPins.empty()) {
         // Red pass-through line like Blender's muted nodes.
         dl->AddLine(L.inPins[0], L.outPins[0], IM_COL32(200, 70, 70, 200), std::max(1.5f, 2.0f * z));
     }
@@ -668,9 +671,16 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
         }
     };
     const ImU32 labelCol = theme::col(theme::LabelText);
-    if (n.collapsed) {
-        for (int i = 0; i < int(info.outputs.size()); ++i) drawPin(L.outPins[i], info.outputs[i].type, false);
-        for (int i = 0; i < int(info.inputs.size()); ++i) drawPin(L.inPins[i], info.inputs[i].type, false);
+    if (bar) {
+        // A reroute's pins take the colour of the wire coming in.
+        auto pinType = [&](PinType t) {
+            if (isReroute(n))
+                if (const Link* l = g.inputLink(n.id, 0))
+                    if (const Node* from = g.find(l->fromNode)) return from->info().outputs[size_t(l->fromPin)].type;
+            return t;
+        };
+        for (int i = 0; i < int(info.outputs.size()); ++i) drawPin(L.outPins[i], pinType(info.outputs[i].type), false);
+        for (int i = 0; i < int(info.inputs.size()); ++i) drawPin(L.inPins[i], pinType(info.inputs[i].type), false);
         ImGui::PopID();
         return false;
     }
@@ -829,6 +839,7 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
     Result r;
     ImGuiIO& io = ImGui::GetIO();
     previewPin_ = previewPin;
+    valueHovered_ = false;
     origin_ = ImGui::GetCursorScreenPos();
     size_ = ImGui::GetContentRegionAvail();
     size_.x = std::max(size_.x, 1.0f);
@@ -1125,7 +1136,7 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
                     g.removeLink(l.id);
                     if (mode_ == Mode::RerouteCut) {
                         ImVec2 gp = toGrid(hit);
-                        if (Node* rr = g.addNode("util.reroute", std::round(gp.x - 10), std::round(gp.y - 10))) {
+                        if (Node* rr = g.addNode("util.reroute", std::round(gp.x - kRerouteW * 0.5f), std::round(gp.y - kTitleH * 0.5f))) {
                             g.connect(l.fromNode, l.fromPin, rr->id, 0);
                             g.connect(rr->id, 0, l.toNode, l.toPin);
                         }
@@ -1202,7 +1213,7 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
         findRequested_ = true;
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !io.WantTextInput) {
         const bool noMods = !io.KeyCtrl && !io.KeyShift && !io.KeyAlt;
-        if (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace) ||
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete) || (ImGui::IsKeyPressed(ImGuiKey_Backspace) && !valueHovered_) ||
             (ImGui::IsKeyPressed(ImGuiKey_X) && noMods)) {
             if (selectedFrame_) {
                 g.removeFrame(selectedFrame_);  // the frame only; its nodes stay
@@ -1221,7 +1232,20 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
             beginGrab(g);
             r.evalChanged = r.docChanged = true;
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_F) && noMods && makeLinks(g)) r.evalChanged = r.docChanged = true;
+        if (cycle_.from && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                            ImGui::IsMouseClicked(ImGuiMouseButton_Right)))
+            cycle_ = {};
+        if (ImGui::IsKeyPressed(ImGuiKey_F) && noMods) {
+            if (cycle_.from ? cycleLink(g, 0) : makeLinks(g)) r.evalChanged = r.docChanged = true;
+        }
+        if (cycle_.from && noMods) {
+            if ((ImGui::IsKeyPressed(ImGuiKey_1) || ImGui::IsKeyPressed(ImGuiKey_Keypad1)) && cycleLink(g, 1))
+                r.evalChanged = r.docChanged = true;
+            if ((ImGui::IsKeyPressed(ImGuiKey_2) || ImGui::IsKeyPressed(ImGuiKey_Keypad2)) && cycleLink(g, 2))
+                r.evalChanged = r.docChanged = true;
+        }
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Alt | ImGuiKey_D) && detachLinks(g)) r.evalChanged = r.docChanged = true;
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Alt | ImGuiKey_S) && swapLinks(g)) r.evalChanged = r.docChanged = true;
         if (ImGui::IsKeyPressed(ImGuiKey_L) && !io.KeyCtrl && !io.KeyAlt) selectLinked(g, io.KeyShift);
         if (ImGui::IsKeyPressed(ImGuiKey_Home)) fitFrames_ = 1;
         if ((ImGui::IsKeyPressed(ImGuiKey_Period) || ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal)) && noMods) frameSelected(g);
@@ -1247,6 +1271,24 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
 
     drawAddMenu(g, r);
     drawNodeMenu(g, preview, r);
+    // A value box's right-click menu (opened and drawn here, in one ID scope).
+    if (openValueMenu_) {
+        ImGui::OpenPopup("ValueMenu");
+        openValueMenu_ = false;
+    }
+    if (ImGui::BeginPopup("ValueMenu")) {
+        Node* vn = g.find(valueMenuNode_);
+        if (!vn || valueMenuParam_ < 0 || valueMenuParam_ >= int(vn->params.size())) {
+            ImGui::CloseCurrentPopup();
+        } else {
+            if (ImGui::MenuItem("Reset to Default", "Backspace")) {
+                vn->resetParam(valueMenuParam_);
+                r.evalChanged = r.docChanged = true;
+            }
+            if (ImGui::MenuItem("Edit Value", "Click")) editing_ = EditState{vn->id, valueMenuParam_, 0, false};
+        }
+        ImGui::EndPopup();
+    }
     drawFrameMenu(g, r);
     drawRenamePopup(g, r);
     drawPresetPopup(g);
@@ -1258,6 +1300,15 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
         ImGui::OpenPopup("FindNode");
     }
     drawFindMenu(g, r);
+
+    // F's wire stays open to 1 / 2 / F while the same nodes are selected and it still exists.
+    if (cycle_.from) {
+        const bool alive = std::any_of(g.links().begin(), g.links().end(), [&](const Link& l) {
+            return l.fromNode == cycle_.from && l.fromPin == cycle_.fromPin && l.toNode == cycle_.to && l.toPin == cycle_.toPin;
+        });
+        if (!alive || selection_ != cycle_.selection) cycle_ = {};
+        else drawLinkCycleHint(g);
+    }
 
     // Node widgets moved the layout cursor around; leave it at a valid spot covering the canvas.
     ImGui::SetCursorScreenPos(origin_);
@@ -1490,6 +1541,19 @@ void NodeEditor::drawNodeMenu(Graph& g, int& preview, Result& r) {
         openRename = true;
     }
     if (ImGui::MenuItem("Make Links", "F", false, selection_.size() > 1) && makeLinks(g)) r.evalChanged = r.docChanged = true;
+    if (ImGui::MenuItem("Detach Links", "Alt+D") && detachLinks(g)) r.evalChanged = r.docChanged = true;
+    if (ImGui::MenuItem("Swap Links", "Alt+S", false, selection_.size() <= 2) && swapLinks(g)) r.evalChanged = r.docChanged = true;
+    if (ImGui::BeginMenu("Mask Selected Nodes")) {
+        // Their edit applies only where a new mask is white: a Mix after them blends it with
+        // what came in, so it works with any nodes (not just Basic's Factor).
+        static constexpr const char* kKinds[] = {"Linear Gradient", "Radial Gradient", "Brush", "Luminance Range"};
+        for (int k = 0; k < 4; ++k)
+            if (ImGui::MenuItem(kKinds[k])) {
+                r.maskSelection = k;
+                r.maskNodes.assign(selection_.begin(), selection_.end());
+            }
+        ImGui::EndMenu();
+    }
     if (ImGui::MenuItem("Swap...", "Shift+S", false, mn && !mn->info().hidden)) openSwap = true;
     if (ImGui::MenuItem(selection_.size() > 1 ? "Arrange Selected" : "Arrange All", "Shift+P") && arrange(g))
         r.docChanged = true;
@@ -1665,7 +1729,7 @@ bool NodeEditor::frameSelection(Graph& g) {
 }
 
 namespace {
-float nodeWidthGrid(const Node& n) { return isReroute(n) ? kRerouteSize : kNodeW; }
+float nodeWidthGrid(const Node& n) { return isReroute(n) ? kRerouteW : kNodeW; }
 bool frameHolds(const Frame& f, const Node& n) {
     float cx = n.x + nodeWidthGrid(n) * 0.5f, cy = n.y + nodeHeightGrid(n) * 0.5f;
     return cx > f.x && cx < f.x + f.w && cy > f.y && cy < f.y + f.h;
@@ -1874,24 +1938,164 @@ bool NodeEditor::toggleCollapse(Graph& g) {
 }
 
 bool NodeEditor::makeLinks(Graph& g) {
-    // Left-to-right, connect each node's first output to the next node's best free input.
+    // Left to right (top to bottom in a column), each node into the next.
     std::vector<Node*> nodes;
     for (int id : selection_)
         if (Node* n = g.find(id)) nodes.push_back(n);
-    std::sort(nodes.begin(), nodes.end(), [](Node* a, Node* b) { return a->x < b->x; });
+    std::sort(nodes.begin(), nodes.end(), [](Node* a, Node* b) { return a->x != b->x ? a->x < b->x : a->y < b->y; });
     bool any = false;
+    cycle_ = {};
     for (size_t i = 0; i + 1 < nodes.size(); ++i) {
         const Node* a = nodes[i];
         const Node* b = nodes[i + 1];
-        for (int o = 0; o < int(a->info().outputs.size()); ++o) {
-            int in = pickPin(g, *b, true, a->info().outputs[o].type);
-            if (in >= 0 && !g.inputLink(b->id, in) && g.connect(a->id, o, b->id, in)) {
-                any = true;
-                break;
+        // Already wired together: pressing F again shouldn't stack a second wire between them.
+        if (std::any_of(g.links().begin(), g.links().end(), [&](const Link& l) { return l.fromNode == a->id && l.toNode == b->id; }))
+            continue;
+        // The first output that has a free input of its type (else one it converts to); failing
+        // that, replace the best wired input rather than doing nothing, as Blender's Shift+F.
+        int bestO = -1, bestI = -1;
+        for (int pass = 0; pass < 2 && bestI < 0; ++pass)
+            for (int o = 0; o < int(a->info().outputs.size()) && bestI < 0; ++o) {
+                const int in = pickPin(g, *b, true, a->info().outputs[o].type);
+                if (in >= 0 && (pass == 1 || !g.inputLink(b->id, in))) bestO = o, bestI = in;
             }
-        }
+        if (bestI < 0) continue;
+        LinkCycle c;
+        if (const Link* old = g.inputLink(b->id, bestI)) c.replacedFrom = old->fromNode, c.replacedFromPin = old->fromPin, c.replacedTo = bestI;
+        if (!g.connect(a->id, bestO, b->id, bestI)) continue;
+        any = true;
+        c.from = a->id, c.fromPin = bestO, c.to = b->id, c.toPin = bestI;
+        c.selection = selection_;
+        cycle_ = c;
     }
     return any;
+}
+
+bool NodeEditor::cycleLink(Graph& g, int what) {
+    const Node* a = g.find(cycle_.from);
+    const Node* b = g.find(cycle_.to);
+    if (!a || !b) return false;
+    const auto& outs = a->info().outputs;
+    const auto& ins = b->info().inputs;
+    const int nOut = int(outs.size()), nIn = int(ins.size());
+    // Inputs another wire feeds are skipped, so stepping never undoes other work (except the one
+    // F replaced, which comes back when the cycle moves on).
+    auto usable = [&](int in) {
+        if (in == cycle_.toPin || in == cycle_.replacedTo) return true;
+        return g.inputLink(b->id, in) == nullptr;
+    };
+    const int total = what == 1 ? nOut : what == 2 ? nIn : nOut * nIn;
+    const int cur = what == 1 ? cycle_.fromPin : what == 2 ? cycle_.toPin : cycle_.fromPin * nIn + cycle_.toPin;
+    for (int step = 1; step < total; ++step) {
+        const int k = (cur + step) % total;
+        const int o = what == 1 ? k : what == 2 ? cycle_.fromPin : k / nIn;
+        const int i = what == 1 ? cycle_.toPin : what == 2 ? k : k % nIn;
+        if (!usable(i) || !canConvert(outs[o].type, ins[i].type)) continue;
+        if (const Link* l = g.inputLink(b->id, cycle_.toPin); l && l->fromNode == a->id && l->fromPin == cycle_.fromPin)
+            g.removeLink(l->id);
+        if (!g.connect(a->id, o, b->id, i)) {
+            g.connect(a->id, cycle_.fromPin, b->id, cycle_.toPin);  // rejected (a cycle): put it back
+            continue;
+        }
+        cycle_.fromPin = o, cycle_.toPin = i;
+        if (cycle_.replacedTo >= 0 && i != cycle_.replacedTo && !g.inputLink(b->id, cycle_.replacedTo))
+            g.connect(cycle_.replacedFrom, cycle_.replacedFromPin, b->id, cycle_.replacedTo);
+        return true;
+    }
+    return false;
+}
+
+void NodeEditor::drawLinkCycleHint(const Graph& g) {
+    const Node* a = g.find(cycle_.from);
+    const Node* b = g.find(cycle_.to);
+    if (!a || !b || cycle_.fromPin >= int(a->info().outputs.size()) || cycle_.toPin >= int(b->info().inputs.size())) return;
+    char buf[256];
+    std::snprintf(buf, sizeof buf, "%s: %s  ->  %s: %s      1 output   2 input   F next   Esc done", a->title().c_str(),
+                  a->info().outputs[cycle_.fromPin].name.c_str(), b->title().c_str(), b->info().inputs[cycle_.toPin].name.c_str());
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 ts = ImGui::CalcTextSize(buf);
+    const ImVec2 p(origin_.x + 10, origin_.y + size_.y - ts.y - 16);
+    dl->AddRectFilled(ImVec2(p.x - 6, p.y - 4), ImVec2(p.x + ts.x + 6, p.y + ts.y + 4), IM_COL32(20, 20, 24, 225), 4.0f);
+    dl->AddText(p, IM_COL32(235, 235, 240, 255), buf);
+}
+
+bool NodeEditor::detachLinks(Graph& g) {
+    // Only the wires with both ends in the selection; wires to the rest of the graph stay.
+    std::vector<int> ids;
+    for (const Link& l : g.links())
+        if (selection_.count(l.fromNode) && selection_.count(l.toNode)) ids.push_back(l.id);
+    for (int id : ids) g.removeLink(id);
+    return !ids.empty();
+}
+
+bool NodeEditor::swapLinks(Graph& g) {
+    std::vector<Node*> sel;
+    for (int id : selection_)
+        if (Node* n = g.find(id)) sel.push_back(n);
+    if (sel.size() == 1) {
+        Node& n = *sel[0];
+        const auto& ins = n.info().inputs;
+        std::vector<Link> in;
+        for (const Link& l : g.links())
+            if (l.toNode == n.id) in.push_back(l);
+        std::sort(in.begin(), in.end(), [](const Link& x, const Link& y) { return x.toPin < y.toPin; });
+        if (in.size() >= 2) {
+            // The first two wired inputs trade wires.
+            const Link x = in[0], y = in[1];
+            g.removeLink(x.id);
+            g.removeLink(y.id);
+            const bool ok = g.connect(x.fromNode, x.fromPin, n.id, y.toPin) && g.connect(y.fromNode, y.fromPin, n.id, x.toPin);
+            if (!ok) {
+                g.connect(x.fromNode, x.fromPin, n.id, x.toPin);
+                g.connect(y.fromNode, y.fromPin, n.id, y.toPin);
+            }
+            return ok;
+        }
+        if (in.size() == 1) {
+            // One wire: on to the next input that takes it.
+            const Link l = in[0];
+            const PinType t = g.find(l.fromNode)->info().outputs[l.fromPin].type;
+            const int nIn = int(ins.size());
+            for (int step = 1; step < nIn; ++step) {
+                const int i = (l.toPin + step) % nIn;
+                if (!canConvert(t, ins[i].type)) continue;
+                g.removeLink(l.id);
+                if (g.connect(l.fromNode, l.fromPin, n.id, i)) return true;
+                g.connect(l.fromNode, l.fromPin, n.id, l.toPin);
+            }
+        }
+        return false;
+    }
+    if (sel.size() != 2) return false;
+    Node* A = sel[0];
+    Node* B = sel[1];
+    std::vector<Link> ls;
+    for (const Link& l : g.links())
+        if (l.fromNode == A->id || l.fromNode == B->id || l.toNode == A->id || l.toNode == B->id) ls.push_back(l);
+    for (const Link& l : ls) g.removeLink(l.id);
+    // Each end on A or B moves to the other node: the same pin when it has the same type, else
+    // the best one of that type (inputs: a free one first).
+    auto partner = [&](int id) { return id == A->id ? B : id == B->id ? A : g.find(id); };
+    auto mapPin = [&](const Node& from, const Node& to, int pin, bool inputs) {
+        if (&from == &to) return pin;
+        const auto& fp = inputs ? from.info().inputs : from.info().outputs;
+        const auto& tp = inputs ? to.info().inputs : to.info().outputs;
+        const PinType t = fp[size_t(pin)].type;
+        if (pin < int(tp.size()) && tp[size_t(pin)].type == t && !(inputs && g.inputLink(to.id, pin))) return pin;
+        return pickPin(g, to, inputs, t);
+    };
+    for (const Link& l : ls) {
+        const Node* f = g.find(l.fromNode);
+        const Node* t = g.find(l.toNode);
+        const Node* nf = partner(l.fromNode);
+        const Node* nt = partner(l.toNode);
+        if (!f || !t || !nf || !nt) continue;
+        const int fp = mapPin(*f, *nf, l.fromPin, false), tp = mapPin(*t, *nt, l.toPin, true);
+        if (fp >= 0 && tp >= 0) g.connect(nf->id, fp, nt->id, tp);
+    }
+    std::swap(A->x, B->x);
+    std::swap(A->y, B->y);
+    return true;
 }
 
 void NodeEditor::selectLinked(const Graph& g, bool downstream) {

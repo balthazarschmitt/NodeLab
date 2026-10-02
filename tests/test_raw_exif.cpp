@@ -1,7 +1,9 @@
 // RAW detection and failure handling, EXIF orientation for JPEGs, and Image Input's RAW params.
 #include <doctest/doctest.h>
 
+#include <array>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -190,4 +192,32 @@ TEST_CASE("Choosing a RAW sets darktable-style Baseline Exposure defaults that o
     CHECK(out->pixel(0)[2] == doctest::Approx(3.0f));
     CHECK(out->pixel(0)[3] == doctest::Approx(0.75f));
     CHECK(img->pixel(0)[0] == 0.25f);  // the cached source is untouched
+}
+
+// Opt-in, because it needs a camera file: NODELAB_FUZZ_RAW=<a RAW>. A half-size decode of a sensor
+// with an odd width or height (CR3s are 5999x3999) left its last row and column a colour short,
+// a green or yellow line on the preview's edge. Each edge must look like the line next to it.
+TEST_CASE("half-size RAW decodes have no off-colour edge lines") {
+    const char* src = std::getenv("NODELAB_FUZZ_RAW");
+    if (!src) return;
+    std::string err;
+    auto img = raw::load(src, err, raw::Blend, true);
+    REQUIRE(img);
+    auto mean = [&](bool column, int i) {
+        std::array<double, 3> m{};
+        const int n = column ? img->h : img->w;
+        for (int k = 0; k < n; ++k) {
+            const float* p = img->pixel(column ? size_t(k) * img->w + i : size_t(i) * img->w + k);
+            for (int c = 0; c < 3; ++c) m[size_t(c)] += p[c] / n;
+        }
+        return m;
+    };
+    auto near = [&](bool column, int edge, int inner) {
+        const auto a = mean(column, edge), b = mean(column, inner);
+        for (int c = 0; c < 3; ++c) CHECK(std::abs(a[size_t(c)] - b[size_t(c)]) < 0.2 * std::max(b[size_t(c)], 0.01) + 0.005);
+    };
+    near(true, 0, 1);
+    near(true, img->w - 1, img->w - 2);
+    near(false, 0, 1);
+    near(false, img->h - 1, img->h - 2);
 }

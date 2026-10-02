@@ -193,6 +193,8 @@ std::shared_ptr<Image> load(const std::string& pathU8, std::string& err, int hig
 
     lr->hookHighlights();
     if (int r = lr->unpack(); r != LIBRAW_SUCCESS) return fail(r);
+    // The sensor's size before half_size halves it (rounding up), for the edge fix below.
+    const int sensorW = lr->imgdata.sizes.width, sensorH = lr->imgdata.sizes.height;
     if (int r = lr->dcraw_process(); r != LIBRAW_SUCCESS) return fail(r);
 
     // With highlight recovery on, LibRaw scales by the largest white-balance multiplier so no
@@ -222,6 +224,12 @@ std::shared_ptr<Image> load(const std::string& pathU8, std::string& err, int hig
     }
     const ushort* curve = lr->outputCurve();
     const ushort(*image)[4] = lr->imgdata.image;
+    // A half-size decode packs each 2x2 Bayer block into one pixel. With an odd sensor width or
+    // height (CR3s are 6000x4000 less one), the last column or row of blocks has only one
+    // sensor column or row, so a colour is missing and that edge comes out green or yellow.
+    // Read the neighbouring complete block there instead.
+    const int lastCol = srcW < sensorW && (sensorW & 1) && srcW > 1 ? srcW - 1 : -1;
+    const int lastRow = srcH < sensorH && (sensorH & 1) && srcH > 1 ? srcH - 1 : -1;
     auto img = std::make_shared<Image>(memW, memH);
     parallelFor(img->h, [&](int y) {
         for (int x = 0; x < img->w; ++x) {
@@ -229,6 +237,8 @@ std::shared_ptr<Image> load(const std::string& pathU8, std::string& err, int hig
             if (swap) std::swap(row, col);
             if (s.flip & 2) row = srcH - 1 - row;
             if (s.flip & 1) col = srcW - 1 - col;
+            if (col == lastCol) --col;
+            if (row == lastRow) --row;
             const ushort* src = image[size_t(row) * srcW + col];
             const float cam[3] = {curve[src[0]] * gain, curve[src[nc > 1 ? 1 : 0]] * gain, curve[src[nc > 1 ? 2 : 0]] * gain};
             float* d = img->pixel(size_t(y) * img->w + x);

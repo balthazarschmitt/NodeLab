@@ -36,6 +36,10 @@ public:
         // being drawn), then select and frame findNode there.
         std::vector<int> findPath;
         int findNode = 0;
+        // Node menu > Mask Selected Nodes: run these nodes' edit through a new mask of this kind
+        // (recipes::MaskKind), done by the App so it can select the mask. -1: not asked.
+        int maskSelection = -1;
+        std::vector<int> maskNodes;
     };
 
     // selected: the single selected node (0 if none or several). preview: node shown on the right.
@@ -89,7 +93,17 @@ public:
     bool toggleMute(Graph& g);
     bool toggleCollapse(Graph& g);
     bool resetSelection(Graph& g);  // Reset to Defaults: the selected nodes' params (not their files)
+    // F (Blender's Make Links): wires the selected nodes left to right. Afterwards 1 steps the last
+    // wire's output, 2 its input and F again both, until the selection changes, a click or Esc.
     bool makeLinks(Graph& g);
+    bool cycleLink(Graph& g, int what);  // 0 next output/input pair, 1 next output, 2 next input
+    // Alt+D: removes the wires between the selected nodes (those with both ends selected),
+    // leaving their wires to other nodes alone.
+    bool detachLinks(Graph& g);
+    // Alt+S (Node Wrangler's Swap Links): two selected nodes trade places in the wiring (and on
+    // the canvas); one selected node swaps its two wired inputs (Mix's A and B), or moves its one
+    // wire to the next input that takes it.
+    bool swapLinks(Graph& g);
     void beginGrab(Graph& g);
     bool hasSelection() const { return !selection_.empty() || selectedLink_ != 0; }
 
@@ -158,6 +172,14 @@ private:
 
     // selection / ordering
     std::set<int> selection_;
+    // The wire F made last, which 1 / 2 / F step through other pins for (see cycleLink). replaced:
+    // the wire F displaced from toPin, put back when the cycle moves off that input.
+    struct LinkCycle {
+        int from = 0, fromPin = 0, to = 0, toPin = 0;
+        int replacedFrom = 0, replacedFromPin = 0, replacedTo = -1;
+        std::set<int> selection;
+    } cycle_;
+    void drawLinkCycleHint(const Graph& g);
     int selectedLink_ = 0;
     std::vector<int> order_;  // draw order, last = topmost
     int pendingSelect_ = 0;
@@ -184,6 +206,10 @@ private:
     // its node, otherwise ImGui drops the active item mid-drag.
     int activeNode_ = 0, activeParam_ = -1;
     int enumNode_ = 0, enumParam_ = -1;  // node/param whose dropdown popup is open
+    // A value box under the mouse this frame: Backspace resets it instead of deleting the node.
+    bool valueHovered_ = false;
+    int valueMenuNode_ = 0, valueMenuParam_ = -1;  // right-clicked value box (its menu)
+    bool openValueMenu_ = false;
 
     int previewPin_ = 0;
     std::vector<ImVec2> knife_;  // screen points of a cut / reroute gesture
