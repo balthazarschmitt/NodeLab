@@ -7,47 +7,6 @@
 
 namespace imageops {
 
-void sampleBilinear(const Image& img, float x, float y, float out[4], bool transparentOutside) {
-    if (img.empty()) {
-        out[0] = out[1] = out[2] = out[3] = 0;
-        return;
-    }
-    if (transparentOutside && (x < 0 || y < 0 || x > img.w || y > img.h)) {
-        out[0] = out[1] = out[2] = out[3] = 0;
-        return;
-    }
-    x -= 0.5f;
-    y -= 0.5f;
-    int x0 = int(std::floor(x)), y0 = int(std::floor(y));
-    float fx = x - x0, fy = y - y0;
-    auto px = [&](int xi, int yi) {
-        xi = std::clamp(xi, 0, img.w - 1);
-        yi = std::clamp(yi, 0, img.h - 1);
-        return img.pixel(size_t(yi) * img.w + xi);
-    };
-    const float *a = px(x0, y0), *b = px(x0 + 1, y0), *c = px(x0, y0 + 1), *d = px(x0 + 1, y0 + 1);
-    for (int k = 0; k < 4; ++k) {
-        float top = a[k] + (b[k] - a[k]) * fx;
-        float bot = c[k] + (d[k] - c[k]) * fx;
-        out[k] = top + (bot - top) * fy;
-    }
-}
-
-float sampleBilinear(const std::vector<float>& ch, int w, int h, float x, float y) {
-    x -= 0.5f;
-    y -= 0.5f;
-    int x0 = int(std::floor(x)), y0 = int(std::floor(y));
-    float fx = x - x0, fy = y - y0;
-    auto at = [&](int xi, int yi) {
-        xi = std::clamp(xi, 0, w - 1);
-        yi = std::clamp(yi, 0, h - 1);
-        return ch[size_t(yi) * w + xi];
-    };
-    float top = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * fx;
-    float bot = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * fx;
-    return top + (bot - top) * fy;
-}
-
 // Box radii for three passes approximating a Gaussian of the given sigma.
 std::vector<int> boxRadii(float sigma) {
     if (sigma < 0.3f) return {};

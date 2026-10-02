@@ -133,14 +133,23 @@ public:
         const float cx = paramF(4) * src->w, cy = paramF(5) * src->h;
         const int steps = std::clamp(int(std::max({dist, std::fabs(spin) * src->w * 0.5f, zoom * src->w * 0.5f})), 1, 96);
         const float dx = std::cos(ang) * dist, dy = std::sin(ang) * dist;
+        // The steps' rotations, scales and offsets are the same for every pixel, so work them out
+        // once (in the same order of operations, so results are unchanged).
+        struct Step {
+            float ca, sa, sc, ox, oy;
+        };
+        std::vector<Step> tab(static_cast<size_t>(steps));
+        for (int s = 0; s < steps; ++s) {
+            const float t = steps > 1 ? float(s) / (steps - 1) : 0.0f;
+            const float a = spin * t;
+            tab[size_t(s)] = {std::cos(a), std::sin(a), 1.0f - zoom * t, dx * t, dy * t};
+        }
         out[0] = Value(ImagePtr(mapImage(*src, [&](int x, int y, const float*, float* d) {
             float acc[4] = {0, 0, 0, 0};
             const float px = x + 0.5f - cx, py = y + 0.5f - cy;
-            for (int s = 0; s < steps; ++s) {
-                float t = steps > 1 ? float(s) / (steps - 1) : 0.0f;
-                float a = spin * t, sc = 1.0f - zoom * t;
-                float rx = (px * std::cos(a) - py * std::sin(a)) * sc + cx + dx * t;
-                float ry = (px * std::sin(a) + py * std::cos(a)) * sc + cy + dy * t;
+            for (const Step& st : tab) {
+                float rx = (px * st.ca - py * st.sa) * st.sc + cx + st.ox;
+                float ry = (px * st.sa + py * st.ca) * st.sc + cy + st.oy;
                 float c[4];
                 sampleBilinear(*src, rx, ry, c);
                 for (int k = 0; k < 4; ++k) acc[k] += c[k];
@@ -193,20 +202,32 @@ public:
         const int step = std::max(1, ri / 7);  // cap the kernel at ~15x15 taps
         const float inv2s2 = 1.0f / (2.0f * std::max(r * 0.5f, 0.5f) * std::max(r * 0.5f, 0.5f));
         const float inv2c2 = 1.0f / (2.0f * cs * cs);
+        // The taps, in the order they are summed, with their spatial term and (for pixels whose
+        // kernel stays inside the image) their offset, so the inner loop needs no clamping.
+        struct Tap {
+            int i, j;
+            ptrdiff_t off;
+            float spatial;
+        };
+        const int w = src->w, h = src->h;
+        std::vector<Tap> taps;
+        for (int j = -ri; j <= ri; j += step)
+            for (int i = -ri; i <= ri; i += step) taps.push_back({i, j, ptrdiff_t(j) * w + i, -float(i * i + j * j) * inv2s2});
         out[0] = Value(ImagePtr(mapImage(*src, [&](int x, int y, const float* s, float* d) {
-            const float* c0 = det->pixel(size_t(y) * src->w + x);
+            const size_t at = size_t(y) * w + x;
+            const float* c0 = det->pixel(at);
+            const bool inside = x >= ri && x < w - ri && y >= ri && y < h - ri;
             float acc[4] = {0, 0, 0, 0}, wsum = 0;
-            for (int j = -ri; j <= ri; j += step)
-                for (int i = -ri; i <= ri; i += step) {
-                    int xx = std::clamp(x + i, 0, src->w - 1), yy = std::clamp(y + j, 0, src->h - 1);
-                    size_t idx = size_t(yy) * src->w + xx;
-                    const float* c = det->pixel(idx);
-                    float dc = (c[0] - c0[0]) * (c[0] - c0[0]) + (c[1] - c0[1]) * (c[1] - c0[1]) + (c[2] - c0[2]) * (c[2] - c0[2]);
-                    float w = std::exp(-float(i * i + j * j) * inv2s2 - dc * inv2c2);
-                    const float* p = src->pixel(idx);
-                    for (int k = 0; k < 4; ++k) acc[k] += p[k] * w;
-                    wsum += w;
-                }
+            for (const Tap& tp : taps) {
+                const size_t idx = inside ? size_t(ptrdiff_t(at) + tp.off)
+                                          : size_t(std::clamp(y + tp.j, 0, h - 1)) * w + std::clamp(x + tp.i, 0, w - 1);
+                const float* c = det->pixel(idx);
+                float dc = (c[0] - c0[0]) * (c[0] - c0[0]) + (c[1] - c0[1]) * (c[1] - c0[1]) + (c[2] - c0[2]) * (c[2] - c0[2]);
+                float wt = std::exp(tp.spatial - dc * inv2c2);
+                const float* p = src->pixel(idx);
+                for (int k = 0; k < 4; ++k) acc[k] += p[k] * wt;
+                wsum += wt;
+            }
             for (int k = 0; k < 4; ++k) d[k] = wsum > 0 ? acc[k] / wsum : s[k];
         })));
     }
@@ -749,17 +770,21 @@ public:
         if (!src) return;
         const float sx = paramF(0) * src->w, sy = paramF(1) * src->h, len = paramF(2);
         const int samples = 48;
+        // The samples' positions along the line and their weights are the same for every pixel.
+        float ts[samples], wgts[samples], wsum = 0;
+        for (int i = 0; i < samples; ++i) {
+            ts[i] = len * float(i) / samples;
+            wgts[i] = 1.0f - float(i) / samples;
+            wsum += wgts[i];
+        }
         // Each pixel averages the image along the line toward the source: bright areas smear outward.
         out[0] = Value(ImagePtr(mapImage(*src, [&](int x, int y, const float* s, float* d) {
-            float acc[3] = {0, 0, 0}, wsum = 0;
+            float acc[3] = {0, 0, 0};
             float px = x + 0.5f, py = y + 0.5f;
             for (int i = 0; i < samples; ++i) {
-                float t = len * float(i) / samples;
                 float c[4];
-                sampleBilinear(*src, px + (sx - px) * t, py + (sy - py) * t, c);
-                float wgt = 1.0f - float(i) / samples;
-                for (int k = 0; k < 3; ++k) acc[k] += c[k] * wgt;
-                wsum += wgt;
+                sampleBilinear(*src, px + (sx - px) * ts[i], py + (sy - py) * ts[i], c);
+                for (int k = 0; k < 3; ++k) acc[k] += c[k] * wgts[i];
             }
             for (int k = 0; k < 3; ++k) d[k] = acc[k] / wsum;
             d[3] = s[3];

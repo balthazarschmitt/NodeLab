@@ -18,6 +18,9 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 - **Faster Oklab conversions:** Basic's Vibrance and Saturation, Color Grading and Range Mask
   use a correctly rounded cube root that is about 4x faster than MinGW's (which was up to 2 ulps
   off). Basic's Vibrance pass on a 24 MP image went from about 1.1 s to 0.08 s.
+- **Faster blurs and warps:** at 24 MP, Directional Blur is about 2.4x faster (34 s to 14 s), and
+  Bilateral Blur and Sun Beams about 15% faster. Bilinear sampling (Transform, Crop, Lens
+  Distortion and others) is inlined. Pixels are unchanged.
 - `--render ... --timings` prints how long evaluation and saving took.
 
 ## 0.18.0 (2026-10-01)
