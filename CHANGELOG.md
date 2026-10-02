@@ -3,6 +3,16 @@
 NodeLab uses [semantic versioning](https://semver.org). While it is 0.x, minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
+## Unreleased
+
+- **Faster image loading:** a 24 MP image opens 2-3x faster, with exactly the same pixels.
+  - JPEG decodes on every core (about 330 ms to 120 ms). Restart intervals decode in parallel,
+    and upsampling and colour conversion run per row.
+  - PNG inflates with zlib-ng and unfilters while it inflates (8-bit: 650 ms to 350 ms;
+    16-bit: 1.35 s to 0.66 s).
+  - Embedded ICC profiles are found by reading only the file's header segments, not the
+    whole file (up to 0.4 s saved per image). RAW files are read in one go.
+
 ## 0.19.0 (2026-10-02)
 
 - **Find Node** (Ctrl+F, View > Find Node...): lists the nodes of the graph you are in, filtered by

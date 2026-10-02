@@ -4,7 +4,6 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
-#include <iterator>
 
 #include <zlib.h>
 
@@ -20,10 +19,61 @@ uint32_t be32(const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) <
 uint16_t be16(const uint8_t* p) { return uint16_t(p[0] << 8 | p[1]); }
 double s15(const uint8_t* p) { return int32_t(be32(p)) / 65536.0; }
 
-Bytes readFile(const std::string& pathU8) {
+// The parts of a JPEG or PNG that can hold a profile, as a smaller file of the same format: the
+// signature, then only the APP2 segments (JPEG) or iCCP chunk (PNG) up to the image data. Reading
+// the whole file took longer than decoding a big 16-bit PNG's profile needs (0.4 s at 24 MP).
+Bytes readProfileSegments(const std::string& pathU8) {
     std::ifstream f(u8ToPath(pathU8), std::ios::binary);
     if (!f) return {};
-    return Bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    uint8_t sig[8] = {};
+    if (!f.read(reinterpret_cast<char*>(sig), 2)) return {};
+    Bytes out(sig, sig + 2);
+    auto take = [&](size_t n) {  // appends the next n bytes of the file
+        const size_t at = out.size();
+        out.resize(at + n);
+        if (!f.read(reinterpret_cast<char*>(out.data() + at), std::streamsize(n))) {
+            out.resize(at + size_t(f.gcount()));
+            return false;
+        }
+        return true;
+    };
+    if (sig[0] == 0xFF && sig[1] == 0xD8) {
+        // Same walk as jpegProfile; segments other than APP2 are skipped without reading them.
+        uint8_t m[4];
+        while (f.read(reinterpret_cast<char*>(m), 2) && m[0] == 0xFF) {
+            const uint8_t marker = m[1];
+            if (marker == 0xD8 || (marker >= 0xD0 && marker <= 0xD7) || marker == 0x01) continue;
+            if (marker == 0xFF) {
+                f.seekg(-1, std::ios::cur);
+                continue;
+            }
+            if (marker == 0xDA || marker == 0xD9) break;
+            if (!f.read(reinterpret_cast<char*>(m + 2), 2)) break;
+            const size_t len = be16(m + 2);
+            if (len < 2) break;
+            if (marker == 0xE2) {
+                out.insert(out.end(), m, m + 4);
+                if (!take(len - 2)) break;
+            } else {
+                f.seekg(std::streamoff(len - 2), std::ios::cur);
+            }
+        }
+        return out;
+    }
+    if (!f.read(reinterpret_cast<char*>(sig + 2), 6) || std::memcmp(sig, "\x89PNG\r\n\x1a\n", 8) != 0) return {};
+    out.assign(sig, sig + 8);
+    uint8_t h[8];
+    while (f.read(reinterpret_cast<char*>(h), 8)) {
+        const size_t len = be32(h);
+        if (std::memcmp(h + 4, "IDAT", 4) == 0) break;
+        if (std::memcmp(h + 4, "iCCP", 4) == 0) {
+            out.insert(out.end(), h, h + 8);
+            take(len + 4);
+            break;
+        }
+        f.seekg(std::streamoff(len) + 4, std::ios::cur);
+    }
+    return out;
 }
 
 // JPEG: the profile is split over APP2 segments ("ICC_PROFILE\0", sequence number, count), which
@@ -168,7 +218,7 @@ float Curve::eval(float x) const {
 }
 
 std::vector<uint8_t> embeddedProfile(const std::string& pathU8) {
-    const Bytes f = readFile(pathU8);
+    const Bytes f = readProfileSegments(pathU8);
     if (f.size() > 3 && f[0] == 0xFF && f[1] == 0xD8) return jpegProfile(f);
     if (f.size() > 8 && std::memcmp(f.data(), "\x89PNG\r\n\x1a\n", 8) == 0) return pngProfile(f);
     return {};

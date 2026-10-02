@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <cmath>
 #include <map>
 #include <mutex>
@@ -20,6 +21,8 @@
 #include "io/Exif.h"
 #include "io/Icc.h"
 #include "io/Paths.h"
+#include "io/JpegDecode.h"
+#include "io/PngDecode.h"
 #include "io/RawDecode.h"
 
 namespace {
@@ -36,14 +39,20 @@ std::vector<float> decodeTable(int levels, bool srgbToLinear, const icc::Curve* 
 
 // With a profile, each channel decodes through its own curve, then the profile's primaries are
 // converted to Rec.709 (colours outside Rec.709 go negative, as in RAW decoding).
-template <typename T>
-void decodePixels(const T* data, Image& img, int levels, bool srgbToLinear, const icc::Profile* profile) {
+// rowCodes(y, scratch) gives row y's RGBA code values (T is uint8_t or uint16_t); it may fill and
+// return scratch, which holds a row.
+template <typename T, typename RowCodes>
+void decodeRows(Image& img, int levels, bool srgbToLinear, const icc::Profile* profile, RowCodes&& rowCodes) {
     const std::vector<float> alpha = decodeTable(levels, false);
+    const size_t n = size_t(img.w) * 4;
     if (!profile) {
         const std::vector<float> rgb = decodeTable(levels, srgbToLinear);
         parallelFor(img.h, [&](int y) {
-            const size_t i0 = size_t(y) * img.w * 4, i1 = i0 + size_t(img.w) * 4;
-            for (size_t i = i0; i < i1; ++i) img.px[i] = ((i & 3) == 3 ? alpha : rgb)[data[i]];
+            thread_local std::vector<T> scratch;
+            scratch.resize(n);
+            const T* data = rowCodes(y, scratch.data());
+            float* d = img.pixel(size_t(y) * img.w);
+            for (size_t i = 0; i < n; ++i) d[i] = ((i & 3) == 3 ? alpha : rgb)[data[i]];
         });
         return;
     }
@@ -52,16 +61,25 @@ void decodePixels(const T* data, Image& img, int levels, bool srgbToLinear, cons
                                      decodeTable(levels, true, &profile->trc[2])};
     const auto& m = profile->toRec709;
     parallelFor(img.h, [&](int y) {
-        const size_t i0 = size_t(y) * img.w * 4, i1 = i0 + size_t(img.w) * 4;
-        for (size_t i = i0; i < i1; i += 4) {
+        thread_local std::vector<T> scratch;
+        scratch.resize(n);
+        const T* data = rowCodes(y, scratch.data());
+        float* row = img.pixel(size_t(y) * img.w);
+        for (size_t i = 0; i < n; i += 4) {
             const float r = t[0][data[i]], g = t[1][data[i + 1]], b = t[2][data[i + 2]];
-            float* d = &img.px[i];
+            float* d = row + i;
             d[0] = m[0][0] * r + m[0][1] * g + m[0][2] * b;
             d[1] = m[1][0] * r + m[1][1] * g + m[1][2] * b;
             d[2] = m[2][0] * r + m[2][1] * g + m[2][2] * b;
             d[3] = alpha[data[i + 3]];
         }
     });
+}
+
+// A whole decoded RGBA buffer (stb's output).
+template <typename T>
+void decodePixels(const T* data, Image& img, int levels, bool srgbToLinear, const icc::Profile* profile) {
+    decodeRows<T>(img, levels, srgbToLinear, profile, [&](int y, T*) { return data + size_t(y) * img.w * 4; });
 }
 
 // The embedded profile to decode with: null for none, sRGB ones, and ones that can't be applied.
@@ -88,11 +106,45 @@ std::string lowerExt(const std::string& pathU8) {
 
 std::shared_ptr<Image> loadStb(const std::string& pathU8, std::string& err, bool srgbToLinear,
                                const icc::Profile* profile) {
+    // One read of the file serves every decoder.
+    std::vector<char> file;
+    if (!readFileBytes(pathU8, file)) {
+        err = "can't open file";
+        return nullptr;
+    }
+    const auto* bytes = reinterpret_cast<const stbi_uc*>(file.data());
+    if (png::Decoded d; png::decode(bytes, file.size(), d)) {
+        // Straight from the unfiltered rows to float, one row at a time.
+        auto img = std::make_shared<Image>(d.w, d.h);
+        if (d.sixteen)
+            decodeRows<uint16_t>(*img, 65536, srgbToLinear, profile, [&](int y, uint16_t* row) {
+                d.expandRow(y, row);
+                return row;
+            });
+        else
+            decodeRows<uint8_t>(*img, 256, srgbToLinear, profile, [&](int y, uint8_t* row) {
+                d.expandRow(y, row);
+                return row;
+            });
+        return img;
+    }
+    if (jpeg::Decoded d; jpeg::decode(bytes, file.size(), d)) {
+        auto img = std::make_shared<Image>(d.w, d.h);
+        decodeRows<uint8_t>(*img, 256, srgbToLinear, profile, [&](int y, uint8_t* row) {
+            d.expandRow(y, row);
+            return row;
+        });
+        return img;
+    }
+    if (file.size() > size_t(INT_MAX)) {
+        err = "file too large";
+        return nullptr;
+    }
+    const int len = int(file.size());
     int w = 0, h = 0, comp = 0;
-    const char* p = pathU8.c_str();
     std::shared_ptr<Image> img;
-    if (stbi_is_16_bit(p)) {
-        stbi_us* data = stbi_load_16(p, &w, &h, &comp, 4);
+    if (stbi_is_16_bit_from_memory(bytes, len)) {
+        stbi_us* data = stbi_load_16_from_memory(bytes, len, &w, &h, &comp, 4);
         if (!data) {
             err = stbi_failure_reason() ? stbi_failure_reason() : "unknown error";
             return nullptr;
@@ -101,7 +153,7 @@ std::shared_ptr<Image> loadStb(const std::string& pathU8, std::string& err, bool
         decodePixels(data, *img, 65536, srgbToLinear, profile);
         stbi_image_free(data);
     } else {
-        stbi_uc* data = stbi_load(p, &w, &h, &comp, 4);
+        stbi_uc* data = stbi_load_from_memory(bytes, len, &w, &h, &comp, 4);
         if (!data) {
             err = stbi_failure_reason() ? stbi_failure_reason() : "unknown error";
             return nullptr;

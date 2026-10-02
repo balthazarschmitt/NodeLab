@@ -165,12 +165,11 @@ void Decoder::afterInterpolate(void* ctx) {
 std::shared_ptr<Image> load(const std::string& pathU8, std::string& err, int highlights, bool halfSize, int* fullW,
                             int* fullH) {
     // Read the file ourselves: LibRaw's narrow-char open can't take UTF-8 paths on Windows.
-    std::ifstream f(u8ToPath(pathU8), std::ios::binary);
-    if (!f) {
+    std::vector<char> bytes;
+    if (!readFileBytes(pathU8, bytes)) {
         err = "can't open file";
         return nullptr;
     }
-    std::vector<char> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 
     auto lr = std::make_unique<Decoder>();  // large (hundreds of KB): keep it off the stack
     auto fail = [&](int code) {
@@ -262,12 +261,11 @@ void exifTag(void* context, int tag, int type, int len, unsigned int order, void
 }  // namespace
 
 std::shared_ptr<Image> loadThumbnail(const std::string& pathU8, int minEdge, std::string& err) {
-    std::ifstream f(u8ToPath(pathU8), std::ios::binary);
-    if (!f) {
+    std::vector<char> bytes;
+    if (!readFileBytes(pathU8, bytes)) {
         err = "can't open file";
         return nullptr;
     }
-    std::vector<char> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     auto lr = std::make_unique<LibRaw>();
     if (int r = lr->open_buffer(bytes.data(), bytes.size()); r != LIBRAW_SUCCESS) {
         err = std::string("RAW: ") + libraw_strerror(r);
@@ -298,9 +296,8 @@ std::shared_ptr<Image> loadThumbnail(const std::string& pathU8, int minEdge, std
 }
 
 bool readMetadata(const std::string& pathU8, Metadata& out) {
-    std::ifstream f(u8ToPath(pathU8), std::ios::binary);
-    if (!f) return false;
-    std::vector<char> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    std::vector<char> bytes;
+    if (!readFileBytes(pathU8, bytes)) return false;
     auto lr = std::make_unique<LibRaw>();
     float bias = 0.0f;
     lr->set_exifparser_handler(exifTag, &bias);
