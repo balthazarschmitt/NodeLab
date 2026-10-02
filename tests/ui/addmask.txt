@@ -1,0 +1,35 @@
+# build\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\addmask.txt
+# Add Mask from the Result viewer: K adds a Brush driving a new Basic, Shift+R a Radial Gradient,
+# Shift+M opens the menu, and each addition is one undo step.
+settle
+move 1300 500
+key k
+settle
+shot build/smoke/am1_brush.png
+drag 1260 450 1480 470
+settle
+shot build/smoke/am2_painted.png
+move 1300 500
+shift on
+key r
+shift off
+settle
+shot build/smoke/am3_radial.png
+# the Inspector lists the mask, then its adjustment (the Basic) below
+move 800 750
+wheel -12
+wait 3
+shot build/smoke/am3b_inspector.png
+move 1300 500
+shift on
+key m
+shift off
+wait 3
+shot build/smoke/am4_menu.png
+key escape
+ctrl on
+key z
+ctrl off
+settle
+shot build/smoke/am5_undo.png
+quit

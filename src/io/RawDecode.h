@@ -20,6 +20,11 @@ bool isRawPath(const std::string& pathU8);
 std::shared_ptr<Image> load(const std::string& pathU8, std::string& err, int highlights, bool halfSize,
                             int* fullW = nullptr, int* fullH = nullptr);
 
+// The camera's embedded JPEG preview, upright and display-encoded (as the camera rendered it):
+// the smallest one whose long edge is at least minEdge, else the largest. Much faster than a
+// decode, for library thumbnails. Null and err when the file has no JPEG preview.
+std::shared_ptr<Image> loadThumbnail(const std::string& pathU8, int minEdge, std::string& err);
+
 // Capture settings, for the EXIF of exported JPEGs. Zero / empty where the file has none.
 struct Metadata {
     std::string make, model, lens;

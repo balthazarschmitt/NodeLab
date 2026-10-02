@@ -4,8 +4,10 @@
 
 #include <cmath>
 #include <cstring>
+#include <mutex>
 
 #include "core/ColorMath.h"
+#include "core/ColorScience.h"
 #include "gpu/PointOp.h"
 #include "nodes/ImageOps.h"
 
@@ -520,15 +522,168 @@ public:
     }
 };
 
+
+// ---------------------------------------------------------------- range mask
+
+// Lightroom's Luminance Range / Color Range: selects by the photo's lightness or colour, usually
+// to refine another mask (wired into Mask, which it intersects). Both work in Oklab, so Low/High
+// are perceptual lightness (0.5 is a mid tone, whatever the working space) and colour distances
+// match what the eye sees.
+class RangeMaskNode : public Node {
+public:
+    enum { Mode, Low, High, Smoothness, KeyColor, Amount, Invert };
+    NODELAB_NODE({"matte.range_mask", "Range Mask", "Matte",
+                  {{"Image", PinType::Image}, {"Mask", PinType::Channel}},
+                  {{"Mask", PinType::Channel}},
+                  {ParamDesc::Enum("Mode", 0, {"Luminance", "Color"}),
+                   ParamDesc::Float("Low", 0.0f, 0.0f, 1.0f).when(0, 0), ParamDesc::Float("High", 1.0f, 0.0f, 1.0f).when(0, 0),
+                   ParamDesc::Float("Smoothness", 0.5f, 0.0f, 1.0f).when(0, 0),
+                   ParamDesc::Color("Color", 0.5f, 0.5f, 0.5f).when(0, 1), ParamDesc::Float("Amount", 0.5f, 0.0f, 1.0f).when(0, 1),
+                   ParamDesc::Bool("Invert", false)}})
+
+    int roiPadding(const EvalContext&) const override { return 0; }  // per pixel
+
+    // The selection's constants: Luminance's edges (low fade start/end, high fade start/end) or
+    // Color's key (Oklab) and its distance range.
+    struct Setup {
+        bool color = false;
+        float e[4] = {};
+        float key[3] = {};
+    };
+    Setup setup(const EvalContext& ctx) const {
+        Setup st;
+        st.color = paramI(Mode) == 1;
+        if (!st.color) {
+            const float lo = paramF(Low), hi = std::max(paramF(High), lo);
+            // Smoothness feathers both ends, by up to a quarter of the lightness range.
+            const float f = paramF(Smoothness) * 0.25f + 1e-4f;
+            st.e[0] = lo - f, st.e[1] = lo, st.e[2] = hi, st.e[3] = hi + f;
+        } else {
+            float c[3];
+            paramC(KeyColor, c);
+            for (float& v : c) v = ctx.linear() ? std::max(v, 0.0f) : srgbToLinear(std::max(v, 0.0f));
+            colorsci::rgbToOklab(c, st.key);
+            // Amount widens the range of colours taken in, like Lightroom's Refine.
+            const float tol = 0.02f + paramF(Amount) * 0.23f;
+            st.e[0] = tol * 0.5f, st.e[1] = tol;
+        }
+        return st;
+    }
+
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        ImagePtr src = toImage(in[0], 0, 0);
+        if (!src) return;
+        const int w = src->w, h = src->h;
+        ChannelPtr base = toChannel(in[1]);
+        ChannelSampler sb{base.get(), w, h};
+        const Setup st = setup(ctx);
+        const bool encoded = !ctx.linear(), inv = paramB(Invert);
+        out[0] = Value(ChannelPtr(makeChannel(w, h, [&](int x, int y) {
+            const float* s = src->pixel(size_t(y) * w + x);
+            float c[3], lab[3];
+            for (int k = 0; k < 3; ++k) c[k] = encoded ? srgbToLinear(std::max(s[k], 0.0f)) : std::max(s[k], 0.0f);
+            colorsci::rgbToOklab(c, lab);
+            float m;
+            if (!st.color) {
+                m = smoothstep(st.e[0], st.e[1], lab[0]) * (1.0f - smoothstep(st.e[2], st.e[3], lab[0]));
+            } else {
+                // Lightness counts half: a colour in shade is still that colour.
+                const float dl = (lab[0] - st.key[0]) * 0.5f, da = lab[1] - st.key[1], db = lab[2] - st.key[2];
+                m = 1.0f - smoothstep(st.e[0], st.e[1], std::sqrt(dl * dl + da * da + db * db));
+            }
+            if (inv) m = 1.0f - m;
+            return base ? clamp01(sb(x, y)) * m : m;
+        })));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const Setup st = setup(ctx);
+        gpu::PointOp g;
+        g.functions = std::string(kGlslMatte) + "const bool ENCODED = " + (ctx.linear() ? "false" : "true") +
+                      ";\nconst bool COLOR = " + (st.color ? "true" : "false") + ";\nconst bool INV = " +
+                      (paramB(Invert) ? "true" : "false") + ";\n";
+        g.body = R"(
+    vec3 c = max(img0(p).rgb, vec3(0.0));
+    vec3 lab = rgbToOklab(ENCODED ? srgbToLinear(c) : c);
+    float m;
+    if (!COLOR) {
+        m = smoothstepC(P[0], P[1], lab.x) * (1.0 - smoothstepC(P[2], P[3], lab.x));
+    } else {
+        vec3 d = (lab - vec3(P[4], P[5], P[6])) * vec3(0.5, 1.0, 1.0);
+        m = 1.0 - smoothstepC(P[0], P[1], length(d));
+    }
+    if (INV) m = 1.0 - m;
+    out0 = has1 ? clamp01(ch1(p)) * m : m;
+)";
+        g.params = {st.e[0], st.e[1], st.e[2], st.e[3], st.key[0], st.key[1], st.key[2]};
+        gpu::runOver(ctx, *this, g, in, out);
+    }
+};
+
 }  // namespace
 
 // ---------------------------------------------------------------- brush
 
-void paintStrokes(std::vector<float>& mask, int w, int h, const std::vector<BrushMaskNode::Stroke>& strokes) {
+namespace {
+
+// Auto Mask: how alike two Oklab colours must be to be painted. Full coverage up to kAutoNear,
+// none beyond kAutoFar (Oklab distance; 0.02 is about a just-noticeable difference).
+constexpr float kAutoNear = 0.03f, kAutoFar = 0.09f;
+
+// The image in Oklab at mask resolution, for Auto Mask (computed once per evaluation).
+struct AutoMaskImage {
+    std::vector<float> lab;  // w * h * 3
+    int w = 0, h = 0;
+    const float* at(int x, int y) const { return &lab[(size_t(y) * w + x) * 3]; }
+};
+
+AutoMaskImage toOklabPlane(const Image& img, int w, int h, bool encoded) {
+    AutoMaskImage a;
+    a.w = w, a.h = h;
+    a.lab.resize(size_t(w) * h * 3);
+    parallelFor(h, [&](int y) {
+        const int iy = std::min(img.h - 1, int((y + 0.5f) * img.h / h));
+        for (int x = 0; x < w; ++x) {
+            const int ix = std::min(img.w - 1, int((x + 0.5f) * img.w / w));
+            const float* s = img.pixel(size_t(iy) * img.w + ix);
+            float c[3];
+            for (int k = 0; k < 3; ++k) c[k] = encoded ? srgbToLinear(std::max(s[k], 0.0f)) : std::max(s[k], 0.0f);
+            colorsci::rgbToOklab(c, &a.lab[(size_t(y) * w + x) * 3]);
+        }
+    });
+    return a;
+}
+
+// The colour under a brush point: an average over a tenth of the radius, so it is the same
+// at the proxy and at full resolution (and not one noisy pixel).
+std::array<float, 3> keyColour(const AutoMaskImage& a, float px, float py, float r) {
+    const int k = std::clamp(int(std::lround(r * 0.1f)), 0, 8);
+    const int cx = std::clamp(int(px), 0, a.w - 1), cy = std::clamp(int(py), 0, a.h - 1);
+    std::array<float, 3> sum{0, 0, 0};
+    int n = 0;
+    for (int y = std::max(0, cy - k); y <= std::min(a.h - 1, cy + k); ++y)
+        for (int x = std::max(0, cx - k); x <= std::min(a.w - 1, cx + k); ++x, ++n)
+            for (int c = 0; c < 3; ++c) sum[c] += a.at(x, y)[c];
+    for (float& v : sum) v /= float(std::max(n, 1));
+    return sum;
+}
+
+bool anyAuto(const std::vector<BrushMaskNode::Stroke>& strokes) {
+    for (const BrushMaskNode::Stroke& st : strokes)
+        if (st.autoMask) return true;
+    return false;
+}
+
+// Paints strokes [begin, end) over the mask. `autoImg` may be empty (Auto Mask then does nothing).
+void paintRange(std::vector<float>& mask, int w, int h, const std::vector<BrushMaskNode::Stroke>& strokes, size_t begin,
+                size_t end, const AutoMaskImage& autoImg) {
     const float longEdge = float(std::max(w, h));
-    std::vector<float> cov(mask.size(), 0.0f);  // coverage of the stroke being drawn
-    for (const BrushMaskNode::Stroke& st : strokes) {
+    std::vector<float> cov;  // coverage of the stroke being drawn
+    for (size_t si = begin; si < end; ++si) {
+        const BrushMaskNode::Stroke& st = strokes[si];
         if (st.pts.empty()) continue;
+        if (cov.empty()) cov.assign(mask.size(), 0.0f);
         const float r = std::max(st.radius * longEdge, 0.5f);
         const float inner = r * (1.0f - std::clamp(st.feather, 0.0f, 1.0f));
         // Points in pixels, and the stroke's bounding box.
@@ -542,6 +697,11 @@ void paintStrokes(std::vector<float>& mask, int w, int h, const std::vector<Brus
         const int x0 = std::max(0, int(std::floor(bx0 - r))), x1 = std::min(w - 1, int(std::ceil(bx1 + r)));
         const int y0 = std::max(0, int(std::floor(by0 - r))), y1 = std::min(h - 1, int(std::ceil(by1 + r)));
         if (x0 > x1 || y0 > y1) continue;
+        // Auto Mask: each point's colour, sampled as Lightroom does under the brush centre.
+        const bool autoMask = st.autoMask && !autoImg.lab.empty();
+        std::vector<std::array<float, 3>> keys;
+        if (autoMask)
+            for (const auto& q : p) keys.push_back(keyColour(autoImg, q[0], q[1], r));
         // Within one stroke coverage is the max over its segments, so a slow drag (many points
         // close together) doesn't build up more than a fast one; strokes then accumulate.
         parallelFor(y1 - y0 + 1, [&](int row) {
@@ -555,12 +715,26 @@ void paintStrokes(std::vector<float>& mask, int w, int h, const std::vector<Brus
                 const int sx1 = std::min(x1, int(std::ceil(std::max(a[0], b[0]) + r)));
                 const float ex = b[0] - a[0], ey = b[1] - a[1], el = ex * ex + ey * ey;
                 for (int x = sx0; x <= sx1; ++x) {
+                    float& cv = cov[size_t(y) * w + x];
+                    // Already at the stroke's full flow from an earlier segment: nothing to add.
+                    if (cv >= st.flow) continue;
                     const float px = x + 0.5f;
                     float t = el > 0 ? std::clamp(((px - a[0]) * ex + (py - a[1]) * ey) / el, 0.0f, 1.0f) : 0.0f;
-                    const float d = std::hypot(px - a[0] - t * ex, py - a[1] - t * ey);
+                    const float dx = px - a[0] - t * ex, dy = py - a[1] - t * ey, d2 = dx * dx + dy * dy;
+                    // Cheap reject first (with slack); then hypot, as before, so masks stay bit-identical.
+                    if (d2 > r * r * 1.001f) continue;
+                    const float d = std::hypot(dx, dy);
                     if (d >= r) continue;
-                    const float c = (1.0f - smoothstep(inner, r, d)) * st.flow;
-                    float& cv = cov[size_t(y) * w + x];
+                    float c = (1.0f - smoothstep(inner, r, d)) * st.flow;
+                    if (autoMask) {
+                        // Against the nearer end's colour: a stroke crossing an edge switches
+                        // sides at the segment's middle.
+                        const auto& k = keys[t < 0.5f || s + 1 >= p.size() ? s : s + 1];
+                        const float* q = autoImg.at(x, y);
+                        const float dc = std::sqrt((q[0] - k[0]) * (q[0] - k[0]) + (q[1] - k[1]) * (q[1] - k[1]) +
+                                                   (q[2] - k[2]) * (q[2] - k[2]));
+                        c *= 1.0f - smoothstep(kAutoNear, kAutoFar, dc);
+                    }
                     if (c > cv) cv = c;
                 }
             }
@@ -578,18 +752,132 @@ void paintStrokes(std::vector<float>& mask, int w, int h, const std::vector<Brus
     }
 }
 
+// FNV-1a over strokes [0, n): a stroke list's identity for the paint cache and the evaluator.
+uint64_t hashStrokes(const std::vector<BrushMaskNode::Stroke>& strokes, size_t n, uint64_t hsh = 1469598103934665603ull) {
+    auto mix = [&](const void* data, size_t len) {
+        const auto* b = static_cast<const unsigned char*>(data);
+        for (size_t i = 0; i < len; ++i) hsh = (hsh ^ b[i]) * 1099511628211ull;
+    };
+    for (size_t i = 0; i < n; ++i) {
+        const BrushMaskNode::Stroke& s = strokes[i];
+        mix(&s.radius, sizeof s.radius), mix(&s.feather, sizeof s.feather), mix(&s.flow, sizeof s.flow);
+        mix(&s.erase, sizeof s.erase), mix(&s.autoMask, sizeof s.autoMask);
+        if (!s.pts.empty()) mix(s.pts.data(), s.pts.size() * sizeof s.pts[0]);
+    }
+    return hsh;
+}
+
+// While painting, each new dab re-evaluates the node, and the evaluator rebuilds the graph for
+// every job, so state on the node itself doesn't last. This keeps, process-wide, the mask as it
+// was before the stroke being painted (and the Oklab image Auto Mask reads), keyed by content:
+// size, working space, the upstream values (alive in the evaluator's cache, so a live weak_ptr
+// to the same object means the same pixels) and a hash of the strokes painted so far. A dab
+// then repaints only the current stroke instead of all of them.
+struct PaintCacheEntry {
+    int w = 0, h = 0;
+    bool encoded = false;
+    const void* baseRaw = nullptr;
+    std::weak_ptr<const Channel> base;
+    const void* imageRaw = nullptr;
+    std::weak_ptr<const Image> image;
+    size_t count = 0;   // strokes painted into `mask`
+    uint64_t hash = 0;  // hashStrokes over them
+    std::vector<float> mask;
+    std::shared_ptr<const AutoMaskImage> lab;  // when the image is used by Auto Mask
+    uint64_t used = 0;
+};
+
+std::mutex gPaintCacheMutex;
+std::vector<PaintCacheEntry> gPaintCache;  // most recent few: preview and draft sizes
+uint64_t gPaintClock = 0;
+constexpr size_t kPaintCacheEntries = 3;
+
+template <class T>
+bool sameValue(const void* raw, const std::weak_ptr<const T>& weak, const T* cur) {
+    if (raw != cur) return false;
+    return !cur || weak.lock().get() == cur;
+}
+
+}  // namespace
+
+void paintStrokes(std::vector<float>& mask, int w, int h, const std::vector<BrushMaskNode::Stroke>& strokes,
+                  const Image* image, bool encoded) {
+    AutoMaskImage autoImg;
+    if (image && image->w > 0 && image->h > 0 && anyAuto(strokes)) autoImg = toOklabPlane(*image, w, h, encoded);
+    paintRange(mask, w, h, strokes, 0, strokes.size(), autoImg);
+}
+
 void BrushMaskNode::evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) {
     ChannelPtr base = toChannel(in[0]);
     int w, h;
     maskSize(base, ctx, w, h);
-    auto ch = std::make_shared<Channel>(Channel::makeSized(w, h));
-    if (base) {
-        ChannelSampler sb{base.get(), w, h};
-        parallelFor(h, [&](int y) {
-            for (int x = 0; x < w; ++x) ch->data[size_t(y) * w + x] = clamp01(sb(x, y));
-        });
+    // The photo Auto Mask strokes follow (nothing to follow without it).
+    ImagePtr image = toImage(in.size() > 1 ? in[1] : Value(), 0, 0);
+    if (image && (image->w <= 0 || image->h <= 0)) image.reset();
+    const bool encoded = !ctx.linear(), useImage = image && anyAuto(strokes);
+    const Image* imageKey = useImage ? image.get() : nullptr;
+    const size_t n = strokes.size(), prefix = n > 0 ? n - 1 : 0;
+
+    // The longest cached prefix of these strokes, for these inputs.
+    std::vector<float> start;
+    size_t from = 0;
+    std::shared_ptr<const AutoMaskImage> lab;
+    {
+        std::lock_guard lock(gPaintCacheMutex);
+        const PaintCacheEntry* best = nullptr;
+        for (const PaintCacheEntry& e : gPaintCache) {
+            if (e.w != w || e.h != h || e.encoded != encoded || !sameValue(e.baseRaw, e.base, base.get())) continue;
+            if (useImage && !lab && e.lab && sameValue(e.imageRaw, e.image, imageKey)) lab = e.lab;
+            if (!sameValue(e.imageRaw, e.image, imageKey) || e.count > prefix) continue;
+            if ((!best || e.count > best->count) && hashStrokes(strokes, e.count) == e.hash) best = &e;
+        }
+        if (best) {
+            start = best->mask;
+            from = best->count;
+            const_cast<PaintCacheEntry*>(best)->used = ++gPaintClock;
+        }
     }
-    paintStrokes(ch->data, w, h, strokes);
+    const bool labComputed = useImage && !lab;
+    if (labComputed) lab = std::make_shared<AutoMaskImage>(toOklabPlane(*image, w, h, encoded));
+    const bool hit = !start.empty();
+    static const AutoMaskImage kNoImage;
+    const AutoMaskImage& autoImg = lab ? *lab : kNoImage;
+
+    if (start.empty()) {
+        start.assign(size_t(w) * h, 0.0f);
+        if (base) {
+            ChannelSampler sb{base.get(), w, h};
+            parallelFor(h, [&](int y) {
+                for (int x = 0; x < w; ++x) start[size_t(y) * w + x] = clamp01(sb(x, y));
+            });
+        }
+    }
+    // Everything but the stroke being painted, cached for the next dab.
+    paintRange(start, w, h, strokes, from, prefix, autoImg);
+    if (!hit || from < prefix || labComputed) {
+        std::lock_guard lock(gPaintCacheMutex);
+        PaintCacheEntry e;
+        e.w = w, e.h = h, e.encoded = encoded;
+        e.baseRaw = base.get(), e.base = base;
+        e.imageRaw = imageKey;
+        if (imageKey) e.image = image;
+        e.count = prefix, e.hash = hashStrokes(strokes, prefix);
+        e.mask = start;
+        e.lab = lab;
+        e.used = ++gPaintClock;
+        // Replace an entry for the same inputs (it holds a shorter prefix), else the oldest.
+        auto same = std::find_if(gPaintCache.begin(), gPaintCache.end(), [&](const PaintCacheEntry& o) {
+            return o.w == w && o.h == h && o.encoded == encoded && o.baseRaw == e.baseRaw && o.imageRaw == e.imageRaw;
+        });
+        if (same == gPaintCache.end() && gPaintCache.size() >= kPaintCacheEntries)
+            same = std::min_element(gPaintCache.begin(), gPaintCache.end(),
+                                    [](const PaintCacheEntry& a, const PaintCacheEntry& b) { return a.used < b.used; });
+        if (same == gPaintCache.end()) gPaintCache.push_back(std::move(e));
+        else *same = std::move(e);
+    }
+    auto ch = std::make_shared<Channel>(Channel::makeSized(w, h));
+    ch->data = std::move(start);
+    paintRange(ch->data, w, h, strokes, prefix, n, autoImg);
     if (paramB(3))
         for (float& v : ch->data) v = 1.0f - v;
     out[0] = Value(ChannelPtr(ch));
@@ -600,7 +888,9 @@ void BrushMaskNode::saveExtra(nlohmann::json& j) const {
     for (const Stroke& s : strokes) {
         nlohmann::json pts = nlohmann::json::array();
         for (const auto& p : s.pts) pts.push_back({p[0], p[1]});
-        arr.push_back({{"radius", s.radius}, {"feather", s.feather}, {"flow", s.flow}, {"erase", s.erase}, {"pts", pts}});
+        nlohmann::json o = {{"radius", s.radius}, {"feather", s.feather}, {"flow", s.flow}, {"erase", s.erase}, {"pts", pts}};
+        if (s.autoMask) o["auto"] = true;
+        arr.push_back(std::move(o));
     }
     j["strokes"] = arr;
 }
@@ -616,6 +906,7 @@ void BrushMaskNode::loadExtra(const nlohmann::json& j) {
         s.feather = o.value("feather", 0.5f);
         s.flow = o.value("flow", 1.0f);
         s.erase = o.value("erase", false);
+        s.autoMask = o.value("auto", false);
         if (auto p = o.find("pts"); p != o.end() && p->is_array())
             for (const auto& q : *p)
                 if (q.is_array() && q.size() == 2 && q[0].is_number() && q[1].is_number())
@@ -626,17 +917,7 @@ void BrushMaskNode::loadExtra(const nlohmann::json& j) {
 
 std::string BrushMaskNode::signatureExtra() const {
     // FNV-1a over the stroke data: cheaper than serializing thousands of points every evaluation.
-    uint64_t hsh = 1469598103934665603ull;
-    auto mix = [&](const void* data, size_t n) {
-        const auto* b = static_cast<const unsigned char*>(data);
-        for (size_t i = 0; i < n; ++i) hsh = (hsh ^ b[i]) * 1099511628211ull;
-    };
-    for (const Stroke& s : strokes) {
-        mix(&s.radius, sizeof s.radius), mix(&s.feather, sizeof s.feather), mix(&s.flow, sizeof s.flow);
-        mix(&s.erase, sizeof s.erase);
-        if (!s.pts.empty()) mix(s.pts.data(), s.pts.size() * sizeof s.pts[0]);
-    }
-    return "brush:" + std::to_string(strokes.size()) + ":" + std::to_string(hsh);
+    return "brush:" + std::to_string(strokes.size()) + ":" + std::to_string(hashStrokes(strokes, strokes.size()));
 }
 
 void BrushMaskNode::beginStroke(float u, float v, bool erase) {
@@ -645,6 +926,7 @@ void BrushMaskNode::beginStroke(float u, float v, bool erase) {
     s.feather = paramF(1);
     s.flow = paramF(2);
     s.erase = erase;
+    s.autoMask = paramB(4);
     s.pts.push_back({u, v});
     strokes.push_back(std::move(s));
 }
@@ -667,6 +949,7 @@ void registerMatteNodes(NodeRegistry& r) {
     r.add<RadialGradientNode>();
     r.add<LinearGradientNode>();
     r.add<BrushMaskNode>();
+    r.add<RangeMaskNode>();
     r.add<ChannelKeyNode>();
     r.add<LuminanceKeyNode>();
     r.add<DifferenceKeyNode>();

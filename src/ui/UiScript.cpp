@@ -86,6 +86,9 @@ static ImGuiKey keyFromName(const std::string& n) {
     if (n == "tab") return ImGuiKey_Tab;
     if (n == "up") return ImGuiKey_UpArrow;
     if (n == "down") return ImGuiKey_DownArrow;
+    if (n == "left") return ImGuiKey_LeftArrow;
+    if (n == "right") return ImGuiKey_RightArrow;
+    if (n.size() == 1 && n[0] >= '0' && n[0] <= '9') return ImGuiKey(ImGuiKey_0 + (n[0] - '0'));
     if (n.size() == 1 && n[0] >= 'a' && n[0] <= 'z') return ImGuiKey(ImGuiKey_A + (n[0] - 'a'));
     if (n.size() >= 2 && n[0] == 'f' && std::isdigit(static_cast<unsigned char>(n[1]))) {
         const int k = std::atoi(n.c_str() + 1);

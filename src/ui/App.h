@@ -11,6 +11,7 @@
 #include "io/ImageCache.h"
 #include "ui/DisplayWorker.h"
 #include "ui/ImageView.h"
+#include "ui/LibraryPanel.h"
 #include "ui/NodeEditor.h"
 #include "ui/ViewerOverlay.h"
 
@@ -30,7 +31,7 @@ public:
     int run(const RunOptions& opt);
 
 private:
-    enum class Pending { None, New, Open, Quit };
+    enum class Pending { None, New, Open, OpenFolder, OpenPhoto, Quit };
 
     // An image panel showing a node's output. viewers_[0] is the main "Result" viewer, which
     // follows the Ctrl+click preview (or the Output node); extra viewers can pin any node.
@@ -65,6 +66,19 @@ private:
     bool openProject(const std::string& path);
     bool saveProject(bool saveAs);
     void importImage(const std::string& path);
+    // Library (File > Open Folder): photos edited in sidecar projects, saved automatically when
+    // switching photos, as in Lightroom.
+    void openFolder(const std::string& dirU8);
+    void openLibraryPhoto(int index);  // asks about a non-library project's unsaved changes first
+    void loadLibraryPhoto(int index);
+    // The project is a library photo's sidecar.
+    bool libraryPhotoOpen() const;
+    // Saves the library photo's sidecar if it changed (or always, with force).
+    bool saveLibraryPhoto(bool force = false);
+    void copyEdit();
+    void pasteEdit();
+    void exportSelected();
+    void drawLibraryWindow();
     // After a RAW was chosen for an Image Input: a fresh project switches its view to AgX.
     void applyRawLook();
     void drawColorMenu();
@@ -123,6 +137,8 @@ private:
     void finishPick(const PickRequest& pick);  // applies an eyedropper pick to its Color param
     Node* overlayNode();  // selected node with on-image controls, or null
     void drawResultToolbar(Node* ov);
+    // Toolbar's Add Mask: a new Basic before the Output, driven by a new mask (one undo step).
+    void addMask(int kind);
 
     void markChanged(bool eval);
     void resetHistory();
@@ -213,6 +229,14 @@ private:
     std::string gpuError_;  // why the GPU is unavailable, or the last node that fell back
     void loadPreferences();
     void savePreferences() const;
+
+    LibraryPanel library_;
+    bool showLibrary_ = true;
+    bool libraryLayoutChecked_ = false;  // an older layout without the Library was rebuilt
+    int pendingPhoto_ = -1;              // for Pending::OpenPhoto
+    nlohmann::json copiedEdit_;          // Copy Edit: the graph, with copiedFrom_ its photo
+    std::string copiedFrom_;
+    bool editorFocused_ = false;         // the Node Editor has keyboard focus (X deletes there)
 
     // panels / layout
     bool showOriginal_ = true, showEditor_ = true, showInspector_ = true, showResult_ = true;

@@ -87,17 +87,21 @@ build\nodelab_tests.exe
 src/core      Image/Channel/Value types + conversions, ColorMath, ColorScience (Oklab, CAT16 white
               balance, gamut compression), Curve, Ramp, Noise, Parallel
 src/graph     Node (params, flags, region policy), Graph (links, frames, JSON), Evaluator (cache levels,
-              region evaluation, +AsyncEvaluator with drafts and details), NodeRegistry
+              region evaluation, +AsyncEvaluator with drafts and details), NodeRegistry, Recipes
+              (one-click graph edits such as Add Mask)
 src/nodes     one file per family: io, color, math (Mix), converter (+Expression), filter, transform,
-              matte, texture, utility, group; ImageOps (sampling, box blur, distance transform)
+              matte, texture, utility, group; filter/Denoise (a-trous wavelets); ImageOps (sampling,
+              box blur, distance transform)
 src/io        image load (stb), ImageWrite (PNG/JPEG/TIFF/EXR, ICC, parallel zlib; Tiff.h IFD writer),
               RawDecode (LibRaw), Exif (orientation, export EXIF), Icc (embedded input profiles), Export (Lanczos resize), ImageCache (proxies
               per edge; full-res decoded on demand, scaled levels kept for regions; RAW proxies from a
-              half-size decode), project files
+              half-size decode), project files, Library (folder listing, sidecars `photo.ext.nlproj`
+              with rating/flag/thumbnail in `ui.library`, default graph, paste edit, thumbnails)
 src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (custom canvas), Inspector,
               GuideWindow (renders the embedded GUIDE.md), Eyedropper (pick state),
               ParamWidgets (curve/ramp editors), ImageView, DisplayWorker (view transform and
-              histograms off the UI thread), FileDialog (Win32), UiScript
+              histograms off the UI thread), LibraryPanel (filmstrip, culling keys, thumbnail
+              worker), FileDialog (Win32), UiScript
 src/gpu       Device (hidden GL 4.3 context, texture pool, programs, timer queries, PBO downloads),
               GL (loader), PointOp (per-pixel nodes as GLSL bodies, fused into chains), Blur,
               Reduce (exact percentiles by radix select), Display (viewer bytes and histogram)

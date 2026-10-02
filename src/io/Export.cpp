@@ -251,19 +251,32 @@ void Exporter::log(const std::string& line) {
 }
 
 void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int inputNode, ExportSettings s, bool gpu) {
-    Graph g;
+    Graph jobGraph;
     try {
-        g.fromJson(graphJson);
+        if (!graphJson.is_null()) jobGraph.fromJson(graphJson);
     } catch (const std::exception& e) {
         log(std::string("Export failed: ") + e.what());
         busy_ = false;
         return;
     }
-    const int outId = g.firstOfType(OutputNode::staticInfo().type);
     const bool batch = inputNode != 0;
     int failed = 0;
     for (size_t i = 0; i < items.size() && !cancel_; ++i) {
         const ExportItem& item = items[i];
+        // An item with its own edit (the library) renders that instead of the job's graph.
+        Graph own;
+        const bool ownGraph = !item.graph.is_null();
+        if (ownGraph) {
+            try {
+                own.fromJson(item.graph);
+            } catch (const std::exception& e) {
+                ++failed;
+                log("Failed " + item.source + ": " + e.what());
+                continue;
+            }
+        }
+        Graph& g = ownGraph ? own : jobGraph;
+        const int outId = g.firstOfType(OutputNode::staticInfo().type);
         const std::string outName = pathToU8(u8ToPath(item.output).filename());
         // A fresh cache per item: batches would otherwise keep every source's preview in memory.
         ImageCache cache;
@@ -275,7 +288,7 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
         ctx.gpu = gpu && gpu::available();
         ctx.gpuHalf = false;
         try {
-            if (batch) {
+            if (batch && !ownGraph) {
                 Node* in = g.find(inputNode);
                 if (!in) throw std::runtime_error("the batch Image Input node is gone");
                 // As if chosen in the UI: a RAW batch from a JPEG project gets the RAW defaults.
@@ -294,7 +307,7 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
             }
             Evaluator ev;
             // File Output nodes have fixed paths, so a batch would overwrite them on every item.
-            const bool fileOutputs = !batch && (s.fileOutputs || item.output.empty());
+            const bool fileOutputs = !batch && !ownGraph && (s.fileOutputs || item.output.empty());
             // A full-resolution render needs only the outputs still to be read: dropping the rest
             // keeps a big photo's peak memory to a few images instead of one per node. File
             // Outputs read the graph again afterwards, so they keep everything.
@@ -315,7 +328,7 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
                 if (cancel_) break;
                 setStage("Saving " + outName);
                 std::string err;
-                const SaveOptions opt = s.saveOptions(batch ? item.source : metadataSource(g), img->w, img->h);
+                const SaveOptions opt = s.saveOptions(batch || ownGraph ? item.source : metadataSource(g), img->w, img->h);
                 if (!saveRendered(item.output, img, ctx.colorManagement, opt, err)) throw std::runtime_error(err);
                 log("Wrote " + item.output + " (" + std::to_string(img->w) + " x " + std::to_string(img->h) + ")");
             }

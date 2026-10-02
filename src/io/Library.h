@@ -1,0 +1,74 @@
+#pragma once
+// The photo library (File > Open Folder): a folder's photos, each with its edit in a sidecar
+// project next to it (IMG_1234.CR3 -> IMG_1234.CR3.nlproj, as darktable does), so edits travel
+// with the photos and a sidecar opens like any other project. Ratings, the pick/reject flag and
+// a thumbnail of the edit live in the sidecar's "ui" block, under "library".
+#include <memory>
+#include <string>
+#include <vector>
+
+#include <nlohmann/json.hpp>
+
+#include "core/Image.h"
+
+class Graph;
+
+namespace library {
+
+constexpr int kThumbEdge = 256;  // long edge of thumbnails, in pixels
+
+// Lightroom's flags.
+enum Flag { Rejected = -1, Unflagged = 0, Picked = 1 };
+
+struct Meta {
+    int rating = 0;          // 0..5 stars
+    int flag = Unflagged;
+    bool edited = false;     // the graph was changed (a sidecar made only by rating isn't)
+    std::string thumb;       // base64 JPEG of the edited result; empty: use the photo's own
+    nlohmann::json toJson() const;
+    static Meta fromJson(const nlohmann::json& j);
+};
+
+std::string sidecarPath(const std::string& photoU8);
+bool hasSidecar(const std::string& photoU8);
+
+// The folder's images (not sidecars or other files), sorted by name ignoring case.
+std::vector<std::string> listFolder(const std::string& dirU8);
+
+// Meta from the photo's sidecar; defaults (and false) when it has none or it can't be read.
+bool readMeta(const std::string& photoU8, Meta& out);
+// Stores meta in the sidecar, keeping its graph; a photo without one gets one with the default
+// graph (rating a photo is enough to create it).
+bool writeMeta(const std::string& photoU8, const Meta& m, std::string& err);
+
+// The graph a photo starts with: Image Input -> Denoise -> Basic -> Output, scene-linear. RAWs
+// get the colour noise reduction Lightroom applies by default (Color 25) and the AgX view, which
+// keeps the highlights a RAW holds above 1; other photos start with Denoise off.
+void defaultGraph(Graph& g, const std::string& photoU8);
+
+// The photo's edit as graph JSON with absolute paths (for exports): its sidecar's graph, or the
+// default one.
+nlohmann::json graphFor(const std::string& photoU8, std::string& err);
+
+// Points an edit at another photo: its Image Input for `source` (or the first one) gets `target`.
+// False when the graph has no Image Input.
+bool retargetEdit(Graph& g, const std::string& sourceU8, const std::string& targetU8);
+
+// Copy / paste edit: writes `target`'s sidecar with `graph` (JSON, absolute paths), its Image
+// Input for `source` (or the first one) pointed at `target`. The target keeps its own rating and
+// flag; its thumbnail is dropped, since it showed the old edit.
+bool pasteEdit(const nlohmann::json& graph, const std::string& sourceU8, const std::string& targetU8, std::string& err);
+
+// The photo itself for a thumbnail: a RAW's embedded preview, or the decoded image, upright and
+// display-encoded, at most `edge` pixels long.
+ImagePtr loadThumbnail(const std::string& photoU8, int edge, std::string& err);
+// The edit rendered on the CPU at a small proxy, through the view transform.
+ImagePtr renderThumbnail(const Graph& g, int edge, std::string& err);
+
+std::string encodeThumb(const Image& img);  // base64 JPEG
+ImagePtr decodeThumb(const std::string& b64);
+
+std::string base64Encode(const std::vector<unsigned char>& bytes);
+std::vector<unsigned char> base64Decode(const std::string& text);
+
+}  // namespace library

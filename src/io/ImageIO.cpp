@@ -201,6 +201,33 @@ bool saveImage(const std::string& pathU8, const Image& img, std::string& err, in
     return ok != 0;
 }
 
+std::shared_ptr<Image> decodeImageMemory(const unsigned char* data, size_t len, std::string& err) {
+    int w = 0, h = 0, n = 0;
+    unsigned char* px = stbi_load_from_memory(data, int(len), &w, &h, &n, 4);
+    if (!px) {
+        err = stbi_failure_reason() ? stbi_failure_reason() : "can't decode image";
+        return nullptr;
+    }
+    auto img = std::make_shared<Image>(w, h);
+    for (size_t i = 0; i < size_t(w) * h * 4; ++i) img->px[i] = px[i] / 255.0f;
+    stbi_image_free(px);
+    return img;
+}
+
+std::vector<unsigned char> encodeJpegMemory(const Image& img, int quality) {
+    std::vector<unsigned char> rgb(size_t(img.w) * img.h * 3), out;
+    for (size_t i = 0; i < size_t(img.w) * img.h; ++i)
+        for (int c = 0; c < 3; ++c)
+            rgb[i * 3 + c] = static_cast<unsigned char>(std::lround(std::clamp(img.px[i * 4 + c], 0.0f, 1.0f) * 255.0f));
+    auto append = [](void* ctx, void* data, int size) {
+        auto* v = static_cast<std::vector<unsigned char>*>(ctx);
+        v->insert(v->end(), static_cast<unsigned char*>(data), static_cast<unsigned char*>(data) + size);
+    };
+    if (img.w <= 0 || img.h <= 0 || !stbi_write_jpg_to_func(append, &out, img.w, img.h, 3, rgb.data(), std::clamp(quality, 1, 100)))
+        out.clear();
+    return out;
+}
+
 std::shared_ptr<const Image> downscaleToFit(const std::shared_ptr<const Image>& src, int maxEdge) {
     if (!src || std::max(src->w, src->h) <= maxEdge) return src;
     const double scale = double(maxEdge) / std::max(src->w, src->h);

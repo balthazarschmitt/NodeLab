@@ -1,0 +1,49 @@
+# Library: copy four photos to build\smoke\lib (they sort as a_scene.png, b_photo.jpg and two
+# CR3s), then
+#   NodeLab.exe build\smoke\lib --script tests\ui\library.txt
+# Opens the folder (first photo), edits it, opens the second (autosaving the first), rates and
+# picks it, steps to the third and rates and rejects it, then copies the first photo's edit and
+# pastes it onto the last two.
+settle
+wait 20
+settle
+# Edit the first photo: Denoise Luminance up.
+drag 690 237 760 237
+settle
+# Open the second photo (the first saves itself)
+click 134 795
+settle
+wait 30
+settle
+shot build/smoke/lib2_raw.png
+key 3
+key p
+wait 5
+# Right arrow: the next photo; rate it 5 and reject it
+key right
+settle
+key 5
+key x
+wait 30
+settle
+shot build/smoke/lib3_step.png
+# Copy the first photo's edit, paste it onto the last two
+click 52 795
+settle
+ctrl on
+shift on
+key c
+shift off
+ctrl off
+click 215 795
+shift on
+click 297 795
+ctrl on
+key v
+ctrl off
+shift off
+wait 60
+settle
+wait 60
+shot build/smoke/lib4_paste.png
+quit

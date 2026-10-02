@@ -3,7 +3,32 @@
 NodeLab uses [semantic versioning](https://semver.org). While it is 0.x, minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
-## Unreleased
+## 0.17.0 (2026-10-01)
+
+- **Denoise node:** noise reduction with Lightroom's Luminance, Detail, Color and Color Detail
+  controls. It thresholds wavelet bands, so edges stay sharp. It runs on the GPU and in
+  zoomed-in regions, and the preview matches the export.
+- **Add Mask:** a Result toolbar button (Shift+M; M linear, Shift+R radial, K brush) adds a local
+  adjustment in one step: a Basic before the Output with a new mask in its Factor, selected and
+  ready to shape. The Inspector shows the mask with the Basic's sliders below it.
+- **Range Mask node:** selects by luminance (Low, High, Smoothness) or by colour (picked colour
+  and Amount), like Lightroom's Luminance and Color Range. A Mask input narrows it to a gradient
+  or brush area.
+- **Brush Mask Auto Mask:** strokes stop at edges where the photo's colour changes, as with
+  Lightroom's Auto Mask. Brush Mask has a new Image input for it.
+- **Library:** File > Open Folder (Ctrl+Shift+O, or drop a folder) shows a filmstrip of a
+  folder's photos. Each photo's edit is saved automatically in a sidecar beside it
+  (`IMG_1234.CR3.nlproj`) when you move to another photo. New photos start with Image Input →
+  Denoise → Basic → Output (RAWs with colour noise reduction and the AgX view).
+- **Culling:** Lightroom's keys rate (0-5), pick (P), reject (X) and unflag (U) the selected
+  photos, and a filter shows picks, star ratings, rejects or edited photos.
+- **Copy / Paste Edit** (Ctrl+Shift+C / Ctrl+Shift+V) applies one photo's node tree to the
+  selected photos, each keeping its own file and rating.
+- **Export Selected** exports the selected photos, each with its own edit.
+- **Thumbnails** use a RAW's embedded preview; edited photos show a render of their edit, kept in
+  the sidecar.
+- **Faster brushing:** each dab repaints only the stroke being drawn, not every stroke so far
+  (Brush Mask with 20 strokes: 57 ms to 7 ms per update).
 
 ## 0.16.0 (2026-10-01)
 

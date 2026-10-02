@@ -17,8 +17,10 @@
 #include "core/Guide.h"
 #include "core/Version.h"
 #include "gpu/Device.h"
+#include "graph/Recipes.h"
 #include "io/ImageIO.h"
 #include "io/ImageWrite.h"
+#include "io/Library.h"
 #include "io/Paths.h"
 #include "io/ProjectFile.h"
 #include "nodes/group/GroupNodes.h"
@@ -221,7 +223,11 @@ int App::run(const RunOptions& opt) {
     viewers_.push_back(std::move(main));
 
     // An image instead of a project (NodeLab.exe photo.CR2, or Open with): a new project with it.
-    if (!opt.project.empty() && isImageFile(u8ToPath(opt.project))) {
+    std::error_code dirEc;
+    if (!opt.project.empty() && fs::is_directory(u8ToPath(opt.project), dirEc)) {
+        newProject();
+        openFolder(opt.project);
+    } else if (!opt.project.empty() && isImageFile(u8ToPath(opt.project))) {
         newProject();
         importImage(opt.project);
     } else if (opt.project.empty() || !openProject(opt.project)) {
@@ -326,6 +332,9 @@ void App::drawFrame() {
     if (showInspector_) drawInspectorWindow();
     if (showResult_) drawViewerWindow(*viewers_[0], true);
     for (size_t i = 1; i < viewers_.size(); ++i) drawViewerWindow(*viewers_[i], false);
+    if (library_.active() && showLibrary_) drawLibraryWindow();
+    library_.poll();
+    if (!library_.status.empty()) status_ = std::move(library_.status), library_.status.clear();
     drawGuideWindow();
     drawExportWindow();
     pollExport();
@@ -445,6 +454,9 @@ void App::buildDefaultLayout(unsigned dockIdU) {
     ImGui::DockBuilderAddNode(dockId, ImGuiDockNodeFlags_DockSpace);
     ImGui::DockBuilderSetNodeSize(dockId, vp->WorkSize);
     ImGuiID center = dockId;
+    // The Library's filmstrip runs along the bottom, under everything (it shows only while a
+    // folder is open; the panels above take its space otherwise).
+    ImGuiID filmstrip = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.2f, nullptr, &center);
     ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.27f, nullptr, &center);
     ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.37f, nullptr, &center);
     ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.34f, nullptr, &center);
@@ -452,10 +464,11 @@ void App::buildDefaultLayout(unsigned dockIdU) {
     ImGui::DockBuilderDockWindow("###Result", right);
     ImGui::DockBuilderDockWindow("###NodeEditor", center);
     ImGui::DockBuilderDockWindow("###Inspector", bottom);
+    ImGui::DockBuilderDockWindow("###Library", filmstrip);
     for (size_t i = 1; i < viewers_.size(); ++i)
         ImGui::DockBuilderDockWindow(("###Viewer" + std::to_string(viewers_[i]->id)).c_str(), right);
     ImGui::DockBuilderFinish(dockId);
-    showOriginal_ = showEditor_ = showInspector_ = showResult_ = true;
+    showOriginal_ = showEditor_ = showInspector_ = showResult_ = showLibrary_ = true;
 }
 
 static constexpr ImGuiWindowFlags kCanvasFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
@@ -528,6 +541,7 @@ void App::drawEditorWindow() {
         if (r.enterGroup) enterGroup(r.enterGroup);
         else if (r.exitGroup) exitGroup();
     }
+    editorFocused_ = visible && ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
     ImGui::End();
 }
 
@@ -538,6 +552,18 @@ void App::drawInspectorWindow() {
                             ? nullptr
                             : resolveGroupPath(graph_, std::vector<int>(groupPath_.begin(), groupPath_.end() - 1));
         if (drawInspector(g, selected_, currentGroupOwner(), parent)) markChanged(true);
+        // A mask driving a Basic's Factor (as Add Mask builds) shows that adjustment's sliders
+        // too, the way Lightroom shows a mask's settings and its adjustments together.
+        for (const Link& l : g.links())
+            if (l.fromNode == selected_ && l.toPin == 1)
+                if (const Node* adj = g.find(l.toNode); adj && adj->info().type == "color.basic") {
+                    ImGui::Spacing();
+                    ImGui::SeparatorText(adj->title().c_str());
+                    ImGui::PushID("##adjustment");
+                    if (drawInspector(g, adj->id, currentGroupOwner(), parent)) markChanged(true);
+                    ImGui::PopID();
+                    break;
+                }
     }
     ImGui::End();
 }
@@ -649,7 +675,29 @@ void App::drawResultToolbar(Node* ov) {
     if (hover && ImGui::IsKeyPressed(ImGuiKey_J, false)) clipping_ = !clipping_, clipToggled = true;
     if (hover && ImGui::IsKeyPressed(ImGuiKey_O, false)) maskOverlay_ = !maskOverlay_;
     if (hover && ImGui::IsKeyPressed(ImGuiKey_H, false)) showHistogram_ = !showHistogram_;
+    // Lightroom's mask shortcuts: Shift+M opens the menu, M linear, Shift+R radial, K brush.
+    const bool shift = ImGui::GetIO().KeyShift;
+    bool openMaskMenu = false;
+    if (hover && ImGui::IsKeyPressed(ImGuiKey_M, false)) {
+        if (shift) openMaskMenu = true;
+        else addMask(int(recipes::MaskKind::Linear));
+    }
+    if (hover && shift && ImGui::IsKeyPressed(ImGuiKey_R, false)) addMask(int(recipes::MaskKind::Radial));
+    if (hover && !shift && ImGui::IsKeyPressed(ImGuiKey_K, false)) addMask(int(recipes::MaskKind::Brush));
 
+    if (ImGui::SmallButton("Add Mask") || openMaskMenu) ImGui::OpenPopup("##addmask");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Adjust part of the image: adds a Basic before the Output, driven by a new mask (Shift+M)");
+    if (ImGui::BeginPopup("##addmask")) {
+        if (ImGui::MenuItem("Linear Gradient", "M")) addMask(int(recipes::MaskKind::Linear));
+        if (ImGui::MenuItem("Radial Gradient", "Shift+R")) addMask(int(recipes::MaskKind::Radial));
+        if (ImGui::MenuItem("Brush", "K")) addMask(int(recipes::MaskKind::Brush));
+        if (ImGui::MenuItem("Luminance Range")) addMask(int(recipes::MaskKind::Range));
+        // Keyboard navigation is off (Tab enters groups), so Escape doesn't close popups by itself.
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::SameLine();
     ImGui::Checkbox("Histogram", &showHistogram_);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show the histogram (H)");
     ImGui::SameLine();
@@ -672,6 +720,20 @@ void App::drawResultToolbar(Node* ov) {
                                                               : "Drag the handles to shape the mask";
         ImGui::TextDisabled("%s", hint);
     }
+}
+
+void App::addMask(int kind) {
+    Graph& g = currentGraph();
+    const recipes::AddedMask m = recipes::addMask(g, recipes::MaskKind(kind));
+    if (!m.ok()) {
+        status_ = "Add Mask needs an Output node with an image connected";
+        return;
+    }
+    // Select the mask so its handles (or the brush) are ready on the Result.
+    selected_ = m.mask;
+    editor_.select(m.mask);
+    status_ = "Added " + g.find(m.adjust)->label + ": " + g.find(m.mask)->info().displayName + " driving a Basic";
+    markChanged(true);
 }
 
 void App::drawStatusBar() {
@@ -744,6 +806,7 @@ void App::drawMainMenu() {
     if (ImGui::BeginMenu("File")) {
         if (ImGui::MenuItem("New", "Ctrl+N")) requestAction(Pending::New);
         if (ImGui::MenuItem("Open Project...", "Ctrl+O")) requestAction(Pending::Open);
+        if (ImGui::MenuItem("Open Folder...", "Ctrl+Shift+O")) requestAction(Pending::OpenFolder);
         if (ImGui::MenuItem("Save", "Ctrl+S")) saveProject(false);
         if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) saveProject(true);
         ImGui::Separator();
@@ -751,6 +814,12 @@ void App::drawMainMenu() {
             if (auto p = openFileDialog("Import image", kImageFileFilter)) importImage(*p);
         if (ImGui::MenuItem("Export...", "Ctrl+E")) openExportWindow();
         if (ImGui::MenuItem("Write File Outputs", nullptr, false, !exporter_.busy())) startExport({{"", ""}}, 0);
+        if (library_.active()) {
+            ImGui::Separator();
+            if (ImGui::MenuItem("Copy Edit", "Ctrl+Shift+C", false, libraryPhotoOpen())) copyEdit();
+            if (ImGui::MenuItem("Paste Edit", "Ctrl+Shift+V", false, !copiedEdit_.is_null())) pasteEdit();
+            if (ImGui::MenuItem("Export Selected Photos...", nullptr, false, !exporter_.busy())) exportSelected();
+        }
         ImGui::Separator();
         if (ImGui::MenuItem("Exit")) requestAction(Pending::Quit);
         ImGui::EndMenu();
@@ -790,6 +859,7 @@ void App::drawMainMenu() {
         ImGui::MenuItem("Result", nullptr, &showResult_);
         ImGui::MenuItem("Node Editor", nullptr, &showEditor_);
         ImGui::MenuItem("Inspector", nullptr, &showInspector_);
+        ImGui::MenuItem("Library", nullptr, &showLibrary_, library_.active());
         if (ImGui::MenuItem("New Viewer")) {
             NodePath pin;
             if (selected_) {
@@ -861,6 +931,9 @@ void App::handleShortcuts() {
     if (io.WantTextInput) return;
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_N)) requestAction(Pending::New);
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_O)) requestAction(Pending::Open);
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_O)) requestAction(Pending::OpenFolder);
+    if (library_.active() && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_C)) copyEdit();
+    if (library_.active() && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_V)) pasteEdit();
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) saveProject(false);
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S)) saveProject(true);
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_I))
@@ -897,6 +970,16 @@ void App::handleDrops() {
                 if (std::find(batchSources_.begin(), batchSources_.end(), f) == batchSources_.end())
                     batchSources_.push_back(std::move(f));
             if (!found.empty()) continue;
+        }
+        std::error_code ec;
+        if (std::filesystem::is_directory(u8ToPath(p), ec)) {
+            if (!modified_ || libraryPhotoOpen()) {
+                saveLibraryPhoto();
+                openFolder(p);
+            } else {
+                status_ = "Save or discard changes before opening a dropped folder";
+            }
+            continue;
         }
         std::string ext = pathToU8(u8ToPath(p).extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
@@ -1051,6 +1134,8 @@ void App::redo() {
 // ---------------------------------------------------------------- unsaved-changes flow
 
 void App::requestAction(Pending action) {
+    // A library photo saves itself, as in Lightroom: no question when leaving it.
+    if (modified_ && libraryPhotoOpen()) saveLibraryPhoto();
     if (modified_) {
         pending_ = action;
         openUnsavedModal_ = true;
@@ -1065,6 +1150,10 @@ void App::performAction(Pending action) {
         case Pending::Open:
             if (auto p = openFileDialog("Open project", kProjectFilter)) openProject(*p);
             break;
+        case Pending::OpenFolder:
+            if (auto d = folderDialog("Open folder")) openFolder(*d);
+            break;
+        case Pending::OpenPhoto: loadLibraryPhoto(pendingPhoto_); break;
         case Pending::Quit: quit_ = true; break;
         case Pending::None: break;
     }
@@ -1143,6 +1232,7 @@ void App::newProject() {
     modified_ = false;
     evalDirty_ = true;
     status_ = "New project";
+    library_.setCurrentProject(projectPath_);
 }
 
 bool App::openProject(const std::string& path) {
@@ -1165,10 +1255,12 @@ bool App::openProject(const std::string& path) {
     modified_ = false;
     evalDirty_ = true;
     status_ = "Opened " + pathToU8(u8ToPath(path).filename());
+    library_.setCurrentProject(projectPath_);
     return true;
 }
 
 bool App::saveProject(bool saveAs) {
+    if (!saveAs && libraryPhotoOpen()) return saveLibraryPhoto(true);
     std::string path = projectPath_;
     if (saveAs || path.empty()) {
         auto p = saveFileDialog("Save project", kProjectFilter, "nlproj");
@@ -1183,7 +1275,159 @@ bool App::saveProject(bool saveAs) {
     projectPath_ = path;
     modified_ = false;
     status_ = "Saved " + pathToU8(u8ToPath(path).filename());
+    library_.setCurrentProject(projectPath_);
     return true;
+}
+
+// ---------------------------------------------------------------- library
+
+void App::openFolder(const std::string& dirU8) {
+    if (!library_.open(dirU8)) {
+        status_ = "No photos in " + dirU8;
+        return;
+    }
+    showLibrary_ = true;
+    library_.setCurrentProject(projectPath_);
+    status_ = "Library: " + std::to_string(library_.size()) + " photos in " + pathToU8(u8ToPath(dirU8).filename());
+    // Start on the first photo, unless a project with unsaved changes is open.
+    if (!modified_ && library_.current() < 0) loadLibraryPhoto(0);
+}
+
+bool App::libraryPhotoOpen() const {
+    const int i = library_.current();
+    return i >= 0 && projectPath_ == library::sidecarPath(library_.photo(i));
+}
+
+void App::openLibraryPhoto(int index) {
+    if (index < 0 || index >= library_.size() || (libraryPhotoOpen() && index == library_.current())) return;
+    pendingPhoto_ = index;
+    requestAction(Pending::OpenPhoto);
+}
+
+void App::loadLibraryPhoto(int index) {
+    if (index < 0 || index >= library_.size()) return;
+    const std::string photo = library_.photo(index);
+    // Decoded images are kept per file; a browsing session would otherwise keep every photo's.
+    cache_.clear();
+    if (library::hasSidecar(photo)) {
+        if (!openProject(library::sidecarPath(photo))) return;
+    } else {
+        newProject();
+        library::defaultGraph(graph_, photo);
+        editor_.onGraphReplaced(true);
+        resetHistory();
+        projectPath_ = library::sidecarPath(photo);
+        library_.setCurrentProject(projectPath_);
+    }
+    status_ = pathToU8(u8ToPath(photo).filename());
+}
+
+bool App::saveLibraryPhoto(bool force) {
+    if (!libraryPhotoOpen() || (!modified_ && !force)) return true;
+    const int i = library_.current();
+    if (modified_) library_.meta(i).edited = true;
+    std::string err;
+    if (!::saveProject(projectPath_, graph_, uiState(), err)) {
+        status_ = "Save failed: " + err;
+        return false;
+    }
+    modified_ = false;
+    library_.refresh(i, true);  // its thumbnail shows the edit
+    status_ = "Saved " + pathToU8(u8ToPath(projectPath_).filename());
+    return true;
+}
+
+void App::copyEdit() {
+    if (!libraryPhotoOpen()) return;
+    copiedEdit_ = graph_.toJson();
+    copiedFrom_ = library_.photo(library_.current());
+    status_ = "Copied the edit of " + pathToU8(u8ToPath(copiedFrom_).filename());
+}
+
+void App::pasteEdit() {
+    if (copiedEdit_.is_null()) return;
+    saveLibraryPhoto();
+    int pasted = 0, failed = 0;
+    std::string err;
+    for (int i : library_.selection()) {
+        const std::string& photo = library_.photo(i);
+        if (photo == copiedFrom_) continue;
+        if (i == library_.current() && libraryPhotoOpen()) {
+            // The photo being edited takes it in memory, so Ctrl+Z undoes the paste.
+            Graph g;
+            try {
+                g.fromJson(copiedEdit_);
+            } catch (const std::exception& e) {
+                err = e.what();
+                ++failed;
+                continue;
+            }
+            library::retargetEdit(g, copiedFrom_, photo);
+            graph_ = std::move(g);
+            groupPath_.clear();
+            editor_.onGraphReplaced(false);
+            selected_ = 0;
+            markChanged(true);
+            ++pasted;
+        } else if (library::pasteEdit(copiedEdit_, copiedFrom_, photo, err)) {
+            library_.refresh(i, true);
+            ++pasted;
+        } else {
+            ++failed;
+        }
+    }
+    status_ = "Pasted the edit onto " + std::to_string(pasted) + (pasted == 1 ? " photo" : " photos");
+    if (failed) status_ += " (" + std::to_string(failed) + " failed: " + err + ")";
+}
+
+void App::exportSelected() {
+    const std::vector<int> sel = library_.selection();
+    if (sel.empty() || exporter_.busy()) return;
+    if (!batchDir_[0]) {
+        auto d = folderDialog("Export selected photos to");
+        if (!d) return;
+        std::snprintf(batchDir_, sizeof(batchDir_), "%s", d->c_str());
+    }
+    saveLibraryPhoto();
+    exportSettings_.suffix = batchSuffix_;
+    std::vector<ExportItem> items;
+    std::string err;
+    for (int i : sel) {
+        ExportItem it;
+        it.source = library_.photo(i);
+        it.output = batchOutputPath(it.source, batchDir_, exportSettings_);
+        it.graph = i == library_.current() && libraryPhotoOpen() ? graph_.toJson() : library::graphFor(it.source, err);
+        if (it.graph.is_null()) {
+            status_ = "Can't export " + it.source + ": " + err;
+            continue;
+        }
+        items.push_back(std::move(it));
+    }
+    if (items.empty()) return;
+    exportLog_.clear();
+    exporter_.start(nullptr, std::move(items), 0, exportSettings_, gpuDevice_ && gpu::available());
+    showExport_ = true;
+}
+
+void App::drawLibraryWindow() {
+    // A layout saved before the Library existed has no place for it: rebuild the default one
+    // (once), rather than leaving the filmstrip floating over the panels.
+    if (!libraryLayoutChecked_) {
+        libraryLayoutChecked_ = true;
+        if (!ImGui::FindWindowSettingsByID(ImHashStr("###Library"))) resetLayout_ = true;
+    }
+    if (ImGui::Begin("Library###Library", &showLibrary_, kCanvasFlags)) {
+        const ImGuiIO& io = ImGui::GetIO();
+        const bool keys = !io.WantTextInput && !editorFocused_ && !eyedropper().active() &&
+                          !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        library_.canPaste = !copiedEdit_.is_null();
+        const LibraryPanel::Actions a = library_.draw(keys);
+        if (a.copy) copyEdit();
+        if (a.paste) pasteEdit();
+        if (a.exportSelected) exportSelected();
+        if (a.open >= 0) openLibraryPhoto(a.open);
+    }
+    ImGui::End();
 }
 
 void App::applyRawLook() {
@@ -1715,6 +1959,7 @@ nlohmann::json App::uiState() const {
             {"histogram", showHistogram_},
             {"clipping", clipping_},
             {"maskOverlay", maskOverlay_},
+            {"library", libraryPhotoOpen() ? library_.meta(library_.current()).toJson() : nlohmann::json()},
             {"export", [&] {
                  nlohmann::json e = exportSettings_.toJson();
                  e["suffix"] = std::string(batchSuffix_);

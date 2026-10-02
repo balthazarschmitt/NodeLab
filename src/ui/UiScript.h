@@ -12,7 +12,7 @@
 //   drag X0 Y0 X1 Y1 [B]   press at start, move in steps, release at end
 //   text STRING            type characters
 //   wheel N                mouse wheel steps (positive = up / zoom in)
-//   key NAME               press+release: enter, escape, delete, backspace, tab, up, down, a-z, f1-f12
+//   key NAME               press+release: enter, escape, delete, backspace, tab, up, down, left, right, a-z, 0-9, f1-f12
 //   ctrl|alt|shift on|off  hold/release a modifier
 //   shot PATH              save the rendered frame as PNG
 //   quit

@@ -1,6 +1,7 @@
 #pragma once
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "core/Image.h"
 
@@ -38,6 +39,12 @@ bool isImageFile(const std::string& pathU8);
 // Saves 8-bit PNG or JPG depending on extension (RGB when alpha is fully opaque). Returns false and
 // sets err on failure.
 bool saveImage(const std::string& pathU8, const Image& img, std::string& err, int jpegQuality = 95);
+
+// Decodes an 8-bit image file held in memory (an embedded JPEG preview, a stored thumbnail) as
+// float RGBA 0..1, values as stored (display-encoded). Null and err on failure.
+std::shared_ptr<Image> decodeImageMemory(const unsigned char* data, size_t len, std::string& err);
+// Encodes display-encoded 0..1 RGB as a JPEG file's bytes (alpha is dropped); empty on failure.
+std::vector<unsigned char> encodeJpegMemory(const Image& img, int quality = 85);
 
 // Box-filter downscale so the longest edge is <= maxEdge. Returns the input if already small enough.
 std::shared_ptr<const Image> downscaleToFit(const std::shared_ptr<const Image>& src, int maxEdge);

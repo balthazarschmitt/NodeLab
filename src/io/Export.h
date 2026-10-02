@@ -62,6 +62,9 @@ std::string batchOutputPath(const std::string& sourceU8, const std::string& outD
 struct ExportItem {
     std::string source;  // empty for a single export
     std::string output;  // empty: write only the File Output nodes
+    // The library's Export Selected: this photo's own edit (graph JSON, absolute paths), rendered
+    // instead of the job's graph; `source` is then only where the EXIF comes from.
+    nlohmann::json graph;
 };
 
 // Renders at full resolution and saves on a background thread, so the UI stays responsive. The

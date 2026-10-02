@@ -112,11 +112,19 @@ Some nodes are edited directly on the Result panel while they are selected:
   handles to resize, and the handle above to rotate (Shift snaps to 15 degrees).
 - **Linear Gradient:** drag the Start or End handle, or the middle one to move both.
 - **Brush Mask:** paint with the left mouse, Alt+paint to erase, and `[` / `]` to change the
-  brush size.
+  brush size. Turn on Auto Mask to keep strokes from spilling over edges onto other colours.
 - **Mask Overlay (O):** a selected mask node is tinted red over the image, so you can see what it
   covers even before it is wired into anything.
 
 Middle-drag still pans and the wheel still zooms while these controls are shown.
+
+**Add Mask** (on the Result toolbar) makes a local adjustment in one step, like Lightroom's
+"Create New Mask". It inserts a **Basic** labelled "Mask N" right before the Output and wires a
+new mask into its Factor: Linear Gradient, Radial Gradient, Brush (its Image wired for Auto
+Mask) or Luminance Range. The mask is selected, so you can shape or paint it straight away, and
+the Inspector shows its settings with the Basic's sliders underneath. With the mouse over the
+Result: Shift+M opens the menu, M adds a Linear Gradient, Shift+R a Radial Gradient and K a
+Brush. One Ctrl+Z removes the whole adjustment.
 
 ### Picking Colours from the Image
 
@@ -661,6 +669,18 @@ Sizes are in full-resolution pixels.
   Smaller values keep more edges.
 - Determinator: an optional image whose edges are used instead of the input's own.
 
+**Denoise**
+- Removes noise from photos, with Lightroom's Detail-panel controls. Put it right after the
+  Image Input, before Basic and sharpening.
+- **Luminance:** smooths grain in brightness. 0 is off.
+- **Detail:** higher keeps more fine texture (and some noise); lower smooths it more evenly.
+- **Color:** removes coloured speckles and blotches without softening the image. About 25 suits
+  most RAWs.
+- **Color Detail:** higher keeps small coloured details (thin coloured edges); lower also removes
+  large, low-frequency colour blotches.
+- Works on wavelet bands, so edges stay sharp. Strengths are set for the full-resolution image,
+  and the preview matches the export.
+
 **Filter**
 - Classic 3x3 kernels:
   - **Soften:** a slight blur.
@@ -784,6 +804,21 @@ with the matte applied as alpha.
 - The Inspector shows the stroke count, with **Remove Last** and **Clear Strokes** buttons.
   Strokes are saved in the project and scale with the image.
 - An incoming Mask is painted over; Invert flips the result.
+- **Auto Mask** (Lightroom's option): new strokes paint only over colours like the one under the
+  brush, so you can brush up to an edge (sky against a roofline, a face against hair). Wire the
+  photo into the node's **Image** input; **Add Mask** does this for you. The colour is taken
+  under each point of the stroke, so one stroke can follow a surface as its colour changes.
+  Turning it off affects only new strokes.
+
+**Range Mask**
+- Selects part of the photo by brightness or colour, like Lightroom's Luminance Range and Color
+  Range. Wire a gradient or brush mask into **Mask** to refine it: the result keeps only the
+  parts of that mask in range. With nothing in Mask it selects across the whole image.
+- **Luminance:** keeps lightness between **Low** and **High** (0 black, 0.5 a mid tone, 1 white,
+  in perceptual lightness whatever the working space). **Smoothness** feathers both ends.
+- **Color:** pick the **Color** with the eyedropper; **Amount** widens how different a colour can
+  be and still be selected.
+- **Invert** selects everything else instead.
 
 **Channel Key**
 - Keys on a single channel: Red, Green, Blue, Hue, Saturation, Value, Y (luma), Cb or Cr.
@@ -970,6 +1005,39 @@ does the same batch without the window, and `NodeLab.exe --render project.nlproj
 [--depth 16]` renders one image (the extension picks the format; `--depth 32` for full-float EXR).
 Add `--device gpu` to render on the graphics card (`--precision half` for speed, full by default).
 
+## Library
+
+**File > Open Folder** (Ctrl+Shift+O) turns NodeLab into a photo browser, like Lightroom's
+filmstrip. You can also drop a folder on the window, or start `NodeLab.exe C:\Photos\Trip`.
+The Library panel along the bottom shows the folder's photos.
+
+- **Opening photos:** click a thumbnail, or press ← / → to step through them. The open photo
+  has a white border.
+- **Edits are saved automatically** in a sidecar next to each photo: `IMG_1234.CR3` gets
+  `IMG_1234.CR3.nlproj`. Switching photos saves the one you leave, with no question asked, so
+  the edits travel with the photos. A sidecar is an ordinary project, so File > Open Project
+  opens it too. Ctrl+S saves the sidecar straight away; Ctrl+Z works within each photo.
+- **New photos** start with Image Input → Denoise → Basic → Output, in scene-linear. RAWs get
+  Denoise's Color at 25 (Lightroom's default colour noise reduction) and the AgX view; other
+  photos start with Denoise off.
+- **Rating and flags** (Lightroom's keys, with the mouse anywhere but the Node Editor):
+  - **0-5** rate the selected photos (shown as dots under the thumbnail).
+  - **P** picks (a white flag), **X** rejects (a red cross, and the thumbnail dims), **U**
+    clears the flag.
+  - Rating a photo writes its sidecar, so ratings stay with the folder.
+- **Selecting:** Ctrl+click adds or removes a photo, Shift+click selects a range. Selected
+  photos have a blue border.
+- **Filter:** the menu shows All Photos, Picked, everything but rejects, Rejected, photos with at
+  least N stars, or Edited photos. ← / → skip photos the filter hides.
+- **Copy Edit / Paste Edit** (Ctrl+Shift+C / Ctrl+Shift+V): copy the open photo's whole node
+  tree, select other photos, and paste. Each one gets the tree with its own photo in the Image
+  Input, and keeps its own rating and flag. Pasting onto the open photo can be undone.
+- **Export Selected...** exports each selected photo with its own edit, using the Export
+  window's format, size and **Name suffix**, into the Batch output folder (asked for the first
+  time).
+- **Thumbnails** load in the background: a RAW's embedded preview, or the photo itself. An edited
+  photo (a blue corner) shows its edit, rendered once and kept in the sidecar.
+
 ## Recipes
 
 ### Colour-selective Saturation
@@ -1042,12 +1110,15 @@ look.
 
 ### Local Adjustments (Lightroom Masks)
 
-1. Add a **Basic** (or any colour node) after the image and set the look you want in one area.
-2. Add a **Linear Gradient**, **Radial Gradient** or **Brush Mask**, and wire its Mask into the
-   Basic node's **Factor**.
-3. Select the mask and shape it on the Result panel; press O to see it tinted red.
-4. Combine masks with the Operation setting, or chain a Brush Mask after a gradient to paint
-   extra areas in or out.
+1. Hover the Result and press Shift+M (or click **Add Mask**) and pick a mask. This inserts a
+   Basic labelled "Mask 1" before the Output, driven by the new mask.
+2. Shape the mask on the Result (drag the handles, or paint), and press O to see it tinted red.
+3. Set the look for that area with the Basic's sliders, shown below the mask in the Inspector.
+4. To refine a mask, chain masks: wire a gradient into a **Range Mask**'s Mask input to keep
+   only the bright sky inside it, or into a Brush Mask to paint areas in or out. Each Add Mask
+   stacks another adjustment after the last.
+
+The same graph can be built by hand: any colour node with a mask wired into its Factor.
 
 ### Thermal Camera
 

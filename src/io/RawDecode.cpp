@@ -11,6 +11,8 @@
 #include <libraw/libraw.h>
 
 #include "core/Parallel.h"
+#include "io/Exif.h"
+#include "io/ImageIO.h"
 #include "io/Paths.h"
 
 namespace raw {
@@ -118,6 +120,42 @@ void exifTag(void* context, int tag, int type, int len, unsigned int order, void
 }
 
 }  // namespace
+
+std::shared_ptr<Image> loadThumbnail(const std::string& pathU8, int minEdge, std::string& err) {
+    std::ifstream f(u8ToPath(pathU8), std::ios::binary);
+    if (!f) {
+        err = "can't open file";
+        return nullptr;
+    }
+    std::vector<char> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    auto lr = std::make_unique<LibRaw>();
+    if (int r = lr->open_buffer(bytes.data(), bytes.size()); r != LIBRAW_SUCCESS) {
+        err = std::string("RAW: ") + libraw_strerror(r);
+        return nullptr;
+    }
+    // Cameras embed several previews (CR3: 160 px, a 1620 px one and a full-size JPEG); decoding
+    // the full-size one would take as long as a RAW decode's demosaic.
+    const auto& list = lr->imgdata.thumbs_list;
+    int pick = -1, pickEdge = 0;
+    for (int i = 0; i < std::min(list.thumbcount, int(LIBRAW_THUMBNAIL_MAXCOUNT)); ++i) {
+        const auto& t = list.thumblist[i];
+        if (t.tformat != LIBRAW_INTERNAL_THUMBNAIL_JPEG) continue;
+        const int edge = std::max(t.twidth, t.theight);
+        const bool better = pick < 0 || (pickEdge < minEdge ? edge > pickEdge : edge >= minEdge && edge < pickEdge);
+        if (better) pick = i, pickEdge = edge;
+    }
+    const int r = pick >= 0 ? lr->unpack_thumb_ex(pick) : lr->unpack_thumb();
+    if (r != LIBRAW_SUCCESS || lr->imgdata.thumbnail.tformat != LIBRAW_THUMBNAIL_JPEG) {
+        err = "RAW: no JPEG preview";
+        return nullptr;
+    }
+    const auto& th = lr->imgdata.thumbnail;
+    auto img = decodeImageMemory(reinterpret_cast<const unsigned char*>(th.thumb), th.tlength, err);
+    if (!img) return nullptr;
+    // The previews are stored as the sensor is; LibRaw's flip is the camera's orientation.
+    const int flip = lr->imgdata.sizes.flip;
+    return exif::applyOrientation(img, flip == 3 ? 3 : flip == 5 ? 8 : flip == 6 ? 6 : 1);
+}
 
 bool readMetadata(const std::string& pathU8, Metadata& out) {
     std::ifstream f(u8ToPath(pathU8), std::ios::binary);

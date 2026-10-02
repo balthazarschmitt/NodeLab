@@ -99,7 +99,12 @@ dark sky (see Help > Guide > Recipes).
 | Colour management | Color menu: View Transform (Standard, AgX, Raw), Look, view Exposure and Gamma, as in Blender's Render Properties. New projects are scene-linear; Convert Project to Scene-Linear upgrades a legacy one |
 | Histogram / clipping | Result toolbar, or H / J with the mouse over the Result: RGB histogram, and clipped highlights in red and crushed shadows in blue |
 | On-image controls | Select a Crop, gradient, shape or Brush Mask node and edit it on the Result: drag handles; Crop shows the whole frame (drag outside to straighten); Brush paints, Alt erases, `[` `]` size; O toggles the red mask overlay |
+| Add Mask | Result toolbar → Add Mask (Shift+M over the Result), or M linear, Shift+R radial, K brush: inserts a Basic labelled "Mask N" before the Output, driven by a new mask; the Inspector shows the mask with the Basic's sliders below it |
 | Import image | File > Import Image, or drop a file on the window |
+| Library | File > Open Folder (Ctrl+Shift+O), drop a folder on the window, or `NodeLab.exe <folder>`: a filmstrip of the folder's photos. Click or ←/→ to open one; its edit is saved automatically in `<photo>.nlproj` beside it. New photos start as Image Input → Denoise → Basic → Output |
+| Culling | In the Library: 0-5 rate, P pick, X reject, U unflag; Ctrl+click / Shift+click select several; the filter menu shows picks, stars, rejects or edited photos |
+| Copy / paste edit | Ctrl+Shift+C copies the open photo's edit, Ctrl+Shift+V pastes it onto the selected photos (each keeps its own file and rating) |
+| Export selected | Library → Export Selected... (or File menu): each selected photo exported with its own edit, using the Export window's format and size |
 | Export | File > Export (Ctrl+E) opens the Export window: renders in the background with a progress bar and Cancel. Format (PNG/TIFF 8 or 16 bit, JPEG + quality with EXIF, OpenEXR half/full float scene-linear), size (original, long edge, percent; Lanczos in linear light) |
 | Batch | Export window → Batch: add files or a folder (or drop them on the window), pick the Image Input they feed and an output folder; each result is saved as `<name><suffix>` |
 
@@ -126,9 +131,9 @@ layout is saved per user in `%APPDATA%\NodeLab\layout.ini`.
 | Color | Basic (Lightroom's exposure, highlights/shadows, whites/blacks, texture, clarity, dehaze, vibrance), Color Mixer (8-band HSL), Color Grading (shadow/midtone/highlight/global wheels), Brightness / Contrast, Saturation, Hue Shift, Hue Correct (per-hue H/S/V curves), Exposure, Gamma, Levels, Curves, Color Balance (Lift/Gamma/Gain, ASC CDL), Tone Map, Convert Colorspace, Invert, Luminance, Split/Combine RGB, HSV, HSL, Lab, YCbCr, YUV |
 | Mix | Mix, Blend (19 modes), Alpha Over |
 | Converter | Color Ramp, Color Key, Map Range, Math (21 ops), Clamp, Threshold, Normalize (min/max or percentiles), Float Curve, Set Alpha, Wavelength (nm to color), Blackbody (Kelvin to color), Expression, Image Expression |
-| Filter | Blur (pixels or Relative %), Directional Blur (+spin/zoom), Bilateral Blur, Filter (Soften, Sharpen, Laplace, Sobel, Prewitt, Kirsch, Shadow), Dilate / Erode, Kuwahara, Pixelate, Posterize, Glare (Fog Glow, Streaks, Simple Star), Sun Beams |
+| Filter | Blur (pixels or Relative %), Directional Blur (+spin/zoom), Bilateral Blur, Denoise (Luminance/Color, wavelets), Filter (Soften, Sharpen, Laplace, Sobel, Prewitt, Kirsch, Shadow), Dilate / Erode, Kuwahara, Pixelate, Posterize, Glare (Fog Glow, Streaks, Simple Star), Sun Beams |
 | Transform | Transform, Flip, Crop (straighten, aspect presets, on-image frame), Lens Correction (distortion, fringing, vignetting), Lens Distortion (with chromatic dispersion), Displace, Map UV, Corner Pin |
-| Matte | Box Mask, Ellipse Mask, Radial Gradient, Linear Gradient, Brush Mask (painted on the Result), Channel Key, Luminance Key, Difference Key, Distance Key, Chroma Key, Color Spill, Double Edge Mask |
+| Matte | Box Mask, Ellipse Mask, Radial Gradient, Linear Gradient, Brush Mask (painted on the Result, with Auto Mask), Range Mask (luminance or colour range), Channel Key, Luminance Key, Difference Key, Distance Key, Chroma Key, Color Spill, Double Edge Mask |
 | Texture | Noise, Voronoi, Gradient, Wave, Checker, White Noise |
 | Utility | Reroute, Switch, Split (compare), Image Info, File Output (PNG/JPEG/TIFF/OpenEXR; written on single Export / File > Write File Outputs / --render) |
 | Group | Groups (Ctrl+G) with Group Input / Group Output inside |

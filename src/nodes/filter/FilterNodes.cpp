@@ -790,6 +790,7 @@ void registerFilterNodes(NodeRegistry& r) {
     r.add<BlurNode>();
     r.add<DirectionalBlurNode>();
     r.add<BilateralBlurNode>();
+    registerDenoiseNode(r);
     r.add<FilterNode>();
     r.add<DilateErodeNode>();
     r.add<KuwaharaNode>();
