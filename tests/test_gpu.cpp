@@ -866,3 +866,38 @@ TEST_CASE("GPU export matches the CPU export") {
     CHECK(difference(Value(res[0]), Value(res[1])) < 3e-4f);
     fs::remove_all(dir);
 }
+
+TEST_CASE("GPU nodes match the CPU on one-pixel-wide images") {
+    if (!gpuReady()) return;
+    const int sizes[][2] = {{1, 1}, {1, 5}, {5, 1}};
+    for (const auto& type : NodeRegistry::instance().types()) {
+        const NodeInfo* inf = NodeRegistry::instance().find(type);
+        if (inf->hidden) continue;
+        for (const auto& sz : sizes) {
+            for (bool linear : {false, true}) {
+                Graph g;
+                Node* src = cpuSource(g);
+                Node* split = g.addNode("color.split_rgb");
+                g.connect(src->id, 0, split->id, 0);
+                Node* n = g.addNode(type);
+                for (int i = 0; i < int(inf->inputs.size()); ++i) {
+                    if (inf->inputs[i].type == PinType::Image) g.connect(src->id, 0, n->id, i);
+                    else g.connect(split->id, i % 3, n->id, i);
+                }
+                for (int o = 0; o < int(inf->outputs.size()); ++o) {
+                    CAPTURE(type);
+                    CAPTURE(sz[0]);
+                    CAPTURE(sz[1]);
+                    CAPTURE(linear);
+                    CAPTURE(o);
+                    const Run cpu = evaluate(g, n->id, o, false, linear, sz[0], sz[1]);
+                    const Run gpu = evaluate(g, n->id, o, true, linear, sz[0], sz[1]);
+                    CHECK_MESSAGE(gpu.fallbacks == 0, gpu.error);
+                    if (!gpu.onGpu) continue;
+                    CHECK(cpu.v.empty() == gpu.v.empty());
+                    if (!cpu.v.empty() && !gpu.v.empty()) CHECK(difference(cpu.v, gpu.v) < 2e-4f);
+                }
+            }
+        }
+    }
+}

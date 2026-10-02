@@ -1014,6 +1014,7 @@ void App::drawMainMenu() {
             ImGui::EndMenu();
         }
         if (ImGui::MenuItem("Frame All Nodes", "Home")) editor_.frameAll();
+        if (ImGui::MenuItem("Find Node...", "Ctrl+F")) editor_.openFind();
         if (ImGui::MenuItem("Reset Image Zoom", "double-click image")) view_.reset();
         if (ImGui::MenuItem("Clear Node Preview", nullptr, false, !previewPath_.empty())) {
             previewPath_.clear();

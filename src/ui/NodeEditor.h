@@ -41,6 +41,9 @@ public:
     // The graph was replaced (new/open/undo): drop selection and in-flight interactions.
     void onGraphReplaced(bool frame);  // also clears the active value field
     void frameAll() { fitFrames_ = 1; }
+    // Ctrl+F: search this graph's nodes by label or name, then select and frame the pick. Opened
+    // next frame from the canvas, as a popup must be opened in the ID scope that draws it.
+    void openFind() { findRequested_ = true; }
     // Blender's "Node Timings" overlay: how long each node took when it last ran, drawn above it.
     // Keyed by node id of the graph being drawn; empty hides the labels.
     // Nodes that ran on the GPU are marked so.
@@ -128,6 +131,7 @@ private:
     void drawAddMenu(Graph& g, Result& r);
     void drawNodeMenu(Graph& g, int& preview, Result& r);
     void drawRenamePopup(Graph& g, Result& r);
+    void drawFindMenu(Graph& g);
     void finishDragNodes(Graph& g, Result& r);  // splice + auto-offset
     void selectLinked(const Graph& g, bool downstream);
     void frameSelected(const Graph& g);
@@ -186,6 +190,7 @@ private:
     std::vector<int> swapTargets_;  // add menu opened as Swap (Shift+S): replace these nodes instead
     char search_[64] = {};
     int searchSel_ = 0;  // highlighted search result (Up/Down, Enter)
+    bool findRequested_ = false;
 };
 
 ImU32 pinColor(PinType t);

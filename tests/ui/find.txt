@@ -1,0 +1,17 @@
+# NodeLab.exe tests\ui\interact.nlproj --script tests\ui\find.txt
+# Ctrl+F lists the graph's nodes; typing filters, Enter selects and frames the pick.
+settle
+move 800 480
+ctrl on
+key f
+ctrl off
+wait 3
+shot build/smoke/find1_all.png
+text inv
+wait 3
+shot build/smoke/find2_filtered.png
+key enter
+settle
+wait 3
+shot build/smoke/find3_framed.png
+quit

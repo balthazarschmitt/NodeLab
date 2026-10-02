@@ -1189,6 +1189,10 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
         !io.WantTextInput && mode_ == Mode::None &&
         ImGui::IsKeyChordPressed(ImGuiMod_Shift | ImGuiKey_S))
         openSwapMenu(g);
+    // Find a node by label or name; hover is enough here too.
+    if ((ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) || ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)) &&
+        !io.WantTextInput && mode_ == Mode::None && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_F))
+        findRequested_ = true;
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !io.WantTextInput) {
         const bool noMods = !io.KeyCtrl && !io.KeyShift && !io.KeyAlt;
         if (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace) ||
@@ -1238,6 +1242,14 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
     drawNodeMenu(g, preview, r);
     drawFrameMenu(g, r);
     drawRenamePopup(g, r);
+    if (findRequested_) {
+        findRequested_ = false;
+        search_[0] = 0;
+        searchSel_ = 0;
+        menuPos_ = ImGui::GetMousePos();
+        ImGui::OpenPopup("FindNode");
+    }
+    drawFindMenu(g);
 
     // Node widgets moved the layout cursor around; leave it at a valid spot covering the canvas.
     ImGui::SetCursorScreenPos(origin_);
@@ -1329,7 +1341,7 @@ void NodeEditor::drawAddMenu(Graph& g, Result& r) {
             ImGui::PushID(i);
             if (ImGui::Selectable(inf->displayName.c_str(), i == searchSel_)) chosen = results[i];
             if (i == searchSel_ && moved) ImGui::SetScrollHereY();
-            ImGui::SameLine(190);
+            ImGui::SameLine(ImGui::GetFontSize() * 10.0f);
             ImGui::TextDisabled("%s", inf->category.c_str());
             ImGui::PopID();
         }
@@ -1823,6 +1835,74 @@ void NodeEditor::frameSelected(const Graph& g) {
         }
     zoom_ = std::clamp(std::min((size_.x - 80) / (x1 - x0), (size_.y - 80) / (y1 - y0)), kMinZoom, 1.5f);
     pan_ = ImVec2(size_.x * 0.5f - (x0 + x1) * 0.5f * zoom_, size_.y * 0.5f - (y0 + y1) * 0.5f * zoom_);
+}
+
+void NodeEditor::drawFindMenu(Graph& g) {
+    {
+        // Fixed size inside the window, as the add menu (see drawAddMenu): room for every node of a
+        // small graph, so it doesn't jump while filtering, and a scrolling list for a big one.
+        const ImGuiStyle& st = ImGui::GetStyle();
+        const ImGuiViewport* vp = ImGui::GetWindowViewport();
+        const int rows = std::clamp(int(g.nodes().size()), 3, 12);
+        const ImVec2 size(ImGui::GetFontSize() * 20.0f, ImGui::GetFrameHeightWithSpacing() * 2 +
+                                                          ImGui::GetTextLineHeightWithSpacing() * rows + st.WindowPadding.y * 2);
+        ImVec2 pos = menuPos_;
+        pos.x = std::max(vp->Pos.x, std::min(pos.x, vp->Pos.x + vp->Size.x - size.x));
+        pos.y = std::max(vp->Pos.y, std::min(pos.y, vp->Pos.y + vp->Size.y - size.y));
+        ImGui::SetNextWindowPos(pos, ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(size);
+    }
+    if (!ImGui::BeginPopup("FindNode")) return;
+    ImGui::TextDisabled("Find Node");
+    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::InputTextWithHint("##find", "Label or node name...", search_, sizeof(search_))) searchSel_ = 0;
+
+    // Labelled matches first (the names users gave), then by position: top to bottom, left to right.
+    struct Hit {
+        int id;
+        std::string text, type;
+        float x, y;
+    };
+    std::vector<Hit> hits;
+    for (const auto& [id, n] : g.nodes()) {
+        const std::string& name = n->info().displayName;
+        if (search_[0] && !containsNoCase(n->label, search_) && !containsNoCase(name, search_)) continue;
+        hits.push_back({id, n->label.empty() ? name : n->label, n->label.empty() ? std::string() : name, n->x, n->y});
+    }
+    std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) {
+        if (a.type.empty() != b.type.empty()) return !a.type.empty();
+        return a.y != b.y ? a.y < b.y : a.x < b.x;
+    });
+    const int n = int(hits.size());
+    bool moved = false;
+    if (n > 0) {
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) searchSel_ = (searchSel_ + 1) % n, moved = true;
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) searchSel_ = (searchSel_ + n - 1) % n, moved = true;
+    }
+    searchSel_ = n ? std::clamp(searchSel_, 0, n - 1) : 0;
+    if (n == 0) ImGui::TextDisabled("No matching nodes");
+    int chosen = 0;
+    ImGui::BeginChild("##results", ImVec2(0, 0), ImGuiChildFlags_None);
+    for (int i = 0; i < n; ++i) {
+        ImGui::PushID(hits[i].id);
+        if (ImGui::Selectable(hits[i].text.c_str(), i == searchSel_)) chosen = hits[i].id;
+        if (i == searchSel_ && moved) ImGui::SetScrollHereY();
+        if (!hits[i].type.empty()) {
+            ImGui::SameLine(ImGui::GetFontSize() * 10.0f);
+            ImGui::TextDisabled("%s", hits[i].type.c_str());
+        }
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+    if (!chosen && n > 0 && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))
+        chosen = hits[size_t(searchSel_)].id;
+    if (chosen) {
+        select(chosen);
+        frameSelected(g);
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 void NodeEditor::drawRenamePopup(Graph& g, Result& r) {

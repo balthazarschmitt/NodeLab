@@ -5,6 +5,8 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 ## Unreleased
 
+- **Find Node** (Ctrl+F, View > Find Node...): lists the nodes of the graph you are in, filtered by
+  label or node name. Enter or a click selects the node and frames it.
 - **Faster exports:** saving a 24 MP image takes 0.6-0.9 s instead of 3-5 s in every format.
   - PNG and TIFF compress with zlib-ng across all cores. Each block picks run-length matching for
     photos (as small as before, 3-4x faster) or full matching for graphics.
