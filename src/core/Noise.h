@@ -21,10 +21,17 @@ inline float hashFloat(int x, int y, uint32_t seed, uint32_t salt = 0) {
     return float(hash2(x, y, seed + salt * 0x68E31DA4U) >> 8) / 16777216.0f;
 }
 
+// The lattice cell of a floored coordinate. High octaves on wide images reach past the int
+// range, where int(floor(x)) overflows (and x - x0 became huge, then NaN): wrap instead.
+inline int latticeIndex(float floored) {
+    return int(int64_t(std::fmax(std::fmin(floored, 9e18f), -9e18f)));
+}
+
 // 2D gradient (Perlin-style) noise in roughly [-1, 1].
 inline float perlin(float x, float y, uint32_t seed) {
-    int x0 = int(std::floor(x)), y0 = int(std::floor(y));
-    float fx = x - x0, fy = y - y0;
+    const float xf = std::floor(x), yf = std::floor(y);
+    const int x0 = latticeIndex(xf), y0 = latticeIndex(yf);
+    const float fx = x - xf, fy = y - yf;
     auto grad = [&](int ix, int iy, float dx, float dy) {
         uint32_t h = hash2(ix, iy, seed);
         float a = float(h & 0xFFFF) / 65536.0f * 6.2831853f;
@@ -58,7 +65,7 @@ inline float fbm(float x, float y, float detail, float roughness, float lacunari
 
 // Voronoi F1: distance to the nearest jittered cell point, plus that cell's id for coloring.
 inline float voronoi(float x, float y, float randomness, uint32_t seed, int& cellX, int& cellY) {
-    int xi = int(std::floor(x)), yi = int(std::floor(y));
+    int xi = latticeIndex(std::floor(x)), yi = latticeIndex(std::floor(y));
     float best = 1e9f;
     cellX = xi, cellY = yi;
     for (int j = -1; j <= 1; ++j)

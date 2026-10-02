@@ -22,6 +22,13 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
   Bilateral Blur and Sun Beams about 15% faster. Bilinear sampling (Transform, Crop, Lens
   Distortion and others) is inlined. Pixels are unchanged.
 - `--render ... --timings` prints how long evaluation and saving took.
+- **Fixed:** a NaN in a channel that drives a param (say a Math Divide of 0 by 0 into
+  Wavelength) crashed NodeLab. It now counts as 0, as in Blender.
+- **Fixed:** Noise Texture gave black (NaN) pixels on wide images at high Detail and
+  Lacunarity, where the lattice coordinates overflowed.
+- **Fixed:** a damaged or hand-edited project could hang or crash on load: param values are
+  clamped to their ranges, values of the wrong type fall back to the default, and links to
+  pins a node doesn't have are dropped.
 
 ## 0.18.0 (2026-10-01)
 

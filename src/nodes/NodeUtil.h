@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -61,6 +62,9 @@ struct ChannelSampler {
             int sy = std::min(c->h - 1, y * c->h / std::max(1, outH));
             v = c->data[size_t(sy) * c->w + sx];
         }
+        // NaN (a Math node's 0 / 0) slips through clamp, and a param can't hold it: nodes that
+        // index tables with it crashed. Count it as 0, as Blender's compositor does.
+        if (std::isnan(v)) v = 0.0f;
         return std::clamp(v, lo, hi);
     }
 };

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <stdexcept>
 
 #include "graph/NodeRegistry.h"
@@ -296,6 +297,44 @@ nlohmann::json Graph::toJson(const fs::path* baseDir) const {
     return j;
 }
 
+namespace {
+
+// A param value read from a file, made into one the UI could have set: numbers clamped to the
+// hard range (a damaged or hand-edited file with a radius of 1e9 hung evaluation, and an enum
+// out of range indexed past its tables), anything of the wrong JSON type replaced by the default.
+nlohmann::json sanitizeParam(const ParamDesc& d, const nlohmann::json& v) {
+    switch (d.kind) {
+    case ParamKind::Float:
+    case ParamKind::Int:
+    case ParamKind::Enum: {
+        if (!v.is_number() && !v.is_boolean()) return d.def;
+        double x = v.is_boolean() ? double(v.get<bool>()) : v.get<double>();
+        if (std::isnan(x)) return d.def;
+        x = std::clamp(x, double(d.hardMin), double(d.hardMax));
+        if (d.kind == ParamKind::Float) return float(x);
+        return int(std::lround(x));
+    }
+    case ParamKind::Bool:
+        if (v.is_boolean()) return v;
+        if (v.is_number()) return v.get<double>() != 0.0;
+        return d.def;
+    case ParamKind::Path:
+    case ParamKind::SavePath:
+    case ParamKind::Text:
+        return v.is_string() ? v : d.def;
+    case ParamKind::Color: {
+        if (!v.is_array() || v.size() != d.def.size()) return d.def;
+        for (const auto& c : v)
+            if (!c.is_number()) return d.def;
+        return v;
+    }
+    default:  // Curve, Ramp: their own parsers check the structure; the top-level type must match.
+        return v.type() == d.def.type() ? v : d.def;
+    }
+}
+
+}  // namespace
+
 void Graph::fromJson(const nlohmann::json& j, const fs::path* baseDir) {
     clear();
     int maxId = 0;
@@ -317,7 +356,7 @@ void Graph::fromJson(const nlohmann::json& j, const fs::path* baseDir) {
                 const bool isPath = descs[i].kind == ParamKind::Path || descs[i].kind == ParamKind::SavePath;
                 if (isPath && baseDir && val.is_string() && !val.get<std::string>().empty())
                     val = makeAbsoluteU8(val.get<std::string>(), *baseDir);
-                node->params[i] = val;
+                node->params[i] = sanitizeParam(descs[i], val);
             }
         }
         if (auto ex = o.find("extra"); ex != o.end()) node->loadExtra(*ex);
@@ -334,7 +373,11 @@ void Graph::fromJson(const nlohmann::json& j, const fs::path* baseDir) {
         l.fromPin = o.at("from")[1].get<int>();
         l.toNode = o.at("to")[0].get<int>();
         l.toPin = o.at("to")[1].get<int>();
-        if (!find(l.fromNode) || !find(l.toNode)) continue;
+        const Node* from = find(l.fromNode);
+        const Node* to = find(l.toNode);
+        if (!from || !to) continue;
+        // Pins a damaged file names that the nodes don't have would index past their pin lists.
+        if (l.fromPin < 0 || l.fromPin >= int(from->info().outputs.size()) || l.toPin < 0 || l.toPin >= int(to->info().inputs.size())) continue;
         maxId = std::max(maxId, l.id);
         links_.push_back(l);
     }

@@ -61,6 +61,9 @@ build\nodelab_tests.exe
 - **Unit tests:** `nodelab_tests.exe` (doctest), in `tests/test_*.cpp`.
   - `test_nodes2.cpp` runs every registered node with image and channel inputs on every pin.
   - New nodes are covered automatically, but add behaviour checks for anything non-trivial.
+  - `test_fuzz.cpp` runs every node on 1-pixel-wide images, params at their range ends, NaN and
+    infinite pixels, and malformed project params and links. It checks for crashes, hangs and
+    non-finite output (except Math and Converter nodes).
   - `test_guide.cpp` fails if a node has no `**Display Name**` entry in GUIDE.md. Document new
     nodes there (and in the README node table). GUIDE.md is compiled into the exe
     (`cmake/EmbedText.cmake`) and shown by Help > Guide.
