@@ -10,8 +10,11 @@
 
 #include "core/ColorMath.h"
 #include "io/ImageIO.h"
+#include "nodes/filter/SpotRemoval.h"
 #include "nodes/matte/MatteNodes.h"
 #include "ui/ViewerOverlay.h"
+
+int autoToneRequest = 0;
 
 namespace {
 
@@ -32,11 +35,15 @@ void pushBandColor(float hueDeg) {
 
 // ---------------------------------------------------------------- Basic
 
-void basic(const ParamRow& row) {
+void basic(Node& n, const ParamRow& row) {
     row(0);
     ImGui::SeparatorText("White Balance");
     row(1), row(2);
     ImGui::SeparatorText("Tone");
+    // Lightroom's Auto, at the top of the Tone group.
+    if (ImGui::SmallButton("Auto")) autoToneRequest = n.id;
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Set Exposure, Contrast, Highlights, Shadows, Whites and Blacks from the image's tones");
     for (int i = 3; i <= 8; ++i) row(i);
     ImGui::SeparatorText("Presence");
     for (int i = 9; i <= 13; ++i) row(i);
@@ -210,6 +217,10 @@ bool drawNodeInspector(Node& n, const ParamRow& row, bool& changed) {
                                ? "Edit the crop on the Result viewer: drag the frame, its corners or edges; drag outside it to straighten."
                            : dynamic_cast<BrushMaskNode*>(&n)
                                ? "Paint on the Result viewer. Alt+paint erases, [ and ] change the brush size, O toggles the overlay."
+                           : dynamic_cast<SpotRemovalNode*>(&n)
+                               ? "Click a blemish on the Result viewer to add a spot (drag right away to pick its source). "
+                                 "Drag a spot or its source to move it and its edge to resize it; Alt+click or Delete "
+                                 "removes it. The settings below apply to the selected spot and new ones."
                                : "Drag the handles on the Result viewer. O toggles the red mask overlay.";
         ImGui::PushTextWrapPos(0.0f);
         ImGui::TextDisabled("%s", hint);
@@ -218,13 +229,26 @@ bool drawNodeInspector(Node& n, const ParamRow& row, bool& changed) {
     }
     const std::string& t = n.info().type;
     if (t == "color.basic") {
-        basic(row);
+        basic(n, row);
     } else if (t == "color.color_mixer") {
         colorMixer(n, row);
     } else if (t == "color.color_grading") {
         changed |= colorGrading(n, row);
     } else if (auto* brush = dynamic_cast<BrushMaskNode*>(&n)) {
         changed |= brushMask(*brush, row);
+    } else if (auto* spots = dynamic_cast<SpotRemovalNode*>(&n)) {
+        for (int i = 0; i < int(n.params.size()); ++i) row(i);
+        ImGui::Spacing();
+        ImGui::TextDisabled("%d %s%s", int(spots->spots.size()), spots->spots.size() == 1 ? "spot" : "spots",
+                            spots->active >= 0 ? " (one selected)" : "");
+        ImGui::BeginDisabled(spots->spots.empty());
+        ImGui::SameLine();
+        if (ImGui::Button("Remove All")) {
+            spots->spots.clear();
+            spots->active = -1;
+            changed = true;
+        }
+        ImGui::EndDisabled();
     } else if (t == "io.image_input") {
         for (int i = 0; i < int(n.params.size()); ++i) row(i);
         // Which profile Embedded Profile applies, so a P3 or Adobe RGB photo is recognisable.

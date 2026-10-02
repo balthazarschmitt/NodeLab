@@ -7,6 +7,7 @@
 
 #include <imgui.h>
 
+#include "nodes/filter/SpotRemoval.h"
 #include "nodes/matte/MatteNodes.h"
 #include "nodes/transform/TransformNodes.h"
 
@@ -55,7 +56,7 @@ void label(ImDrawList* dl, const ImVec2& p, const char* text) {
 
 bool NodeOverlay::supports(const Node& n) {
     const std::string& t = n.info().type;
-    return t == crop::kType || isMask(n);
+    return t == crop::kType || isMask(n) || dynamic_cast<const SpotRemovalNode*>(&n);
 }
 
 bool NodeOverlay::isMask(const Node& n) {
@@ -81,6 +82,7 @@ bool NodeOverlay::update(ImDrawList* dl, const ImVec2& a, const ImVec2& b, bool 
     if (t == kLinear) return updateLinear(dl, a, b, hovered, active);
     if (t == kRadial || t == kBox || t == kEllipse) return updateShape(dl, a, b, hovered, active);
     if (dynamic_cast<BrushMaskNode*>(node_)) return updateBrush(dl, a, b, hovered, active);
+    if (dynamic_cast<SpotRemovalNode*>(node_)) return updateSpots(dl, a, b, hovered, active);
     return false;
 }
 
@@ -341,5 +343,129 @@ bool NodeOverlay::updateBrush(ImDrawList* dl, const ImVec2& a, const ImVec2& b, 
         }
     }
     if (drag_ >= 0 && active && brush->extendStroke(mu, mv, std::max(1, int(W)), std::max(1, int(H)))) changed_ = true;
+    return hovered || drag_ >= 0;
+}
+
+// ---------------------------------------------------------------- spot removal
+
+bool NodeOverlay::updateSpots(ImDrawList* dl, const ImVec2& a, const ImVec2& b, bool hovered, bool active) {
+    auto* node = static_cast<SpotRemovalNode*>(node_);
+    std::vector<Spot>& spots = node->spots;
+    if (node->active >= int(spots.size())) node->active = -1;
+    const float W = b.x - a.x, H = b.y - a.y, L = std::max(W, H);
+    const ImGuiIO& io = ImGui::GetIO();
+    const ImVec2 m = io.MousePos;
+    auto screen = [&](float u, float v) { return ImVec2(a.x + u * W, a.y + v * H); };
+
+    // The Inspector edits the active spot through the params.
+    if (node->storeActive()) changed_ = true;
+
+    // What is under the mouse: the active spot's parts first, then any spot's target.
+    enum Part { None, Target, Source, Edge };
+    int hitSpot = -1;
+    Part hitPart = None;
+    if (hovered && drag_ < 0) {
+        auto test = [&](int i, bool withSource) {
+            const Spot& s = spots[i];
+            const float r = s.radius * L, dt = dist(m, screen(s.x, s.y));
+            if (std::fabs(dt - r) <= kHit * 0.6f) return Edge;
+            if (dt < r) return Target;
+            if (withSource && dist(m, screen(s.sx, s.sy)) < r) return Source;
+            return None;
+        };
+        if (node->active >= 0 && (hitPart = test(node->active, true)) != None) hitSpot = node->active;
+        for (int i = int(spots.size()) - 1; i >= 0 && hitSpot < 0; --i)
+            if (Part p = test(i, false); p != None) hitSpot = i, hitPart = p == Edge ? Target : p;
+    }
+
+    if (hovered) {
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket)) setParam(1, node->paramF(1) / 1.25f);
+        if (ImGui::IsKeyPressed(ImGuiKey_RightBracket)) setParam(1, node->paramF(1) * 1.25f);
+        if (node->active >= 0 && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace))) {
+            spots.erase(spots.begin() + node->active);
+            node->active = -1;
+            changed_ = true;
+            hitSpot = -1, hitPart = None;
+        }
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            if (hitSpot >= 0 && io.KeyAlt) {
+                // Alt+click removes a spot, as in Lightroom.
+                spots.erase(spots.begin() + hitSpot);
+                node->active = -1;
+                changed_ = true;
+            } else if (hitSpot >= 0) {
+                if (node->active != hitSpot) {
+                    node->active = hitSpot;
+                    node->loadActive();
+                    changed_ = true;
+                }
+                const Spot& s = spots[hitSpot];
+                drag_ = hitPart == Source ? 1 : hitPart == Edge ? 2 : 0;
+                grab_[0] = s.x, grab_[1] = s.y, grab_[2] = s.sx, grab_[3] = s.sy, grab_[4] = s.radius;
+                grabX_ = m.x, grabY_ = m.y;
+            } else if (!io.KeyAlt && m.x >= a.x && m.x <= b.x && m.y >= a.y && m.y <= b.y) {
+                node->addSpot((m.x - a.x) / W, (m.y - a.y) / H, W / H);
+                changed_ = true;
+                // Dragging right after adding moves the source, as Photoshop's healing brush
+                // sets it; a plain click keeps the one picked beside it.
+                const Spot& s = spots.back();
+                drag_ = 3;
+                grab_[2] = s.sx, grab_[3] = s.sy;
+                grabX_ = m.x, grabY_ = m.y;
+            }
+        }
+    }
+
+    if (drag_ >= 0 && active && node->active >= 0) {
+        Spot& s = spots[node->active];
+        const float du = (m.x - grabX_) / W, dv = (m.y - grabY_) / H;
+        const Spot before = s;
+        if (drag_ == 0) s.x = grab_[0] + du, s.y = grab_[1] + dv;
+        else if (drag_ == 1) s.sx = grab_[2] + du, s.sy = grab_[3] + dv;
+        else if (drag_ == 2) setParam(1, dist(m, screen(s.x, s.y)) / L);
+        else if (drag_ == 3 && dist(m, ImVec2(grabX_, grabY_)) > 4.0f) s.sx = (m.x - a.x) / W, s.sy = (m.y - a.y) / H;
+        if (drag_ == 2 && node->storeActive()) changed_ = true;
+        if (s.x != before.x || s.y != before.y || s.sx != before.sx || s.sy != before.sy) changed_ = true;
+    }
+
+    // Spots: the active one with its source and an arrow from it, the others as plain circles.
+    for (int i = 0; i < int(spots.size()); ++i) {
+        const Spot& s = spots[i];
+        const ImVec2 t = screen(s.x, s.y);
+        const float r = std::max(s.radius * L, 2.0f);
+        const bool isActive = i == node->active, hot = i == hitSpot;
+        const ImU32 col = isActive ? IM_COL32(255, 255, 255, 240) : hot ? IM_COL32(255, 220, 140, 230) : IM_COL32(220, 220, 225, 150);
+        dl->AddCircle(t, r, IM_COL32(0, 0, 0, 140), 0, isActive ? 3.5f : 2.5f);
+        dl->AddCircle(t, r, col, 0, isActive ? 1.5f : 1.0f);
+        if (!isActive) continue;
+        const ImVec2 sp = screen(s.sx, s.sy);
+        const ImU32 scol = hot && hitPart == Source ? IM_COL32(255, 220, 140, 230) : IM_COL32(200, 200, 205, 200);
+        dl->AddCircle(sp, r, IM_COL32(0, 0, 0, 120), 0, 2.5f);
+        dl->AddCircle(sp, r, scol, 0, 1.0f);
+        const float d = dist(t, sp);
+        if (d > 2 * r + 6) {
+            // From the source's edge to the target's, pointing where the pixels go.
+            const ImVec2 dir((t.x - sp.x) / d, (t.y - sp.y) / d);
+            const ImVec2 p0(sp.x + dir.x * r, sp.y + dir.y * r), p1(t.x - dir.x * r, t.y - dir.y * r);
+            outlinedLine(dl, p0, p1, scol, 1.0f);
+            const ImVec2 n(-dir.y, dir.x);
+            dl->AddTriangleFilled(p1, ImVec2(p1.x - dir.x * 8 + n.x * 4, p1.y - dir.y * 8 + n.y * 4),
+                                  ImVec2(p1.x - dir.x * 8 - n.x * 4, p1.y - dir.y * 8 - n.y * 4), scol);
+        }
+        // Top right of the circle, or top left where that would leave the view.
+        const char* mode = s.heal ? "Heal" : "Clone";
+        const float tw = ImGui::CalcTextSize(mode).x;
+        const float lx = t.x + r * 0.72f + 4 + tw + 4 > dl->GetClipRectMax().x ? t.x - r * 0.72f - 4 - tw : t.x + r * 0.72f + 4;
+        label(dl, ImVec2(lx, t.y - r * 0.72f - 16), mode);
+    }
+
+    // Over empty image: the size a new spot would have.
+    if (hovered && hitSpot < 0 && drag_ < 0) {
+        const float r = node->paramF(1) * L;
+        dl->AddCircle(m, r, IM_COL32(0, 0, 0, 120), 0, 2.5f);
+        dl->AddCircle(m, r, IM_COL32(255, 255, 255, 170), 0, 1.0f);
+    }
+    if (hovered && (hitPart == Target || hitPart == Source) && drag_ < 0) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    if (hovered && hitPart == Edge && drag_ < 0) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE);
     return hovered || drag_ >= 0;
 }

@@ -46,6 +46,45 @@ const NodeInfo& GroupOutputNode::staticInfo() {
 
 void GroupOutputNode::setPins(const std::vector<PinDesc>& pins) { info_.inputs = pins; }
 
+// ---------------------------------------------------------------- group value nodes
+
+const NodeInfo& GroupValueInputNode::staticInfo() {
+    static const NodeInfo inf{"group.value_input", "Value Input", "Group", {}, {{"Value", PinType::Number}}, {}, true};
+    return inf;
+}
+
+const NodeInfo& GroupValueOutputNode::staticInfo() {
+    static const NodeInfo inf{"group.value_output", "Value Output", "Group", {{"Value", PinType::Number}}, {}, {}, true};
+    return inf;
+}
+
+void GroupValueNode::loadExtra(const nlohmann::json& j) {
+    const auto p = j.find("pin");
+    pin = p != j.end() && p->is_number_integer() ? std::max(-1, p->get<int>()) : -1;
+}
+
+void GroupValueNode::bind(const PinDesc* p) {
+    const PinDesc pd = p ? PinDesc{p->name, p->type} : PinDesc{"Value", PinType::Number};
+    auto& pins = isOutput() ? info_.inputs : info_.outputs;
+    pins = {pd};
+    info_.displayName = p ? p->name : (isOutput() ? "Value Output" : "Value Input");
+}
+
+namespace {
+
+GroupValueNode* valueNode(Node* n) { return dynamic_cast<GroupValueNode*>(n); }
+const GroupValueNode* valueNode(const Node* n) { return dynamic_cast<const GroupValueNode*>(n); }
+
+// A name not yet used by the interface's sockets on that side ("Value", "Value 2", ...).
+std::string freshName(const std::vector<PinDesc>& pins, const std::string& base) {
+    for (int k = 1;; ++k) {
+        const std::string name = k == 1 ? base : base + " " + std::to_string(k);
+        if (std::none_of(pins.begin(), pins.end(), [&](const PinDesc& p) { return p.name == name; })) return name;
+    }
+}
+
+}  // namespace
+
 // ---------------------------------------------------------------- group node
 
 GroupNode::GroupNode() : inner_(std::make_unique<Graph>()) { syncInner(); }
@@ -74,6 +113,10 @@ void GroupNode::syncInner() {
     for (const auto& [id, n] : inner_->nodes()) {
         if (auto* gi = dynamic_cast<GroupInputNode*>(n.get())) gi->setPins(ins);
         if (auto* go = dynamic_cast<GroupOutputNode*>(n.get())) go->setPins(outs);
+        if (auto* v = valueNode(n.get())) {
+            const auto& pins = v->isOutput() ? outs : ins;
+            v->bind(v->pin >= 0 && v->pin < int(pins.size()) ? &pins[size_t(v->pin)] : nullptr);
+        }
     }
     // Drop inner links that point at pins which no longer exist.
     for (const auto& [id, n] : inner_->nodes()) {
@@ -145,6 +188,10 @@ void GroupNode::loadExtra(const nlohmann::json& j) {
         for (const auto& [id, n] : inner_->nodes()) {
             if (auto* gi = dynamic_cast<GroupInputNode*>(n.get())) gi->setPins(ins);
             if (auto* go = dynamic_cast<GroupOutputNode*>(n.get())) go->setPins(outs);
+            if (auto* v = valueNode(n.get())) {
+                const auto& pins = v->isOutput() ? outs : ins;
+                v->bind(v->pin >= 0 && v->pin < int(pins.size()) ? &pins[size_t(v->pin)] : nullptr);
+            }
         }
         for (const auto& l : links)
             inner_->connect(l.at("from").at(0).get<int>(), l.at("from").at(1).get<int>(), l.at("to").at(0).get<int>(),
@@ -186,6 +233,11 @@ void GroupNode::loadExtra(const nlohmann::json& j) {
         }
     }
     syncInner();
+    for (int side = 0; side < 2; ++side) {
+        valuePins_[side].clear();
+        for (const auto& [id, n] : inner_->nodes())
+            if (const auto* v = valueNode(n.get()); v && int(v->isOutput()) == side && v->pin >= 0) valuePins_[side].insert(v->pin);
+    }
 }
 
 std::string GroupNode::signatureExtra() const {
@@ -195,8 +247,11 @@ std::string GroupNode::signatureExtra() const {
 }
 
 void GroupNode::injectInputs(const std::vector<Value>& in) {
-    for (const auto& [id, n] : inner_->nodes())
+    for (const auto& [id, n] : inner_->nodes()) {
         if (auto* gi = dynamic_cast<GroupInputNode*>(n.get())) gi->provided = in;
+        if (auto* v = dynamic_cast<GroupValueInputNode*>(n.get()))
+            v->provided = v->pin >= 0 && v->pin < int(in.size()) ? in[size_t(v->pin)] : Value();
+    }
 }
 
 void GroupNode::evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) {
@@ -205,9 +260,15 @@ void GroupNode::evaluate(EvalContext& ctx, const std::vector<Value>& in, std::ve
     // signature includes the inner graph), so inner caching would only help partial re-runs.
     Evaluator ev;
     int outNode = inner_->firstOfType(GroupOutputNode::staticInfo().type);
-    if (!outNode) return;
-    for (size_t k = 0; k < out.size(); ++k)
-        if (const Link* l = inner_->inputLink(outNode, int(k))) out[k] = ev.evaluateOutput(*inner_, l->fromNode, l->fromPin, ctx);
+    for (size_t k = 0; k < out.size(); ++k) {
+        // The Group Output node's wire, else the first Value Output node of that socket.
+        const Link* l = outNode ? inner_->inputLink(outNode, int(k)) : nullptr;
+        if (!l)
+            for (const auto& [id, n] : inner_->nodes())
+                if (auto* v = dynamic_cast<const GroupValueOutputNode*>(n.get()); v && v->pin == int(k))
+                    if ((l = inner_->inputLink(id, 0))) break;
+        if (l) out[k] = ev.evaluateOutput(*inner_, l->fromNode, l->fromPin, ctx);
+    }
 }
 
 ImagePtr GroupNode::previewInner(EvalContext& ctx, const std::vector<Value>& inputs, const std::vector<int>& path, int pin,
@@ -218,6 +279,82 @@ ImagePtr GroupNode::previewInner(EvalContext& ctx, const std::vector<Value>& inp
 }
 
 // ---------------------------------------------------------------- interface editing
+
+void GroupNode::remapInner(bool output, const std::function<int(int)>& f) {
+    for (const auto& [nid, n] : inner_->nodes()) {
+        if (!output && dynamic_cast<GroupInputNode*>(n.get())) inner_->remapPins(nid, true, f);
+        if (output && dynamic_cast<GroupOutputNode*>(n.get())) inner_->remapPins(nid, false, f);
+        if (auto* v = valueNode(n.get()); v && v->isOutput() == output && v->pin >= 0) v->pin = f(v->pin);
+    }
+    std::set<int> kept;
+    for (int p : valuePins_[output])
+        if (const int q = f(p); q >= 0) kept.insert(q);
+    valuePins_[output] = kept;
+}
+
+void GroupNode::renamePin(bool output, int index, const std::string& name) {
+    auto& pins = output ? outs : ins;
+    if (index < 0 || index >= int(pins.size()) || name.empty()) return;
+    pins[size_t(index)].name = name;
+    syncInner();
+}
+
+bool GroupNode::syncValueNodes(Graph& outer) {
+    bool changed = false;
+    std::set<int> now[2];
+    std::vector<GroupValueNode*> nodes;
+    for (const auto& [id, n] : inner_->nodes())
+        if (auto* v = valueNode(n.get())) nodes.push_back(v);
+    for (GroupValueNode* v : nodes) {
+        const bool output = v->isOutput();
+        auto& pins = output ? outs : ins;
+        if (v->pin < 0 || v->pin >= int(pins.size())) {
+            // New (or pasted from another group): a socket of its own.
+            const std::string name = v->label.empty() ? freshName(pins, "Value") : v->label;
+            pins.push_back({name, PinType::Number});
+            v->pin = int(pins.size()) - 1;
+            if (!output) {
+                ranges.push_back({});
+                params.push_back(0.0f);
+            }
+            v->label.clear();
+            changed = true;
+        } else if (!v->label.empty()) {
+            // Renamed with F2: the socket takes the name; the title shows it from the socket.
+            pins[size_t(v->pin)].name = v->label;
+            v->label.clear();
+            changed = true;
+        }
+        now[output].insert(v->pin);
+    }
+    // Sockets whose value nodes were all deleted, highest first so indices stay valid.
+    for (int side = 0; side < 2; ++side) {
+        const bool output = side == 1;
+        std::vector<int> gone;
+        for (int p : valuePins_[side])
+            if (!now[side].count(p)) gone.push_back(p);
+        std::sort(gone.rbegin(), gone.rend());
+        for (int p : gone) {
+            bool used = false;  // still wired through the Group Input / Output node
+            for (const Link& l : inner_->links()) {
+                const Node* a = inner_->find(l.fromNode);
+                const Node* b = inner_->find(l.toNode);
+                if ((!output && l.fromPin == p && dynamic_cast<const GroupInputNode*>(a)) ||
+                    (output && l.toPin == p && dynamic_cast<const GroupOutputNode*>(b)))
+                    used = true;
+            }
+            if (used || p >= int((output ? outs : ins).size())) continue;
+            removePin(outer, output, p);  // remaps now[] below through valuePins_
+            std::set<int> shifted;
+            for (int q : now[side]) shifted.insert(q > p ? q - 1 : q);
+            now[side] = shifted;
+            changed = true;
+        }
+        valuePins_[side] = now[side];
+    }
+    if (changed) syncInner();
+    return changed;
+}
 
 void GroupNode::addPin(Graph& outer, bool output, const PinDesc& pin) {
     (void)outer;
@@ -235,10 +372,7 @@ void GroupNode::removePin(Graph& outer, bool output, int index) {
     }
     auto shift = [index](int p) { return p == index ? -1 : (p > index ? p - 1 : p); };
     outer.remapPins(id, output, shift);
-    for (const auto& [nid, n] : inner_->nodes()) {
-        if (!output && dynamic_cast<GroupInputNode*>(n.get())) inner_->remapPins(nid, true, shift);
-        if (output && dynamic_cast<GroupOutputNode*>(n.get())) inner_->remapPins(nid, false, shift);
-    }
+    remapInner(output, shift);
     syncInner();
 }
 
@@ -253,10 +387,7 @@ void GroupNode::movePin(Graph& outer, bool output, int index, int dir) {
     }
     auto swapIdx = [index, other](int p) { return p == index ? other : (p == other ? index : p); };
     outer.remapPins(id, output, swapIdx);
-    for (const auto& [nid, n] : inner_->nodes()) {
-        if (!output && dynamic_cast<GroupInputNode*>(n.get())) inner_->remapPins(nid, true, swapIdx);
-        if (output && dynamic_cast<GroupOutputNode*>(n.get())) inner_->remapPins(nid, false, swapIdx);
-    }
+    remapInner(output, swapIdx);
     syncInner();
 }
 
@@ -290,7 +421,9 @@ int groupNodes(Graph& g, const std::set<int>& requested) {
         const Node* n = g.find(id);
         if (!n) continue;
         const std::string& t = n->info().type;
-        if (t == "io.output" || t == GroupInputNode::staticInfo().type || t == GroupOutputNode::staticInfo().type) continue;
+        if (t == "io.output" || t == GroupInputNode::staticInfo().type || t == GroupOutputNode::staticInfo().type ||
+            valueNode(n))
+            continue;
         ids.insert(id);
     }
     if (ids.empty()) return 0;
@@ -377,7 +510,7 @@ std::vector<int> ungroupNode(Graph& g, int groupId) {
     float sx = 0, sy = 0;
     int count = 0;
     for (const auto& [id, n] : inner.nodes()) {
-        if (dynamic_cast<GroupInputNode*>(n.get()) || dynamic_cast<GroupOutputNode*>(n.get())) continue;
+        if (dynamic_cast<GroupInputNode*>(n.get()) || dynamic_cast<GroupOutputNode*>(n.get()) || valueNode(n.get())) continue;
         sx += n->x;
         sy += n->y;
         ++count;
@@ -386,7 +519,7 @@ std::vector<int> ungroupNode(Graph& g, int groupId) {
 
     std::map<int, int> remap;  // inner id -> outer id
     for (const auto& [id, n] : inner.nodes()) {
-        if (dynamic_cast<GroupInputNode*>(n.get()) || dynamic_cast<GroupOutputNode*>(n.get())) continue;
+        if (dynamic_cast<GroupInputNode*>(n.get()) || dynamic_cast<GroupOutputNode*>(n.get()) || valueNode(n.get())) continue;
         if (Node* c = g.cloneNode(*n, n->x + dx, n->y + dy)) remap[id] = c->id;
     }
 
@@ -398,11 +531,14 @@ std::vector<int> ungroupNode(Graph& g, int groupId) {
         if (l.fromNode == groupId) targetsForOut[l.fromPin].push_back({l.toNode, l.toPin});
     }
 
-    for (const Link& l : inner.links()) {
+    for (Link l : inner.links()) {
         const Node* from = inner.find(l.fromNode);
         const Node* to = inner.find(l.toNode);
-        const bool fromGin = dynamic_cast<const GroupInputNode*>(from) != nullptr;
-        const bool toGout = dynamic_cast<const GroupOutputNode*>(to) != nullptr;
+        bool fromGin = dynamic_cast<const GroupInputNode*>(from) != nullptr;
+        bool toGout = dynamic_cast<const GroupOutputNode*>(to) != nullptr;
+        // Value nodes stand for one socket each: treat them as the Group Input / Output pin.
+        if (auto* v = dynamic_cast<const GroupValueInputNode*>(from)) fromGin = true, l.fromPin = v->pin;
+        if (auto* v = dynamic_cast<const GroupValueOutputNode*>(to)) toGout = true, l.toPin = v->pin;
         if (fromGin && toGout) {
             // pass-through: outer source straight to outer targets
             if (sourceForIn.count(l.fromPin))
@@ -437,4 +573,6 @@ void registerGroupNodes(NodeRegistry& r) {
     r.add<GroupNode>();
     r.add<GroupInputNode>();
     r.add<GroupOutputNode>();
+    r.add<GroupValueInputNode>();
+    r.add<GroupValueOutputNode>();
 }

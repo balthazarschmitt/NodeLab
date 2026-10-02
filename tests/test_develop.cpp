@@ -2,10 +2,14 @@
 // straighten/aspect, and the gradient and brush masks.
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cmath>
 
 #include "graph/Graph.h"
 #include "graph/NodeRegistry.h"
+#include "core/ColorManagement.h"
+#include "core/ColorMath.h"
+#include "nodes/color/AutoTone.h"
 #include "nodes/matte/MatteNodes.h"
 #include "nodes/transform/TransformNodes.h"
 
@@ -200,4 +204,79 @@ TEST_CASE("Brush Mask paints, erases and round-trips its strokes") {
     CHECK(b2->signatureExtra() == b->signatureExtra());
     b2->strokes.pop_back();
     CHECK(b2->signatureExtra() != b->signatureExtra());
+}
+
+// ---------------------------------------------------------------- Auto tone
+
+namespace {
+
+// A dull gradient between lo and hi (whatever encoding the caller means), with a little colour.
+ImagePtr dullGradient(float lo, float hi, int w = 96, int h = 64) {
+    auto img = std::make_shared<Image>(w, h);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const float v = lo + (hi - lo) * (0.6f * x / (w - 1) + 0.4f * y / (h - 1));
+            float* p = img->pixel(size_t(y) * w + x);
+            p[0] = v * 1.05f, p[1] = v, p[2] = v * 0.9f, p[3] = 1.0f;
+        }
+    return img;
+}
+
+// Sorted perceptual luminance of Basic's output with the auto settings applied.
+std::vector<float> autoToned(const ImagePtr& src, bool linear, autotone::Settings& s) {
+    s = autotone::compute(*src, linear);
+    auto basic = NodeRegistry::instance().create("color.basic");
+    const float v[6] = {s.exposure, s.contrast, s.highlights, s.shadows, s.whites, s.blacks};
+    for (int i = 0; i < 6; ++i) basic->params[autotone::kBasicParams[i]] = v[i];
+    std::vector<Value> in(2), out(1);
+    in[0] = Value(src), in[1] = Value(1.0f);
+    EvalContext ctx;
+    ctx.defaultW = src->w, ctx.defaultH = src->h;
+    if (linear) ctx.colorManagement = ColorManagement::sceneLinear();
+    basic->evaluate(ctx, in, out);
+    const ImagePtr r = toImage(out[0], 0, 0);
+    REQUIRE(r);
+    std::vector<float> l;
+    for (size_t i = 0; i < size_t(r->w) * r->h; ++i) {
+        const float* p = r->pixel(i);
+        const float y = luminance(p[0], p[1], p[2]);
+        l.push_back(linear ? colormath::linearToSrgb(std::max(y, 0.0f)) : y);
+    }
+    std::sort(l.begin(), l.end());
+    return l;
+}
+
+}  // namespace
+
+TEST_CASE("Auto tone spreads a dull image's tones in both working spaces") {
+    for (const bool linear : {false, true}) {
+        CAPTURE(linear);
+        // Dark and flat: Exposure goes up, and the tones end up spanning most of the range.
+        const ImagePtr dark = linear ? dullGradient(0.01f, 0.05f) : dullGradient(0.1f, 0.3f);
+        autotone::Settings s;
+        const std::vector<float> l = autoToned(dark, linear, s);
+        CHECK(s.exposure > 0.5f);
+        CHECK(l[l.size() / 2] > 0.3f);
+        CHECK(l[l.size() / 2] < 0.6f);
+        CHECK(l.back() <= 1.0f);
+        // Wider than the input's spread (in perceptual values), with Whites and Blacks pushed out.
+        const float inLo = linear ? colormath::linearToSrgb(0.01f) : 0.1f, inHi = linear ? colormath::linearToSrgb(0.05f) : 0.3f;
+        CHECK(l.back() - l.front() > 1.5f * (inHi - inLo));
+        CHECK(s.whites > 0.0f);
+        CHECK(s.blacks < 0.0f);
+        // A normally exposed image with a full range is left nearly alone, and keeps its whites.
+        const ImagePtr normal = linear ? dullGradient(0.002f, 0.9f) : dullGradient(0.03f, 0.95f);
+        const std::vector<float> n = autoToned(normal, linear, s);
+        CHECK(std::fabs(s.exposure) < 1.5f);
+        CHECK(n.back() > 0.9f);
+        CHECK(n.back() <= 1.0f);
+        // Bright: Exposure comes down.
+        const ImagePtr bright = linear ? dullGradient(0.5f, 0.9f) : dullGradient(0.75f, 0.95f);
+        autoToned(bright, linear, s);
+        CHECK(s.exposure < 0.0f);
+    }
+    // Nothing to measure: no change, and no crash.
+    Image empty;
+    const autotone::Settings none = autotone::compute(empty, true);
+    CHECK(none.exposure == 0.0f);
 }

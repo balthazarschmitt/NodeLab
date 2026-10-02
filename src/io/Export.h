@@ -25,6 +25,11 @@ struct ExportSettings {
     int sizeMode = Original;
     int longEdge = 2048;    // px, for LongEdge
     int percent = 50;       // for Percent (downscale only)
+    // Lightroom's Output Sharpening, applied after resizing: for Screen, Matte Paper or Glossy
+    // Paper (0 = off), at Low / Standard / High.
+    enum Sharpen { SharpenOff = 0, Screen = 1, Matte = 2, Glossy = 3 };
+    int sharpenFor = SharpenOff;
+    int sharpenAmount = 1;  // 0 Low, 1 Standard, 2 High
     bool fileOutputs = true;  // also write File Output nodes (single export only)
     // Batch naming: <source name><suffix>.<ext> in the output folder.
     std::string suffix = "_edit";
@@ -46,6 +51,10 @@ std::shared_ptr<Image> resizeLanczos(const Image& src, int w, int h, bool srgbEn
 // are sRGB-encoded (legacy projects).
 std::shared_ptr<const Image> resizeForExport(const std::shared_ptr<const Image>& img, const ExportSettings& s,
                                              bool srgbEncoded = false);
+
+// Applies the Output Sharpening option (a no-op when off). linear: scene-linear values.
+std::shared_ptr<const Image> sharpenForExport(const std::shared_ptr<const Image>& img, const ExportSettings& s,
+                                              bool linear);
 
 // Saves a rendered image the way Blender does: display formats (PNG, JPEG, TIFF) get the view
 // transform; OpenEXR stays scene-linear (legacy projects' sRGB-encoded values are decoded first).

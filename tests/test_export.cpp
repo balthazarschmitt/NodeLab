@@ -60,6 +60,31 @@ TEST_CASE("resizeForExport only shrinks") {
     CHECK(resizeForExport(img, s)->w == 100);
 }
 
+TEST_CASE("Output Sharpening is off by default, and stronger for paper and higher amounts") {
+    auto img = std::make_shared<Image>(64, 8);
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 64; ++x) {
+            float* p = img->pixel(size_t(y) * 64 + x);
+            p[0] = p[1] = p[2] = x < 32 ? 0.2f : 0.6f;
+            p[3] = 1.0f;
+        }
+    ImagePtr src = img;
+    ExportSettings s;
+    CHECK(sharpenForExport(src, s, true) == src);
+    // Overshoot on the dark side of the edge.
+    auto dip = [&](int target, int amount) {
+        s.sharpenFor = target, s.sharpenAmount = amount;
+        return 0.2f - sharpenForExport(src, s, true)->pixel(4 * 64 + 31)[0];
+    };
+    CHECK(dip(ExportSettings::Screen, 0) > 0.0f);
+    CHECK(dip(ExportSettings::Screen, 2) > dip(ExportSettings::Screen, 0));
+    CHECK(dip(ExportSettings::Matte, 1) > dip(ExportSettings::Screen, 1));
+    ExportSettings t;
+    t.fromJson(s.toJson());
+    CHECK(t.sharpenFor == ExportSettings::Matte);
+    CHECK(t.sharpenAmount == 1);
+}
+
 TEST_CASE("batchOutputPath never overwrites the source") {
     ExportSettings s;
     s.suffix = "";

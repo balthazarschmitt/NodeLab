@@ -45,6 +45,7 @@ void registerConverterNodes(NodeRegistry& r);
 void registerGroupNodes(NodeRegistry& r);
 void registerFilterNodes(NodeRegistry& r);
 void registerDenoiseNode(NodeRegistry& r);  // filter/Denoise.cpp, listed among the filters
+void registerSpotRemovalNode(NodeRegistry& r);  // filter/SpotRemoval.cpp
 void registerTransformNodes(NodeRegistry& r);
 void registerMatteNodes(NodeRegistry& r);
 void registerTextureNodes(NodeRegistry& r);

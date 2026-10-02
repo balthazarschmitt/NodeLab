@@ -99,7 +99,9 @@ void main() {
             else if (mx == 0u) o = uvec3(0u, 90u, 255u);
         }
         // Exact bytes: unorm stores round v * 255 to the nearest integer.
-        imageStore(uOut, p, vec4(vec3(o) / 255.0, 1.0));
+        // Alpha as displayBytes stores it (channels are opaque), for the viewer's checkerboard.
+        float a = uChannel != 0 ? 1.0 : (t.a >= 0.0 ? min(t.a, 1.0) : 0.0);
+        imageStore(uOut, p, vec4(vec3(o) / 255.0, a));
     }
     if (uHistogram != 0) {
         barrier();

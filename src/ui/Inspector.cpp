@@ -226,6 +226,36 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
             ImGui::Separator();
             return drawGroupInterface(*grp, g);
         }
+        if (auto* v = dynamic_cast<GroupValueNode*>(n); v && owner && ownerParent) {
+            const bool output = v->isOutput();
+            auto& pins = output ? owner->outs : owner->ins;
+            if (v->pin < 0 || v->pin >= int(pins.size())) return false;
+            ImGui::Text("%s", output ? "Value Output" : "Value Input");
+            ImGui::TextDisabled("The group's %s socket \"%s\". F2 renames it too.", output ? "output" : "input",
+                                pins[size_t(v->pin)].name.c_str());
+            ImGui::Separator();
+            bool changed = false;
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%s", pins[size_t(v->pin)].name.c_str());
+            ImGui::SetNextItemWidth(240);
+            if (ImGui::InputText("Name", buf, sizeof(buf)) && buf[0]) {
+                owner->renamePin(output, v->pin, buf);
+                changed = true;
+            }
+            if (!output && v->pin < int(owner->ranges.size())) {
+                GroupNode::InputRange r = owner->ranges[size_t(v->pin)];
+                float vals[3] = {r.def, r.min, r.max};
+                ImGui::SetNextItemWidth(240);
+                if (ImGui::DragFloat3("Default / Min / Max", vals, 0.01f, -1e6f, 1e6f, "%.3f")) {
+                    if (vals[1] != r.min) vals[2] = std::max(vals[2], vals[1]);
+                    else if (vals[2] != r.max) vals[1] = std::min(vals[1], vals[2]);
+                    owner->setRange(v->pin, {vals[0], vals[1], vals[2]});
+                    changed = true;
+                }
+            }
+            if (ImGui::CollapsingHeader("All of the group's sockets")) changed |= drawGroupInterface(*owner, *ownerParent);
+            return changed;
+        }
         const bool io = dynamic_cast<GroupInputNode*>(n) || dynamic_cast<GroupOutputNode*>(n);
         if (io && owner && ownerParent) {
             ImGui::Text("%s", n->info().displayName.c_str());

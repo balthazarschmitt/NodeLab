@@ -66,6 +66,8 @@ public:
 
     // True while the user is mid-gesture (dragging, editing a value), so undo snapshots wait.
     bool showTimings = true;
+    // The graph drawn is a group's contents: the Add menu offers the group's Value Input / Output.
+    bool insideGroup = false;
     bool interacting() const { return mode_ != Mode::None || editing_.node != 0 || activeNode_ != 0; }
 
     bool duplicateSelection(Graph& g);
@@ -138,6 +140,11 @@ private:
     void drawAddMenu(Graph& g, Result& r);
     void drawNodeMenu(Graph& g, int& preview, Result& r);
     void drawRenamePopup(Graph& g, Result& r);
+    void drawPresetPopup(const Graph& g);
+    // The selection's nodes and the wires among them (the clipboard's and presets' format).
+    nlohmann::json selectionJson(const Graph& g) const;
+    // Adds clip's nodes and wires with their top-left corner at grid position `at`; selects them.
+    bool insertClip(Graph& g, const nlohmann::json& clip, ImVec2 at);
     void drawFindMenu(Graph& g, Result& r);
     void finishDragNodes(Graph& g, Result& r);  // splice + auto-offset
     void selectLinked(const Graph& g, bool downstream);
@@ -197,7 +204,12 @@ private:
     std::vector<int> swapTargets_;  // add menu opened as Swap (Shift+S): replace these nodes instead
     char search_[64] = {};
     int searchSel_ = 0;  // highlighted search result (Up/Down, Enter)
+    std::string wheelMenu_;  // the Add submenu the wheel steps through, and its highlighted row
+    int wheelSel_ = -1;
     bool findRequested_ = false;
+    char presetName_[64] = {};
+    std::string presetStatus_;      // the last save's error, shown in the popup
+    std::vector<std::string> presetNames_;  // listed when the Add menu opens
     bool frameSelectionNext_ = false;
 };
 

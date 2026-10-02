@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/ColorMath.h"
 #include "core/Parallel.h"
+#include "core/Value.h"
 
 namespace imageops {
 
@@ -150,6 +152,61 @@ std::vector<float> distanceTransform(const std::vector<uint8_t>& mask, int w, in
         for (int x = 0; x < w; ++x) out[size_t(y) * w + x] = float(std::sqrt(std::min(d[x], 1e12)));
     });
     return out;
+}
+
+int sharpenReach(float radius) { return blurReach(radius) + 2; }
+
+void sharpenImage(Image& img, const SharpenSettings& s, bool linear) {
+    const int w = img.w, h = img.h;
+    if (img.empty() || !(s.amount > 0.0f) || !(s.radius > 0.0f)) return;
+    const size_t n = size_t(w) * h;
+    std::vector<float> P(n);
+    parallelFor(h, [&](int y) {
+        for (int x = 0; x < w; ++x) {
+            const float* p = img.pixel(size_t(y) * w + x);
+            float Y = luminance(p[0], p[1], p[2]);
+            if (!std::isfinite(Y)) Y = 0.0f;
+            P[size_t(y) * w + x] = linear ? colormath::linearToSrgb(std::max(Y, 0.0f)) : Y;
+        }
+    });
+    std::vector<float> B = P;
+    blurChannel(B, w, h, s.radius, s.radius);
+
+    const float k = std::clamp(s.amount, 0.0f, 150.0f) / 100.0f * 2.0f;
+    const float detail = std::clamp(s.detail, 0.0f, 100.0f) / 100.0f;
+    // Masking: a step of contrast c blurred by sigma has a peak gradient of about 0.4 c / sigma,
+    // so the gradient times sigma / 0.4 measures the edge's contrast whatever the radius.
+    const float m = std::clamp(s.masking, 0.0f, 100.0f) / 100.0f;
+    const float threshold = m * std::sqrt(m) * 0.25f;
+    const float gradScale = s.radius / 0.4f * 0.5f;  // central differences span 2 pixels
+    parallelFor(h, [&](int y) {
+        const int ya = std::max(y - 1, 0), yb = std::min(y + 1, h - 1);
+        for (int x = 0; x < w; ++x) {
+            const int xa = std::max(x - 1, 0), xb = std::min(x + 1, w - 1);
+            const size_t i = size_t(y) * w + x;
+            float lo = P[i], hi = P[i];
+            for (int yy = ya; yy <= yb; ++yy)
+                for (int xx = xa; xx <= xb; ++xx) {
+                    const float v = P[size_t(yy) * w + xx];
+                    lo = std::min(lo, v), hi = std::max(hi, v);
+                }
+            float weight = 1.0f;
+            if (threshold > 0.0f) {
+                const float gx = B[size_t(y) * w + xb] - B[size_t(y) * w + xa];
+                const float gy = B[size_t(yb) * w + x] - B[size_t(ya) * w + x];
+                const float e = std::sqrt(gx * gx + gy * gy) * gradScale;
+                const float t = std::clamp((e - threshold * 0.5f) / threshold, 0.0f, 1.0f);
+                weight = t * t * (3.0f - 2.0f * t);
+            }
+            const float sharp = P[i] + k * weight * (P[i] - B[i]);
+            const float held = std::clamp(sharp, lo, hi);
+            const float out = held + detail * (sharp - held);
+            const float delta = linear ? colormath::srgbToLinear(std::max(out, 0.0f)) - colormath::srgbToLinear(P[i]) : out - P[i];
+            if (!std::isfinite(delta)) continue;
+            float* p = img.pixel(i);
+            for (int c = 0; c < 3; ++c) p[c] = std::max(p[c] + delta, 0.0f);
+        }
+    });
 }
 
 }  // namespace imageops

@@ -68,6 +68,20 @@ std::vector<int> boxRadii(float sigma);
 // How far (pixels) the blur of a given sigma reads from each pixel: the region padding it needs.
 int blurReach(float sigma);
 
+// Lightroom's Detail > Sharpening, an unsharp mask on luminance only (colour edges get no
+// fringes). Amount 0..150, radius in pixels (the blur's sigma), Detail 0..100 (0 holds the result
+// within its 3x3 neighbourhood's range, so edges get no halos; 100 lets the full overshoot
+// through), Masking 0..100 (protects flat areas: only edges above a rising contrast get
+// sharpened). Luminance is sharpened perceptually: linear values are sRGB-encoded first, as
+// sharpening linear light gives dark edges thin halos and bright ones thick ones.
+// Negative results are clamped to 0; alpha is untouched.
+struct SharpenSettings {
+    float amount = 40.0f, radius = 1.0f, detail = 25.0f, masking = 0.0f;
+};
+void sharpenImage(Image& img, const SharpenSettings& s, bool linear);
+// The pixels sharpenImage reads around each one (region padding).
+int sharpenReach(float radius);
+
 // Euclidean distance (pixels) from every pixel to the nearest pixel where mask != 0.
 // Pixels in the mask get 0. Returns +inf-like large values when the mask is empty.
 std::vector<float> distanceTransform(const std::vector<uint8_t>& mask, int w, int h);

@@ -1,0 +1,13 @@
+# NodeLab.exe tests\ui\develop.nlproj --script tests\ui\autotone.txt
+# Basic > Tone > Auto sets the tone sliders from the image arriving at the node.
+settle
+click 780 100
+settle
+move 800 780
+wheel -2
+wait 3
+click 470 666
+settle
+wait 3
+shot build/smoke/auto2.png
+quit

@@ -3,6 +3,44 @@
 NodeLab uses [semantic versioning](https://semver.org). While it is 0.x, minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
+## 0.21.0 (2026-10-02)
+
+- **Sharpen** node (Filter), Lightroom's Detail > Sharpening: Amount, Radius, Detail and Masking.
+  It sharpens brightness only, in perceptual values, and Detail 0 adds no halos.
+- **Output Sharpening** in File > Export, as in Lightroom: for Screen, Matte Paper or Glossy Paper,
+  at Low, Standard or High, applied after resizing.
+- **Value Input / Value Output** nodes inside groups (Add > Group): a single group socket as a
+  node. Adding one adds the socket, renaming it (F2 or the Inspector) renames the socket, and
+  deleting it removes the socket it made.
+- **Presets:** right-click a node (a group, say) > Save as Preset..., and insert it into any
+  project from Add > Presets.
+- **Add menu regrouped**, as in Blender: sections split by separators, and no menu longer than a
+  screen. Color now holds the adjustments (Basic, grading, tone, hue), and the 12 Split/Combine
+  nodes have their own **Split / Combine** menu. Color Key moves to Matte, and File Output and
+  Image Info to Input / Output. Node title colours are unchanged.
+- **Wheel in the Add menu:** over a menu name or its list, the wheel steps a highlight through
+  that menu's nodes. Click or press Enter to add the highlighted node.
+- **Spot Removal** node (Filter), Lightroom's: click blemishes on the Result to cover them from
+  another part of the photo. Heal matches the surrounding colour and brightness; Clone copies.
+  Drag spots and their sources, resize from the edge, Alt+click or Delete removes one.
+- **Auto** tone on Basic (Inspector): sets Exposure, Contrast, Highlights, Shadows, Whites and
+  Blacks from the image, in legacy and scene-linear projects.
+- **Auto Save**, every 5 minutes by default (Edit > Preferences > Save & Load). Projects with a
+  file and library photos save in place; untitled ones go to `%APPDATA%\NodeLab\autosave`, and
+  File > Recover Auto Save opens them.
+- **Before / After** on the Result (Y, or the toolbar toggle): the original left of a draggable
+  divider. `\` shows the original alone.
+- **Transparency** is shown over a checkerboard in the viewers.
+- **Library Grid** (G): the whole folder as cards to select, rate (click the stars), flag and
+  open (double-click, Enter or E).
+- **Mask falloffs match Lightroom** (scene-linear projects):
+  - Basic, Color Grading and Color Mixer now blend by Factor in stops, not linear light. A mask
+    at 50% gives half the adjustment's stops (-2 EV becomes -1 EV), where before it gave only
+    -0.68 EV. Because of this, gradients seemed to do little until near their full end.
+  - Linear Gradient fades evenly from Start to End, instead of a smoothstep that packed most of
+    the change into the middle.
+  - Legacy (sRGB) projects render exactly as before.
+
 ## 0.20.0 (2026-10-02)
 
 - **Faster image loading:** a 24 MP image opens 2-3x faster, with exactly the same pixels.

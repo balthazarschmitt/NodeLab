@@ -32,7 +32,10 @@
 #include "ui/Eyedropper.h"
 #include "ui/FileDialog.h"
 #include "ui/GuideWindow.h"
+#include "nodes/color/AutoTone.h"
+#include "nodes/filter/SpotRemoval.h"
 #include "ui/Inspector.h"
+#include "ui/NodeInspectors.h"
 #include "ui/UiScript.h"
 
 namespace fs = std::filesystem;
@@ -98,6 +101,8 @@ void App::loadPreferences() {
         gpuFull_ = j.value("compositorPrecision", std::string("Auto")) == "Full";
         inspectorOverlay_ = j.value("inspector", std::string("Overlay")) == "Overlay";
         editor_.showTimings = j.value("nodeTimings", editor_.showTimings);
+        autosave_ = j.value("autosave", autosave_);
+        autosaveMinutes_ = std::clamp(j.value("autosaveMinutes", autosaveMinutes_), 1, 120);
         const std::string layout = j.value("layout", std::string());
         for (int i = 0; i < kLayouts; ++i)
             if (layout == kLayoutNames[i]) layoutPreset_ = i;
@@ -124,6 +129,8 @@ void App::savePreferences() const {
                         {"compositorPrecision", gpuFull_ ? "Full" : "Auto"},
                         {"inspector", inspectorOverlay_ ? "Overlay" : "Panel"},
                         {"nodeTimings", editor_.showTimings},
+                        {"autosave", autosave_},
+                        {"autosaveMinutes", autosaveMinutes_},
                         {"layout", kLayoutNames[layoutPreset_]},
                         {"newProjectView", newView_ == ColorManagement::AgX ? "AgX" : "Standard"},
                         {"newProjectLook", newLook_},
@@ -369,6 +376,7 @@ void App::drawFrame() {
     }
     ImGui::DockSpaceOverViewport(dockId, vp);
 
+    originalDrawn_ = false;
     if (showOriginal_) drawOriginalWindow();
     editorShown_ = false;
     if (showEditor_) drawEditorWindow();
@@ -376,6 +384,8 @@ void App::drawFrame() {
     if (showResult_) drawViewerWindow(*viewers_[0], true);
     for (size_t i = 1; i < viewers_.size(); ++i) drawViewerWindow(*viewers_[i], false);
     if (library_.active() && showLibrary_) drawLibraryWindow();
+    if (library_.active() && library_.grid) drawLibraryGrid();
+    gridShown_ = library_.active() && library_.grid;
     library_.poll();
     if (!library_.status.empty()) status_ = std::move(library_.status), library_.status.clear();
     if (inspectorOverlay_) drawInspectorOverlay();
@@ -488,6 +498,53 @@ void App::drawFrame() {
         commitHistory();
         historyDirty_ = false;
     }
+    tickAutosave();
+}
+
+static fs::path autosavePath() { return settingsDir() / "autosave" / "Untitled.nlproj"; }
+
+void App::tickAutosave() {
+    if (!modified_) {
+        unsavedSince_ = -1;
+        return;
+    }
+    const double now = ImGui::GetTime();
+    if (unsavedSince_ < 0) unsavedSince_ = now;
+    // Test runs never write the user's files; and never in the middle of a drag or a typed value.
+    if (automated_ || !autosave_ || now - unsavedSince_ < autosaveMinutes_ * 60.0 || ImGui::IsAnyItemActive() ||
+        ImGui::IsMouseDown(ImGuiMouseButton_Left) || editor_.interacting())
+        return;
+    unsavedSince_ = now;  // a failed save tries again after another interval
+    if (libraryPhotoOpen()) {
+        saveLibraryPhoto();
+        return;
+    }
+    std::string err;
+    if (!projectPath_.empty()) {
+        if (::saveProject(projectPath_, graph_, uiState(), err)) {
+            modified_ = false;
+            status_ = "Auto saved " + pathToU8(u8ToPath(projectPath_).filename());
+        } else {
+            status_ = "Auto save failed: " + err;
+        }
+        return;
+    }
+    // Untitled: a copy to recover from; the project itself stays unsaved.
+    std::error_code ec;
+    fs::create_directories(autosavePath().parent_path(), ec);
+    if (::saveProject(pathToU8(autosavePath()), graph_, uiState(), err))
+        status_ = "Auto saved to " + pathToU8(autosavePath()) + " (File > Recover Auto Save)";
+    else
+        status_ = "Auto save failed: " + err;
+}
+
+void App::recoverAutosave() {
+    if (!openProject(pathToU8(autosavePath()))) return;
+    // Like an untitled project with changes: Save asks where to keep it.
+    projectPath_.clear();
+    library_.setCurrentProject(projectPath_);
+    modified_ = true;
+    status_ = "Recovered the auto save";
 }
 
 // ---------------------------------------------------------------- layout & panels
@@ -568,6 +625,7 @@ static constexpr ImGuiWindowFlags kCanvasFlags = ImGuiWindowFlags_NoScrollbar | 
 void App::drawOriginalWindow() {
     if (ImGui::Begin("Original###Original", &showOriginal_, kCanvasFlags)) {
         PickRequest pick{leftShown_.get()};
+        originalDrawn_ = true;
         drawImageView("##leftview", leftTex_, view_, "Drop an image here or use File > Import Image",
                       eyedropper().active() ? &pick : nullptr, nullptr,
                       left_.detailTex.valid() ? &left_.detail : nullptr, &left_.info);
@@ -617,7 +675,13 @@ void App::drawEditorWindow() {
         // Timings are for the top-level graph; ids inside a group mean different nodes.
         editor_.setTimings(groupPath_.empty() ? nodeMs_ : std::unordered_map<int, double>{},
                            groupPath_.empty() ? nodeGpu_ : std::unordered_map<int, bool>{});
+        editor_.insideGroup = !groupPath_.empty();
         NodeEditor::Result r = editor_.draw(g, selected_, preview, previewPin_);
+        // Value Input / Output nodes added, renamed or deleted inside the group change its sockets.
+        if (GroupNode* owner = currentGroupOwner()) {
+            Graph* parent = resolveGroupPath(graph_, std::vector<int>(groupPath_.begin(), groupPath_.end() - 1));
+            if (parent && owner->syncValueNodes(*parent)) r.evalChanged = r.docChanged = true;
+        }
         if (preview != previewBefore || r.previewChanged) {
             previewPath_.clear();
             if (preview) {
@@ -690,6 +754,7 @@ void App::drawInspectorContents() {
                         ? nullptr
                         : resolveGroupPath(graph_, std::vector<int>(groupPath_.begin(), groupPath_.end() - 1));
     if (drawInspector(g, selected_, currentGroupOwner(), parent)) markChanged(true);
+    if (autoToneRequest) applyAutoTone(std::exchange(autoToneRequest, 0));
     // A mask driving a Basic's Factor (as Add Mask builds) shows that adjustment's sliders
     // too, the way Lightroom shows a mask's settings and its adjustments together.
     for (const Link& l : g.links())
@@ -699,6 +764,7 @@ void App::drawInspectorContents() {
                 ImGui::SeparatorText(adj->title().c_str());
                 ImGui::PushID("##adjustment");
                 if (drawInspector(g, adj->id, currentGroupOwner(), parent)) markChanged(true);
+                if (autoToneRequest) applyAutoTone(std::exchange(autoToneRequest, 0));
                 ImGui::PopID();
                 break;
             }
@@ -776,9 +842,19 @@ void App::drawViewerWindow(Viewer& v, bool isMain) {
         PickRequest pick{v.shown.get()};
         overlay_.set(ov, maskWanted_ && maskTex_.valid() ? &maskTex_ : nullptr);
         const ImVec2 viewMin = ImGui::GetCursorScreenPos();
+        SplitView split;
+        if (isMain && (splitView_ || beforeFull_)) {
+            split.before = &leftTex_;
+            split.beforeDetail = left_.detailTex.valid() ? &left_.detail : nullptr;
+            // The Original window asks for its own detail when it's showing.
+            split.beforeInfo = originalDrawn_ ? nullptr : &left_.info;
+            split.pos = &splitPos_;
+            split.dragging = &splitDrag_;
+            split.full = beforeFull_;
+        }
         drawImageView(isMain ? "##result" : "##viewer", v.tex, isMain || v.sync ? view_ : v.view, emptyMsg,
                       eyedropper().active() ? &pick : nullptr, ov ? &overlay_ : nullptr,
-                      v.detailTex.valid() ? &v.detail : nullptr, &v.info);
+                      v.detailTex.valid() ? &v.detail : nullptr, &v.info, split.before ? &split : nullptr);
         finishPick(pick);
         if (ov && overlay_.takeChanged()) markChanged(true);
         if (isMain && showHistogram_ && histogram_.valid) {
@@ -811,6 +887,9 @@ void App::drawResultToolbar(Node* ov) {
     if (hover && ImGui::IsKeyPressed(ImGuiKey_J, false)) clipping_ = !clipping_, clipToggled = true;
     if (hover && ImGui::IsKeyPressed(ImGuiKey_O, false)) maskOverlay_ = !maskOverlay_;
     if (hover && ImGui::IsKeyPressed(ImGuiKey_H, false)) showHistogram_ = !showHistogram_;
+    // Lightroom: Y splits Before / After, \ shows the before image alone while toggled.
+    if (hover && ImGui::IsKeyPressed(ImGuiKey_Y, false)) splitView_ = !splitView_, beforeFull_ = false;
+    if (hover && ImGui::IsKeyPressed(ImGuiKey_Backslash, false)) beforeFull_ = !beforeFull_;
     // Lightroom's mask shortcuts: Shift+M opens the menu, M linear, Shift+R radial, K brush.
     const bool shift = ImGui::GetIO().KeyShift;
     bool openMaskMenu = false;
@@ -839,6 +918,11 @@ void App::drawResultToolbar(Node* ov) {
     ImGui::SameLine();
     clipToggled |= ImGui::Checkbox("Clipping", &clipping_);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show clipped highlights in red and crushed shadows in blue (J)");
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Before / After", &splitView_)) beforeFull_ = false;
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Split the view: the original image left of the divider, the result right of it (Y).\n"
+                          "Drag the divider to move it; \\ shows the whole original");
     if (clipToggled) {
         refreshDisplay(v, true);
         refreshDetail(v, true);
@@ -853,9 +937,47 @@ void App::drawResultToolbar(Node* ov) {
         const char* hint = ov->info().type == crop::kType
                                ? "Drag the frame or its handles; drag outside to straighten"
                            : dynamic_cast<BrushMaskNode*>(ov) ? "Paint to add, Alt+paint to erase, [ ] brush size"
+                           : dynamic_cast<SpotRemovalNode*>(ov) ? "Click to add a spot, drag to move, Alt+click removes, [ ] size"
                                                               : "Drag the handles to shape the mask";
         ImGui::TextDisabled("%s", hint);
     }
+}
+
+void App::applyAutoTone(int nodeId) {
+    Graph& g = currentGraph();
+    Node* basic = g.find(nodeId);
+    const Link* in = nullptr;
+    for (const Link& l : g.links())
+        if (l.toNode == nodeId && l.toPin == 0) in = &l;
+    if (!basic || !in) {
+        status_ = "Auto needs an image connected to the Basic node";
+        return;
+    }
+    // The image arriving at the node, at a small preview size: statistics don't need more, and
+    // this runs on the UI thread. The decoded proxy comes from the shared image cache.
+    ImagePtr img;
+    try {
+        Evaluator ev;
+        EvalContext ctx;
+        ctx.cache = &cache_;
+        ctx.proxyEdge = 512;
+        initContextSize(graph_, ctx);
+        NodePath path = groupPath_;
+        path.push_back(in->fromNode);
+        img = ev.evaluateDisplayPath(graph_, path, ctx, in->fromPin);
+    } catch (const std::exception& e) {
+        status_ = std::string("Auto failed: ") + e.what();
+        return;
+    }
+    if (!img || img->empty()) {
+        status_ = "Auto needs an image connected to the Basic node";
+        return;
+    }
+    const autotone::Settings s = autotone::compute(*img, graph_.colorManagement.linear);
+    const float v[6] = {s.exposure, s.contrast, s.highlights, s.shadows, s.whites, s.blacks};
+    for (int i = 0; i < 6; ++i) basic->params[autotone::kBasicParams[i]] = v[i];
+    status_ = "Auto tone set on " + basic->title();
+    markChanged(true);
 }
 
 void App::addMask(int kind) {
@@ -945,6 +1067,13 @@ void App::drawMainMenu() {
         if (ImGui::MenuItem("Open Folder...", "Ctrl+Shift+O")) requestAction(Pending::OpenFolder);
         if (ImGui::MenuItem("Save", "Ctrl+S")) saveProject(false);
         if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) saveProject(true);
+        {
+            std::error_code ec;
+            if (ImGui::MenuItem("Recover Auto Save", nullptr, false, fs::exists(autosavePath(), ec)))
+                requestAction(Pending::RecoverAutosave);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Open the last auto save of an untitled project");
+        }
         ImGui::Separator();
         if (ImGui::MenuItem("Import Image...", "Ctrl+I"))
             if (auto p = openFileDialog("Import image", kImageFileFilter)) importImage(*p);
@@ -1000,6 +1129,7 @@ void App::drawMainMenu() {
         ImGui::MenuItem("Node Editor", nullptr, &showEditor_);
         ImGui::MenuItem("Inspector", nullptr, &showInspector_);
         ImGui::MenuItem("Library", nullptr, &showLibrary_, library_.active());
+        ImGui::MenuItem("Library Grid", "G", &library_.grid, library_.active());
         if (ImGui::MenuItem("New Viewer")) {
             NodePath pin;
             if (selected_) {
@@ -1079,6 +1209,11 @@ void App::handleShortcuts() {
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_I))
         if (auto p = openFileDialog("Import image", kImageFileFilter)) importImage(*p);
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_E)) openExportWindow();
+    // G: the Library's grid, as in Lightroom (the Node Editor keeps G for grabbing nodes).
+    if (library_.active() && !library_.grid && !editorFocused_ && !eyedropper().active() && !io.KeyCtrl && !io.KeyAlt &&
+        !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_G, false) &&
+        !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
+        library_.grid = true;
     if (eyedropper().active() && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) eyedropper().cancel();
     if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) {
         // F1 opens the guide at the selected node's entry, like context help.
@@ -1294,6 +1429,7 @@ void App::performAction(Pending action) {
             if (auto d = folderDialog("Open folder")) openFolder(*d);
             break;
         case Pending::OpenPhoto: loadLibraryPhoto(pendingPhoto_); break;
+        case Pending::RecoverAutosave: recoverAutosave(); break;
         case Pending::Quit: quit_ = true; break;
         case Pending::None: break;
     }
@@ -1561,13 +1697,37 @@ void App::drawLibraryWindow() {
         const bool keys = !io.WantTextInput && !editorFocused_ && !eyedropper().active() &&
                           !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         library_.canPaste = !copiedEdit_.is_null();
-        const LibraryPanel::Actions a = library_.draw(keys);
-        if (a.copy) copyEdit();
-        if (a.paste) pasteEdit();
-        if (a.exportSelected) exportSelected();
-        if (a.open >= 0) openLibraryPhoto(a.open);
+        handleLibraryActions(library_.draw(keys && !library_.grid));
     }
     ImGui::End();
+}
+
+void App::handleLibraryActions(const LibraryPanel::Actions& a) {
+    if (a.copy) copyEdit();
+    if (a.paste) pasteEdit();
+    if (a.exportSelected) exportSelected();
+    if (a.open >= 0) openLibraryPhoto(a.open);
+}
+
+void App::drawLibraryGrid() {
+    // A plain window over the docked panels (not docked itself, so the layout stays as it is).
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImGui::SetNextWindowViewport(vp->ID);
+    if (!gridShown_) ImGui::SetNextWindowFocus();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
+                                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollWithMouse;
+    if (ImGui::Begin("Library Grid###LibraryGrid", nullptr, flags)) {
+        const bool keys = !ImGui::GetIO().WantTextInput && !eyedropper().active() &&
+                          ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) &&
+                          !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        library_.canPaste = !copiedEdit_.is_null();
+        handleLibraryActions(library_.drawGrid(keys));
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
 }
 
 void App::applyRawLook() {
@@ -1669,7 +1829,8 @@ void App::drawPreferencesWindow() {
         ImGui::End();
         return;
     }
-    static constexpr const char* kSections[] = {"Interface", "Themes", "Viewer", "Compositor", "New Projects"};
+    static constexpr const char* kSections[] = {"Interface", "Themes", "Viewer", "Compositor", "New Projects",
+                                                "Save & Load"};
     ImGui::BeginChild("##sections", ImVec2(fs * 7.5f, 0), ImGuiChildFlags_Borders);
     for (int i = 0; i < int(std::size(kSections)); ++i)
         if (ImGui::Selectable(kSections[i], prefsSection_ == i)) prefsSection_ = i;
@@ -1848,6 +2009,19 @@ void App::drawPreferencesWindow() {
             if (changed) library::setDefaultView(newView_, newView_ == ColorManagement::AgX ? newLook_ : 0);
             break;
         }
+        case 5: {  // Save & Load
+            ImGui::SeparatorText("Auto Save");
+            changed |= ImGui::Checkbox("Auto Save", &autosave_);
+            ImGui::BeginDisabled(!autosave_);
+            ImGui::SetNextItemWidth(combo);
+            changed |= ImGui::SliderInt("Timer (Minutes)", &autosaveMinutes_, 1, 60, "%d", ImGuiSliderFlags_AlwaysClamp);
+            ImGui::EndDisabled();
+            ImGui::TextDisabled("Unsaved changes are saved this long after the first one.\n"
+                                "A project with a file (or a library photo's edit) is saved in place.\n"
+                                "An untitled project is kept in %%APPDATA%%\\NodeLab\\autosave;\n"
+                                "File > Recover Auto Save opens it.");
+            break;
+        }
     }
     ImGui::EndChild();
     ImGui::End();
@@ -2005,6 +2179,17 @@ void App::drawExportWindow() {
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::SliderInt("##percent", &es.percent, 1, 100, "%d %%");
     }
+    // Lightroom's Output Sharpening: after resizing, for where the image will be seen.
+    ImGui::SetNextItemWidth(160);
+    ImGui::Combo("##sharpenFor", &es.sharpenFor, "No sharpening\0Sharpen for Screen\0Sharpen for Matte Paper\0Sharpen for Glossy Paper\0");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Lightroom's Output Sharpening, applied after resizing.\n"
+                          "Screen suits web and phone images; the paper options suit prints.");
+    if (es.sharpenFor != ExportSettings::SharpenOff) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::Combo("##sharpenAmount", &es.sharpenAmount, "Low\0Standard\0High\0");
+    }
     if (tab == 0) ImGui::Checkbox("Also write File Output nodes", &es.fileOutputs);
     ImGui::EndDisabled();
 
@@ -2121,7 +2306,7 @@ std::vector<AsyncEvaluator::Detail> App::wantedDetails() {
         d.screenW = v.info.imageW;
         out.push_back(d);
     };
-    if (showOriginal_) want(left_, -1, leftNode_, 0, leftShown_ ? leftShown_->w : 0);
+    if (showOriginal_ || splitView_ || beforeFull_) want(left_, -1, leftNode_, 0, leftShown_ ? leftShown_->w : 0);
     // Top-level nodes only: regions are evaluated in the root graph.
     for (size_t i = 0; i < std::min({viewers_.size(), submittedViewers_, submittedTargets_.size()}); ++i)
         if (submittedTargets_[i].size() == 1)

@@ -10,3 +10,7 @@ using ParamRow = std::function<bool(int)>;
 // plus a usage hint for nodes with on-image controls. Returns false when the default param list
 // should be drawn instead. `changed` is set when a custom widget edited the node.
 bool drawNodeInspector(Node& n, const ParamRow& row, bool& changed);
+
+// Set by Basic's Auto button to that node's id; the App works out the settings from the image
+// arriving at it (it can evaluate the graph) and clears it.
+extern int autoToneRequest;

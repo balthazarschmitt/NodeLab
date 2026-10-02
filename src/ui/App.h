@@ -32,7 +32,7 @@ public:
     int run(const RunOptions& opt);
 
 private:
-    enum class Pending { None, New, Open, OpenFolder, OpenPhoto, Quit };
+    enum class Pending { None, New, Open, OpenFolder, OpenPhoto, RecoverAutosave, Quit };
 
     // An image panel showing a node's output. viewers_[0] is the main "Result" viewer, which
     // follows the Ctrl+click preview (or the Output node); extra viewers can pin any node.
@@ -80,6 +80,10 @@ private:
     void pasteEdit();
     void exportSelected();
     void drawLibraryWindow();
+    // The Library's Grid view (G), over the whole window like Lightroom's.
+    void drawLibraryGrid();
+    void handleLibraryActions(const LibraryPanel::Actions& a);
+    bool gridShown_ = false;  // last frame's state, to focus the grid when it opens
     // After a RAW was chosen for an Image Input: a fresh project switches its view to AgX.
     void applyRawLook();
     void drawColorMenu();
@@ -144,6 +148,7 @@ private:
     void drawResultToolbar(Node* ov);
     // Toolbar's Add Mask: a new Basic before the Output, driven by a new mask (one undo step).
     void addMask(int kind);
+    void applyAutoTone(int nodeId);  // Basic's Auto button
 
     void markChanged(bool eval);
     void resetHistory();
@@ -188,6 +193,10 @@ private:
     NodePath overlayPath_;      // node the overlay edits (crop mode / mask target follow it)
     bool maskWanted_ = false;   // a mask node is selected and the overlay is on
     bool maskOverlay_ = true, showHistogram_ = false, clipping_ = false;
+    // Before / After in the Result viewer (Y splits, \ shows the before image whole).
+    bool splitView_ = false, beforeFull_ = false, splitDrag_ = false;
+    float splitPos_ = 0.5f;
+    bool originalDrawn_ = false;  // the Original window drew its view this frame
     Histogram histogram_;
     DisplayWorker display_;
     std::map<int, uint64_t> displaySeq_;
@@ -233,6 +242,14 @@ private:
     int gpuFallbacks_ = 0;
     std::string gpuError_;  // why the GPU is unavailable, or the last node that fell back
     void loadPreferences();
+    // Auto Save (Preferences > Save & Load, as in Blender): unsaved changes are saved this many
+    // minutes after the first one. A project with a file is saved in place; an untitled one goes
+    // to %APPDATA%\NodeLab\autosave, which File > Recover Auto Save opens.
+    bool autosave_ = true;
+    int autosaveMinutes_ = 5;
+    double unsavedSince_ = -1;  // ImGui time of the first change since the last save
+    void tickAutosave();
+    void recoverAutosave();
     void savePreferences() const;
 
     // Edit > Preferences (preferences.json, like the compositor settings above).

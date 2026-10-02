@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 # The app version. Bump it (and CHANGELOG.md) when a feature set lands; see CLAUDE.md.
-project(NodeLab VERSION 0.20.0 LANGUAGES C CXX)
+project(NodeLab VERSION 0.21.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -237,6 +237,7 @@ add_library(nodelab_core STATIC
     src/graph/Graph.cpp
     src/graph/Layout.cpp
     src/graph/Recipes.cpp
+    src/graph/NodeMenu.cpp
     src/graph/NodeRegistry.cpp
     src/graph/Evaluator.cpp
     src/io/ImageIO.cpp
@@ -248,11 +249,13 @@ add_library(nodelab_core STATIC
     src/io/Exif.cpp
     src/io/ImageCache.cpp
     src/io/Library.cpp
+    src/io/Presets.cpp
     src/io/ProjectFile.cpp
     src/io/Export.cpp
     src/nodes/io/IONodes.cpp
     src/nodes/color/ColorNodes.cpp
     src/nodes/color/DevelopNodes.cpp
+    src/nodes/color/AutoTone.cpp
     src/nodes/math/MathNodes.cpp
     src/nodes/converter/ConverterNodes.cpp
     src/nodes/converter/Expression.cpp
@@ -260,6 +263,7 @@ add_library(nodelab_core STATIC
     src/nodes/ImageOps.cpp
     src/nodes/filter/FilterNodes.cpp
     src/nodes/filter/Denoise.cpp
+    src/nodes/filter/SpotRemoval.cpp
     src/nodes/transform/TransformNodes.cpp
     src/nodes/matte/MatteNodes.cpp
     src/nodes/texture/TextureNodes.cpp
@@ -315,7 +319,7 @@ if(NODELAB_BUILD_TESTS)
 
     enable_testing()
     add_executable(nodelab_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp tests/test_groups.cpp tests/test_nodes2.cpp tests/test_version.cpp tests/test_guide.cpp tests/test_layout.cpp tests/test_export.cpp tests/test_develop.cpp tests/test_ir_tools.cpp tests/test_expression_vm.cpp tests/test_parallel.cpp tests/test_colorpipe.cpp tests/test_develop_linear.cpp tests/test_raw_exif.cpp tests/test_image_write.cpp tests/test_roi.cpp tests/test_icc.cpp tests/test_gpu.cpp tests/test_denoise.cpp tests/test_masks.cpp tests/test_library.cpp tests/test_prefs.cpp tests/test_fuzz.cpp tests/test_jpeg_decode.cpp
-    tests/test_png_decode.cpp tests/test_decode_fuzz.cpp src/ui/Theme.cpp)
+    tests/test_png_decode.cpp tests/test_decode_fuzz.cpp tests/test_node_menu.cpp tests/test_retouch.cpp tests/test_presets.cpp src/ui/Theme.cpp)
     target_include_directories(nodelab_tests PRIVATE ${doctest_SOURCE_DIR})
     # Tests that load the shipped example projects find them here.
     target_compile_definitions(nodelab_tests PRIVATE NODELAB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

@@ -63,7 +63,7 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 
 | Action | How |
 |---|---|
-| Add a node | Right-click the canvas (or Shift+A) and start typing to search (Up/Down + Enter), or browse the categories |
+| Add a node | Right-click the canvas (or Shift+A) and start typing to search (Up/Down + Enter), or browse the menus (the wheel steps through a menu's nodes, Enter adds) |
 | Connect | Drag from a pin to another pin (or onto a node body) |
 | Add a connected node | Drag a wire into empty space, pick a node |
 | Splice into a wire | Drag an unconnected node onto a wire and release (drag off to cancel); downstream nodes shift to make room |
@@ -89,7 +89,8 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Edit a value | Drag the field sideways (Shift = fine), or click it to type |
 | Preview any node | Ctrl+click it (again to clear) |
 | Group / ungroup | Ctrl+G / Ctrl+Alt+G; Tab (or double-click) enters a group, Tab leaves |
-| Group pins | Select the group (or its Group Input/Output inside) and edit in the Inspector; Channel and Number inputs have a Default / Min / Max and show a slider on the group node |
+| Group pins | Select the group (or its Group Input/Output inside) and edit in the Inspector; Channel and Number inputs have a Default / Min / Max and show a slider on the group node. Inside a group, Add > Group > Value Input / Value Output adds a socket as its own node (F2 renames it) |
+| Presets | Right-click a node > Save as Preset...; Add > Presets inserts it into any project (files in `%APPDATA%\NodeLab\presets`) |
 | Frame | Ctrl+J around the selection; drag its title to move it with its nodes, corner to resize, double-click to rename, right-click for color |
 | Move nodes between frames | right-click a node → Move to Frame, or select nodes and right-click a frame title → Move Selected Nodes Here; Alt+P removes from frame |
 | Panels | Drag a panel's tab to dock it elsewhere, or out of the window; View > Layout picks a preset (Default, Compositing, Photo, Side by Side, Node Focus); View > Reset Layout |
@@ -102,11 +103,17 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Zoom / pan images | Mouse wheel / drag; double-click resets. Both panes stay in sync and sharpen to full resolution when zoomed in |
 | Colour management | Color menu: View Transform (Standard, AgX, Raw), Look, view Exposure and Gamma, as in Blender's Render Properties. New projects are scene-linear; Convert Project to Scene-Linear upgrades a legacy one |
 | Histogram / clipping | Result toolbar, or H / J with the mouse over the Result: RGB histogram, and clipped highlights in red and crushed shadows in blue |
+| Before / after | Result toolbar, or Y with the mouse over the Result: the original left of a draggable divider, the edit right; `\` shows the original alone |
+| Transparency | Images with alpha are drawn over a checkerboard |
 | On-image controls | Select a Crop, gradient, shape or Brush Mask node and edit it on the Result: drag handles; Crop shows the whole frame (drag outside to straighten); Brush paints, Alt erases, `[` `]` size; O toggles the red mask overlay |
+| Spot removal | Select a Spot Removal node, click a blemish on the Result, drag its source onto clean texture; drag a spot to move it, its edge to resize; Alt+click or Delete removes one |
+| Auto tone | Basic's Inspector → Auto sets Exposure, Contrast, Highlights, Shadows, Whites and Blacks from the image |
+| Auto save | Every 5 minutes by default (Edit > Preferences > Save & Load); untitled projects go to `%APPDATA%\NodeLab\autosave`, File > Recover Auto Save opens them |
 | Add Mask | Result toolbar → Add Mask (Shift+M over the Result), or M linear, Shift+R radial, K brush: inserts a Basic labelled "Mask N" before the Output, driven by a new mask; the Inspector shows the mask with the Basic's sliders below it |
 | Import image | File > Import Image, or drop a file on the window |
 | Library | File > Open Folder (Ctrl+Shift+O), drop a folder on the window, or `NodeLab.exe <folder>`: a filmstrip of the folder's photos. Click or ←/→ to open one; its edit is saved automatically in `<photo>.nlproj` beside it. New photos start as Image Input → Denoise → Basic → Output |
 | Culling | In the Library: 0-5 rate, P pick, X reject, U unflag; Ctrl+click / Shift+click select several; the filter menu shows picks, stars, rejects or edited photos |
+| Library grid | G (or the Library's Grid button): the whole folder as cards; click the stars to rate, double-click / Enter / E opens a photo, Esc goes back; Ctrl+wheel resizes |
 | Copy / paste edit | Ctrl+Shift+C copies the open photo's edit, Ctrl+Shift+V pastes it onto the selected photos (each keeps its own file and rating) |
 | Export selected | Library → Export Selected... (or File menu): each selected photo exported with its own edit, using the Export window's format and size |
 | Export | File > Export (Ctrl+E) opens the Export window: renders in the background with a progress bar and Cancel. Format (PNG/TIFF 8 or 16 bit, JPEG + quality with EXIF, OpenEXR half/full float scene-linear), size (original, long edge, percent; Lanczos in linear light) |
@@ -135,12 +142,12 @@ layout is saved per user in `%APPDATA%\NodeLab\layout.ini`.
 | Color | Basic (Lightroom's exposure, highlights/shadows, whites/blacks, texture, clarity, dehaze, vibrance), Color Mixer (8-band HSL), Color Grading (shadow/midtone/highlight/global wheels), Brightness / Contrast, Saturation, Hue Shift, Hue Correct (per-hue H/S/V curves), Exposure, Gamma, Levels, Curves, Color Balance (Lift/Gamma/Gain, ASC CDL), Tone Map, Convert Colorspace, Invert, Luminance, Split/Combine RGB, HSV, HSL, Lab, YCbCr, YUV |
 | Mix | Mix, Blend (19 modes), Alpha Over |
 | Converter | Color Ramp, Color Key, Map Range, Math (21 ops), Clamp, Threshold, Normalize (min/max or percentiles), Float Curve, Set Alpha, Wavelength (nm to color), Blackbody (Kelvin to color), Expression, Image Expression |
-| Filter | Blur (pixels or Relative %), Directional Blur (+spin/zoom), Bilateral Blur (both with a Fast quality), Denoise (Luminance/Color, wavelets), Filter (Soften, Sharpen, Laplace, Sobel, Prewitt, Kirsch, Shadow), Dilate / Erode, Kuwahara, Pixelate, Posterize, Glare (Fog Glow, Streaks, Simple Star), Sun Beams |
+| Filter | Blur (pixels or Relative %), Directional Blur (+spin/zoom), Bilateral Blur (both with a Fast quality), Denoise (Luminance/Color, wavelets), Sharpen (Amount, Radius, Detail, Masking), Spot Removal (Heal / Clone, on the Result), Filter (Soften, Sharpen, Laplace, Sobel, Prewitt, Kirsch, Shadow), Dilate / Erode, Kuwahara, Pixelate, Posterize, Glare (Fog Glow, Streaks, Simple Star), Sun Beams |
 | Transform | Transform, Flip, Crop (straighten, aspect presets, on-image frame), Lens Correction (distortion, fringing, vignetting), Lens Distortion (with chromatic dispersion), Displace, Map UV, Corner Pin |
 | Matte | Box Mask, Ellipse Mask, Radial Gradient, Linear Gradient, Brush Mask (painted on the Result, with Auto Mask), Range Mask (luminance or colour range), Channel Key, Luminance Key, Difference Key, Distance Key, Chroma Key, Color Spill, Double Edge Mask |
 | Texture | Noise, Voronoi, Gradient, Wave, Checker, White Noise |
 | Utility | Reroute, Switch, Split (compare), Image Info, File Output (PNG/JPEG/TIFF/OpenEXR; written on single Export / File > Write File Outputs / --render) |
-| Group | Groups (Ctrl+G) with Group Input / Group Output inside |
+| Group | Groups (Ctrl+G) with Group Input / Group Output inside, and Value Input / Value Output for single sockets |
 
 Sizes in pixels (blur radius, offsets, glare size) refer to the full-resolution image; the preview
 scales them so it matches the export. Textures use image-relative coordinates for the same reason.

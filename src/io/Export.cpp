@@ -13,6 +13,7 @@
 #include "io/Exif.h"
 #include "io/ImageCache.h"
 #include "io/ImageIO.h"
+#include "nodes/ImageOps.h"
 #include "io/Paths.h"
 #include "nodes/io/IONodes.h"
 #include "nodes/utility/UtilityNodes.h"
@@ -29,7 +30,8 @@ SaveOptions ExportSettings::saveOptions(const std::string& source, int w, int h)
 nlohmann::json ExportSettings::toJson() const {
     return {{"format", format},     {"depth", depth},           {"jpegQuality", jpegQuality},
             {"sizeMode", sizeMode}, {"longEdge", longEdge},     {"percent", percent},
-            {"fileOutputs", fileOutputs}, {"suffix", suffix}};
+            {"fileOutputs", fileOutputs}, {"suffix", suffix},   {"sharpenFor", sharpenFor},
+            {"sharpenAmount", sharpenAmount}};
 }
 
 void ExportSettings::fromJson(const nlohmann::json& j) {
@@ -41,6 +43,8 @@ void ExportSettings::fromJson(const nlohmann::json& j) {
     longEdge = std::clamp(j.value("longEdge", longEdge), 16, 65536);
     percent = std::clamp(j.value("percent", percent), 1, 100);
     fileOutputs = j.value("fileOutputs", fileOutputs);
+    sharpenFor = std::clamp(j.value("sharpenFor", sharpenFor), 0, 3);
+    sharpenAmount = std::clamp(j.value("sharpenAmount", sharpenAmount), 0, 2);
     suffix = j.value("suffix", suffix);
 }
 
@@ -165,6 +169,26 @@ std::shared_ptr<const Image> resizeForExport(const std::shared_ptr<const Image>&
     const double scale = double(target) / edge;
     return resizeLanczos(*img, std::max(1, int(std::lround(img->w * scale))), std::max(1, int(std::lround(img->h * scale))),
                          srgbEncoded);
+}
+
+std::shared_ptr<const Image> sharpenForExport(const std::shared_ptr<const Image>& img, const ExportSettings& s,
+                                              bool linear) {
+    if (!img || img->empty() || s.sharpenFor <= ExportSettings::SharpenOff || s.sharpenFor > ExportSettings::Glossy)
+        return img;
+    // Screen wants a fine radius (pixels are seen one to one); prints spread ink, so paper wants
+    // a wider one, and matte paper, which softens more than glossy, the strongest.
+    static const float kRadius[4] = {0.0f, 0.6f, 1.0f, 0.8f};
+    static const float kAmount[4][3] = {{0, 0, 0}, {25, 45, 75}, {40, 65, 100}, {30, 55, 85}};
+    imageops::SharpenSettings st;
+    st.radius = kRadius[s.sharpenFor];
+    st.amount = kAmount[s.sharpenFor][std::clamp(s.sharpenAmount, 0, 2)];
+    st.detail = 50.0f;
+    auto out = std::make_shared<Image>(*img);
+    imageops::sharpenImage(*out, st, linear);
+    if (!linear)
+        for (size_t i = 0; i < out->px.size(); i += 4)
+            for (int c = 0; c < 3; ++c) out->px[i + c] = std::min(out->px[i + c], 1.0f);
+    return out;
 }
 
 bool saveRendered(const std::string& pathU8, const std::shared_ptr<const Image>& scene, const ColorManagement& cm,
@@ -325,6 +349,7 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
                 if (!img) throw std::runtime_error("the Output node has no input");
                 // Before the view transform: resampling in scene light.
                 img = resizeForExport(img, s, !ctx.linear());
+                img = sharpenForExport(img, s, ctx.linear());
                 if (cancel_) break;
                 setStage("Saving " + outName);
                 std::string err;

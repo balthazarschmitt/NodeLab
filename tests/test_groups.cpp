@@ -253,3 +253,86 @@ TEST_CASE("group inputs have values, like Blender's group sockets") {
         CHECK(none->info().inputs[1].fallbackParam == 1);
     }
 }
+
+TEST_CASE("Value Input / Output nodes add, rename and remove group sockets") {
+    Chain c;
+    const int gid = groupNodes(c.g, {c.inv, c.sat});
+    auto* group = dynamic_cast<GroupNode*>(c.g.find(gid));
+    REQUIRE(group);
+    Graph& in = group->inner();
+    int innerSat = 0, innerInv = 0;
+    for (const auto& [id, n] : in.nodes()) {
+        if (n->info().type == "color.saturation") innerSat = id;
+        if (n->info().type == "color.invert") innerInv = id;
+    }
+    REQUIRE(innerSat);
+
+    // Adding a Value Input gives the group a Number input of its own.
+    auto* vi = dynamic_cast<GroupValueInputNode*>(in.addNode("group.value_input"));
+    REQUIRE(vi);
+    CHECK(group->syncValueNodes(c.g));
+    REQUIRE(group->ins.size() == 3);
+    CHECK(group->ins[2].name == "Value");
+    CHECK(group->ins[2].type == PinType::Number);
+    CHECK(vi->pin == 2);
+    CHECK_FALSE(group->syncValueNodes(c.g));  // nothing more to do
+
+    // It feeds Saturation: a value of 0 makes the result grey.
+    in.connect(vi->id, 0, innerSat, 1);
+    group->params[2] = 0.0f;
+    auto grey = outputPixel(c.g);
+    CHECK(grey[0] == doctest::Approx(grey[1]));
+    CHECK(grey[1] == doctest::Approx(grey[2]));
+
+    // Renaming the node (F2 sets its label) renames the socket; the title follows the socket.
+    vi->label = "Amount";
+    CHECK(group->syncValueNodes(c.g));
+    CHECK(group->ins[2].name == "Amount");
+    CHECK(vi->label.empty());
+    CHECK(vi->info().displayName == "Amount");
+    CHECK(vi->info().outputs[0].name == "Amount");
+
+    // Saved and loaded, it still renders the same.
+    Graph copy;
+    copy.fromJson(c.g.toJson());
+    auto again = outputPixel(copy);
+    for (int k = 0; k < 3; ++k) CHECK(again[k] == doctest::Approx(grey[k]));
+
+    // A Value Output adds an output socket, fed by whatever is wired into it.
+    auto* vo = dynamic_cast<GroupValueOutputNode*>(in.addNode("group.value_output"));
+    CHECK(group->syncValueNodes(c.g));
+    REQUIRE(group->outs.size() == 2);
+    group->setPinType(c.g, true, 1, PinType::Image);
+    REQUIRE(in.connect(innerInv, 0, vo->id, 0));
+    c.g.connect(gid, 1, c.out, 0);
+    auto inverted = outputPixel(c.g);
+    CHECK(inverted[0] == doctest::Approx(1.0f - 0.8f));
+    c.g.connect(gid, 0, c.out, 0);
+
+    // Moving sockets keeps the value nodes on theirs.
+    group->movePin(c.g, false, 2, -1);
+    CHECK(vi->pin == 1);
+    CHECK(group->ins[1].name == "Amount");
+    auto moved = outputPixel(c.g);
+    for (int k = 0; k < 3; ++k) CHECK(moved[k] == doctest::Approx(grey[k]));
+
+    // Ungrouping wires the value node's socket through like the Group Input's.
+    {
+        Graph u;
+        u.fromJson(c.g.toJson());
+        ungroupNode(u, gid);
+        for (const auto& [id, n] : u.nodes()) CHECK(n->info().type.rfind("group.", 0) != 0);
+        // The socket was unconnected outside, so Saturation is left on its own slider: in colour.
+        auto flat = outputPixel(u);
+        CHECK(flat[0] == doctest::Approx(1.0f - 0.8f).epsilon(0.01));
+        CHECK(flat[2] > flat[0]);
+    }
+
+    // Deleting the last node of a socket it made removes the socket.
+    in.removeNode(vi->id);
+    CHECK(group->syncValueNodes(c.g));
+    CHECK(group->ins.size() == 2);
+    in.removeNode(vo->id);
+    CHECK(group->syncValueNodes(c.g));
+    CHECK(group->outs.size() == 1);
+}

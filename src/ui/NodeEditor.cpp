@@ -10,11 +10,13 @@
 #include "core/Curve.h"
 #include "core/Ramp.h"
 #include "graph/Layout.h"
+#include "graph/NodeMenu.h"
 #include "graph/NodeRegistry.h"
 #include "nodes/group/GroupNodes.h"
 #include "io/ImageIO.h"
 #include "io/ImageWrite.h"
 #include "io/Paths.h"
+#include "io/Presets.h"
 #include "ui/ColorDisplay.h"
 #include "ui/Eyedropper.h"
 #include "ui/FileDialog.h"
@@ -1247,6 +1249,7 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
     drawNodeMenu(g, preview, r);
     drawFrameMenu(g, r);
     drawRenamePopup(g, r);
+    drawPresetPopup(g);
     if (findRequested_) {
         findRequested_ = false;
         search_[0] = 0;
@@ -1330,7 +1333,8 @@ void NodeEditor::drawAddMenu(Graph& g, Result& r) {
                 const NodeInfo* inf = reg.find(type);
                 if (inf->hidden || !compatible(*inf)) continue;
                 bool nameHit = containsNoCase(inf->displayName, search_);
-                if (pass == 0 ? nameHit : (!nameHit && containsNoCase(inf->category, search_))) results.push_back(type);
+                const bool menuHit = containsNoCase(nodemenu::menuOf(type), search_) || containsNoCase(inf->category, search_);
+                if (pass == 0 ? nameHit : (!nameHit && menuHit)) results.push_back(type);
             }
         const int n = int(results.size());
         bool moved = false;
@@ -1347,28 +1351,82 @@ void NodeEditor::drawAddMenu(Graph& g, Result& r) {
             if (ImGui::Selectable(inf->displayName.c_str(), i == searchSel_)) chosen = results[i];
             if (i == searchSel_ && moved) ImGui::SetScrollHereY();
             ImGui::SameLine(ImGui::GetFontSize() * 10.0f);
-            ImGui::TextDisabled("%s", inf->category.c_str());
+            ImGui::TextDisabled("%s", nodemenu::menuOf(results[i]).c_str());
             ImGui::PopID();
         }
         ImGui::EndChild();
         if (chosen.empty() && n > 0 && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))
             chosen = results[searchSel_];
     } else {
-        std::vector<std::string> cats;
-        for (const auto& type : reg.types()) {
-            const NodeInfo* inf = reg.find(type);
-            if (!inf->hidden && compatible(*inf) && std::find(cats.begin(), cats.end(), inf->category) == cats.end())
-                cats.push_back(inf->category);
-        }
-        for (const auto& c : cats) {
-            if (ImGui::BeginMenu(c.c_str())) {
-                for (const auto& type : reg.types()) {
-                    const NodeInfo* inf = reg.find(type);
-                    if (inf->category == c && !inf->hidden && compatible(*inf) && ImGui::MenuItem(inf->displayName.c_str()))
-                        chosen = type;
+        // The wheel steps a highlight through the open submenu's nodes, over the category name or
+        // the list itself (scrolling it along if it runs off screen); click or Enter adds it.
+        ImGuiWindow* menuWin = ImGui::GetCurrentWindow();
+        const ImGuiIO& io = ImGui::GetIO();
+        if (ImGui::IsWindowAppearing()) wheelMenu_.clear(), wheelSel_ = -1, presetNames_ = presets::list();
+        for (const auto& m : nodemenu::menus()) {
+            std::vector<std::string> shown;
+            for (const auto& t : m.items)
+                if (!t.empty() && compatible(*reg.find(t))) shown.push_back(t);
+            if (shown.empty() || !ImGui::BeginMenu(m.name.c_str())) continue;
+            ImGuiWindow* sub = ImGui::GetCurrentWindow();
+            if (wheelMenu_ != m.name) wheelMenu_ = m.name, wheelSel_ = -1;
+            const int n = int(shown.size());
+            int step = 0;
+            if (io.MouseWheel != 0 && (GImGui->HoveredWindow == menuWin || GImGui->HoveredWindow == sub))
+                step = io.MouseWheel < 0 ? 1 : -1;
+            if (step) wheelSel_ = wheelSel_ < 0 ? (step > 0 ? 0 : n - 1) : std::clamp(wheelSel_ + step, 0, n - 1);
+            // A separator only between two shown sections, as some can be empty for a dropped wire.
+            bool pendingSep = false;
+            int row = 0;
+            for (const auto& type : m.items) {
+                if (type.empty()) {
+                    pendingSep = row > 0;
+                    continue;
                 }
+                const NodeInfo* inf = reg.find(type);
+                if (!compatible(*inf)) continue;
+                if (pendingSep) ImGui::Separator();
+                pendingSep = false;
+                if (ImGui::Selectable(inf->displayName.c_str(), row == wheelSel_)) chosen = type;
+                // Moving the mouse onto a row makes it the one the wheel steps from.
+                if (ImGui::IsItemHovered() && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) wheelSel_ = row;
+                if (step && row == wheelSel_) ImGui::SetScrollHereY();
+                ++row;
+            }
+            if (chosen.empty() && wheelSel_ >= 0 &&
+                (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))
+                chosen = shown[wheelSel_];
+            ImGui::EndMenu();
+        }
+        // Inside a group: a single group input or output socket as a node of its own.
+        if (insideGroup && !swapping) {
+            const NodeInfo& vi = GroupValueInputNode::staticInfo();
+            const NodeInfo& vo = GroupValueOutputNode::staticInfo();
+            if ((compatible(vi) || compatible(vo)) && ImGui::BeginMenu("Group")) {
+                if (compatible(vi) && ImGui::MenuItem(vi.displayName.c_str())) chosen = vi.type;
+                if (compatible(vo) && ImGui::MenuItem(vo.displayName.c_str())) chosen = vo.type;
                 ImGui::EndMenu();
             }
+        }
+        if (!src && !swapping && !presetNames_.empty() && ImGui::BeginMenu("Presets")) {
+            std::string remove;
+            for (const auto& name : presetNames_) {
+                if (!ImGui::MenuItem(name.c_str())) continue;
+                const nlohmann::json clip = presets::load(name);
+                if (!clip.is_null() && insertClip(g, clip, toGrid(menuPos_))) r.evalChanged = r.docChanged = true;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::Separator();
+            if (ImGui::BeginMenu("Delete Preset")) {
+                for (const auto& name : presetNames_)
+                    if (ImGui::MenuItem(name.c_str())) remove = name;
+                ImGui::EndMenu();
+            }
+            if (!remove.empty()) {
+                presets::remove(remove);
+                presetNames_ = presets::list();
+            }
+            ImGui::EndMenu();
         }
         if (!src && !swapping) {
             ImGui::Separator();
@@ -1440,6 +1498,16 @@ void NodeEditor::drawNodeMenu(Graph& g, int& preview, Result& r) {
     const bool isGroup = dynamic_cast<GroupNode*>(g.find(menuNode_)) != nullptr;
     if (ImGui::MenuItem("Ungroup", "Ctrl+Alt+G", false, isGroup) && ungroupSelection(g)) r.evalChanged = r.docChanged = true;
     if (ImGui::MenuItem("Edit Group", "Tab", false, isGroup)) r.enterGroup = menuNode_;
+    bool openPreset = false;
+    if (ImGui::MenuItem("Save as Preset...")) {
+        // Named after the group (or the node's label or type) it is most likely to be.
+        const Node* pn = g.find(menuNode_);
+        const auto* pg = dynamic_cast<const GroupNode*>(pn);
+        std::snprintf(presetName_, sizeof(presetName_), "%s",
+                      pg ? pg->name.c_str() : pn ? (pn->label.empty() ? pn->info().displayName : pn->label).c_str() : "");
+        presetStatus_.clear();
+        openPreset = true;
+    }
     if (ImGui::MenuItem("Frame Selection", "Ctrl+J") && frameSelection(g)) r.docChanged = true;
     if (ImGui::BeginMenu("Move to Frame", !g.frames().empty() || (mn && frameOf(g, *mn)))) {
         const int current = mn ? frameOf(g, *mn) : 0;
@@ -1459,6 +1527,7 @@ void NodeEditor::drawNodeMenu(Graph& g, int& preview, Result& r) {
     if (ImGui::MenuItem("Delete", "Alt+Del") && deleteSelection(g, preview, false)) r.evalChanged = r.docChanged = true;
     ImGui::EndPopup();
     if (openRename) ImGui::OpenPopup("NodeRename");
+    if (openPreset) ImGui::OpenPopup("SavePreset");
     if (openSwap) openSwapMenu(g);
 }
 
@@ -1720,14 +1789,20 @@ void NodeEditor::finishDragNodes(Graph& g, Result& r) {
     insertLink_ = 0;
 }
 
-void NodeEditor::copySelection(const Graph& g) {
-    if (selection_.empty()) return;
+nlohmann::json NodeEditor::selectionJson(const Graph& g) const {
     nlohmann::json all = g.toJson();
-    nlohmann::json clip = {{"nodelabClipboard", 1}, {"nodes", nlohmann::json::array()}, {"links", nlohmann::json::array()}};
+    nlohmann::json clip = {{"nodes", nlohmann::json::array()}, {"links", nlohmann::json::array()}};
     for (const auto& n : all["nodes"])
         if (selection_.count(n["id"].get<int>())) clip["nodes"].push_back(n);
     for (const auto& l : all["links"])
         if (selection_.count(l["from"][0].get<int>()) && selection_.count(l["to"][0].get<int>())) clip["links"].push_back(l);
+    return clip;
+}
+
+void NodeEditor::copySelection(const Graph& g) {
+    if (selection_.empty()) return;
+    nlohmann::json clip = selectionJson(g);
+    clip["nodelabClipboard"] = 1;
     ImGui::SetClipboardText(clip.dump().c_str());
 }
 
@@ -1736,17 +1811,21 @@ bool NodeEditor::paste(Graph& g) {
     if (!text) return false;
     nlohmann::json clip = nlohmann::json::parse(text, nullptr, false);
     if (clip.is_discarded() || !clip.contains("nodelabClipboard")) return false;
-    // Rebuild in a scratch graph, then clone into this one around the mouse.
+    return insertClip(g, clip, toGrid(ImGui::GetIO().MousePos));
+}
+
+bool NodeEditor::insertClip(Graph& g, const nlohmann::json& clip, ImVec2 at) {
+    if (!clip.is_object() || !clip.contains("nodes")) return false;
+    // Rebuild in a scratch graph, then clone into this one.
     Graph tmp;
     try {
-        tmp.fromJson({{"nextId", 1}, {"nodes", clip["nodes"]}, {"links", clip["links"]}});
+        tmp.fromJson({{"nextId", 1}, {"nodes", clip["nodes"]}, {"links", clip.value("links", nlohmann::json::array())}});
     } catch (const std::exception&) {
         return false;
     }
     if (tmp.nodes().empty()) return false;
     float x0 = 1e9f, y0 = 1e9f;
     for (const auto& [id, n] : tmp.nodes()) x0 = std::min(x0, n->x), y0 = std::min(y0, n->y);
-    ImVec2 at = toGrid(ImGui::GetIO().MousePos);
     std::map<int, int> remap;
     for (const auto& [id, n] : tmp.nodes())
         if (Node* c = g.cloneNode(*n, std::round(n->x - x0 + at.x), std::round(n->y - y0 + at.y))) remap[id] = c->id;
@@ -1928,6 +2007,27 @@ void NodeEditor::drawFindMenu(Graph& g, Result& r) {
         }
         ImGui::CloseCurrentPopup();
     }
+    ImGui::EndPopup();
+}
+
+void NodeEditor::drawPresetPopup(const Graph& g) {
+    if (!ImGui::BeginPopup("SavePreset")) return;
+    ImGui::TextDisabled("Save the %d selected node%s as a preset (Add > Presets)", int(selection_.size()),
+                        selection_.size() == 1 ? "" : "s");
+    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(240);
+    bool done = ImGui::InputText("##preset", presetName_, sizeof(presetName_), ImGuiInputTextFlags_EnterReturnsTrue);
+    const bool exists = std::find(presetNames_.begin(), presetNames_.end(), std::string(presetName_)) != presetNames_.end();
+    ImGui::SameLine();
+    done |= ImGui::Button(exists ? "Replace" : "Save");
+    if (!presetStatus_.empty()) ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "%s", presetStatus_.c_str());
+    if (done) {
+        if (presets::save(presetName_, selectionJson(g), presetStatus_)) {
+            presetNames_ = presets::list();
+            ImGui::CloseCurrentPopup();
+        }
+    }
+    if (ImGui::IsWindowAppearing()) presetNames_ = presets::list();
     ImGui::EndPopup();
 }
 

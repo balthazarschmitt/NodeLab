@@ -1,6 +1,7 @@
 #include "ui/LibraryPanel.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include <imgui.h>
 
@@ -14,6 +15,19 @@ namespace {
 const char* const kFilters[] = {"All Photos", "Picked", "Hide Rejected", "Rejected",
                                 "1 Star or More", "2 Stars or More", "3 Stars or More",
                                 "4 Stars or More", "5 Stars", "Edited"};
+
+const ImU32 kAccent = IM_COL32(90, 150, 255, 255);
+
+// A five-pointed star, as Lightroom's grid shows ratings.
+void drawStar(ImDrawList* dl, ImVec2 c, float r, ImU32 col, bool filled) {
+    ImVec2 pts[10];
+    for (int k = 0; k < 10; ++k) {
+        const float a = -1.5707963f + k * 0.62831853f, rr = k % 2 ? r * 0.45f : r;
+        pts[k] = ImVec2(c.x + rr * std::cos(a), c.y + rr * std::sin(a));
+    }
+    if (filled) dl->AddConcavePolyFilled(pts, 10, col);
+    else dl->AddPolyline(pts, 10, col, ImDrawFlags_Closed, 1.0f);
+}
 
 }  // namespace
 
@@ -176,23 +190,54 @@ void LibraryPanel::poll() {
     }
 }
 
+void LibraryPanel::cullKeys() {
+    // Lightroom's culling keys: 0-5 rate, P pick, X reject, U unflag.
+    for (int r = 0; r <= 5; ++r)
+        if (ImGui::IsKeyPressed(ImGuiKey(ImGuiKey_0 + r), false) || ImGui::IsKeyPressed(ImGuiKey(ImGuiKey_Keypad0 + r), false))
+            setRating(r);
+    if (ImGui::IsKeyPressed(ImGuiKey_P, false)) setFlag(library::Picked);
+    if (ImGui::IsKeyPressed(ImGuiKey_X, false)) setFlag(library::Rejected);
+    if (ImGui::IsKeyPressed(ImGuiKey_U, false)) setFlag(library::Unflagged);
+}
+
+void LibraryPanel::select(int i, bool ctrl, bool shift) {
+    if (ctrl) {
+        items_[size_t(i)]->selected = !items_[size_t(i)]->selected;
+        anchor_ = i;
+    } else if (shift && anchor_ >= 0) {
+        const int lo = std::min(anchor_, i), hi = std::max(anchor_, i);
+        for (int k = 0; k < size(); ++k) items_[size_t(k)]->selected = k >= lo && k <= hi && passes(*items_[size_t(k)]);
+    } else {
+        for (int k = 0; k < size(); ++k) items_[size_t(k)]->selected = k == i;
+        anchor_ = i;
+    }
+}
+
 LibraryPanel::Actions LibraryPanel::draw(bool keys) {
     Actions a;
     ImGuiIO& io = ImGui::GetIO();
 
-    // ---- culling keys (Lightroom's): 0-5 rate, P pick, X reject, U unflag, arrows step
+    // ---- culling keys, and the arrows step through the photos
     if (keys && !io.KeyCtrl && !io.KeyAlt) {
-        for (int r = 0; r <= 5; ++r)
-            if (ImGui::IsKeyPressed(ImGuiKey(ImGuiKey_0 + r), false) || ImGui::IsKeyPressed(ImGuiKey(ImGuiKey_Keypad0 + r), false))
-                setRating(r);
-        if (ImGui::IsKeyPressed(ImGuiKey_P, false)) setFlag(library::Picked);
-        if (ImGui::IsKeyPressed(ImGuiKey_X, false)) setFlag(library::Rejected);
-        if (ImGui::IsKeyPressed(ImGuiKey_U, false)) setFlag(library::Unflagged);
+        cullKeys();
         if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) a.open = step(current_, -1);
         if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) a.open = step(current_, +1);
     }
 
-    // ---- toolbar
+    toolbar(a);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Grid")) {
+        grid = true;
+        focus_ = current_;
+        scrollToFocus_ = true;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show the whole folder as a grid (G)");
+
+    ImGui::BeginChild("##strip", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+    return drawStrip(a);
+}
+
+void LibraryPanel::toolbar(Actions& a) {
     const std::string name = pathToU8(u8ToPath(dir_).filename());
     int shown = 0;
     for (const auto& it : items_) shown += passes(*it);
@@ -222,17 +267,17 @@ LibraryPanel::Actions LibraryPanel::draw(bool keys) {
     ImGui::SameLine();
     if (ImGui::SmallButton("Export Selected...")) a.exportSelected = true;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Render the selected photos, each with its own edit, with the Export window's settings");
+}
 
-    // ---- filmstrip
+LibraryPanel::Actions LibraryPanel::drawStrip(Actions a) {
+    ImGuiIO& io = ImGui::GetIO();
     const float scrollbar = ImGui::GetStyle().ScrollbarSize;
-    ImGui::BeginChild("##strip", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
     const float cellH = std::max(40.0f, ImGui::GetContentRegionAvail().y - scrollbar);
     const float dotsH = 14.0f;
     const float thumbH = cellH - dotsH, thumbW = thumbH * 1.5f, cellW = thumbW + 8.0f;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (ImGui::IsWindowHovered() && io.MouseWheel != 0.0f && !io.KeyCtrl)
         ImGui::SetScrollX(ImGui::GetScrollX() - io.MouseWheel * cellW);
-    const ImU32 accent = IM_COL32(90, 150, 255, 255);
     bool first = true;
     for (int i = 0; i < size(); ++i) {
         Item& it = *items_[size_t(i)];
@@ -244,17 +289,8 @@ LibraryPanel::Actions LibraryPanel::draw(bool keys) {
         ImGui::InvisibleButton("##cell", ImVec2(cellW, cellH));
         const bool hovered = ImGui::IsItemHovered();
         if (ImGui::IsItemClicked()) {
-            if (io.KeyCtrl) {
-                it.selected = !it.selected;
-                anchor_ = i;
-            } else if (io.KeyShift && anchor_ >= 0) {
-                const int lo = std::min(anchor_, i), hi = std::max(anchor_, i);
-                for (int k = 0; k < size(); ++k) items_[size_t(k)]->selected = k >= lo && k <= hi && passes(*items_[size_t(k)]);
-            } else {
-                for (int k = 0; k < size(); ++k) items_[size_t(k)]->selected = k == i;
-                anchor_ = i;
-                if (i != current_) a.open = i;
-            }
+            select(i, io.KeyCtrl, io.KeyShift);
+            if (!io.KeyCtrl && !io.KeyShift && i != current_) a.open = i;
         }
         if (i == current_ && scrollToCurrent_) {
             ImGui::SetScrollHereX(0.5f);
@@ -262,34 +298,11 @@ LibraryPanel::Actions LibraryPanel::draw(bool keys) {
         }
         if (ImGui::IsItemVisible() && !it.requested) request(i, false);
 
-        // The thumbnail, fitted into its box; rejected photos are dimmed as in Lightroom.
         const ImVec2 b0(p0.x + 4, p0.y + 2), b1(p0.x + 4 + thumbW, p0.y + thumbH - 2);
-        dl->AddRectFilled(b0, b1, IM_COL32(30, 30, 34, 255));
-        if (it.tex.valid()) {
-            const float s = std::min((b1.x - b0.x) / it.tex.width(), (b1.y - b0.y) / it.tex.height());
-            const float w = it.tex.width() * s, h = it.tex.height() * s;
-            const ImVec2 i0(b0.x + (b1.x - b0.x - w) * 0.5f, b0.y + (b1.y - b0.y - h) * 0.5f);
-            const ImU32 tint = it.meta.flag == library::Rejected ? IM_COL32(255, 255, 255, 90) : IM_COL32_WHITE;
-            dl->AddImage(ImTextureID(intptr_t(it.tex.id())), i0, ImVec2(i0.x + w, i0.y + h), ImVec2(0, 0), ImVec2(1, 1), tint);
-        }
+        drawThumb(dl, it, b0, b1);
         if (i == current_) dl->AddRect(ImVec2(b0.x - 2, b0.y - 2), ImVec2(b1.x + 2, b1.y + 2), IM_COL32_WHITE, 0, 0, 2.0f);
-        else if (it.selected) dl->AddRect(ImVec2(b0.x - 2, b0.y - 2), ImVec2(b1.x + 2, b1.y + 2), accent, 0, 0, 2.0f);
+        else if (it.selected) dl->AddRect(ImVec2(b0.x - 2, b0.y - 2), ImVec2(b1.x + 2, b1.y + 2), kAccent, 0, 0, 2.0f);
         else if (hovered) dl->AddRect(b0, b1, IM_COL32(255, 255, 255, 80));
-
-        // Badges: flag at the top left, an edited corner at the top right.
-        if (it.meta.flag == library::Picked) {
-            dl->AddRectFilled(ImVec2(b0.x + 5, b0.y + 5), ImVec2(b0.x + 7, b0.y + 19), IM_COL32_WHITE);
-            dl->AddTriangleFilled(ImVec2(b0.x + 7, b0.y + 5), ImVec2(b0.x + 17, b0.y + 9), ImVec2(b0.x + 7, b0.y + 13), IM_COL32_WHITE);
-        } else if (it.meta.flag == library::Rejected) {
-            const ImU32 red = IM_COL32(235, 70, 60, 255);
-            dl->AddLine(ImVec2(b0.x + 6, b0.y + 6), ImVec2(b0.x + 16, b0.y + 16), red, 2.5f);
-            dl->AddLine(ImVec2(b0.x + 16, b0.y + 6), ImVec2(b0.x + 6, b0.y + 16), red, 2.5f);
-        }
-        if (it.meta.edited) {
-            // Outlined, so it shows on a blue sky too.
-            dl->AddTriangleFilled(ImVec2(b1.x - 17, b0.y), ImVec2(b1.x, b0.y), ImVec2(b1.x, b0.y + 17), IM_COL32(0, 0, 0, 160));
-            dl->AddTriangleFilled(ImVec2(b1.x - 14, b0.y), ImVec2(b1.x, b0.y), ImVec2(b1.x, b0.y + 14), accent);
-        }
         // Rating: five dots, filled up to the stars given.
         const float cy = p0.y + thumbH + dotsH * 0.5f - 1, cx0 = p0.x + 4 + thumbW * 0.5f - 4 * 9.0f * 0.5f;
         for (int s = 0; s < 5; ++s) {
@@ -306,5 +319,177 @@ LibraryPanel::Actions LibraryPanel::draw(bool keys) {
     }
     if (first) ImGui::TextDisabled("No photos match the filter");
     ImGui::EndChild();
+    return a;
+}
+
+void LibraryPanel::drawThumb(ImDrawList* dl, const Item& it, ImVec2 b0, ImVec2 b1) const {
+    // The thumbnail, fitted into its box; rejected photos are dimmed as in Lightroom.
+    dl->AddRectFilled(b0, b1, IM_COL32(30, 30, 34, 255));
+    if (it.tex.valid()) {
+        const float s = std::min((b1.x - b0.x) / it.tex.width(), (b1.y - b0.y) / it.tex.height());
+        const float w = it.tex.width() * s, h = it.tex.height() * s;
+        const ImVec2 i0(b0.x + (b1.x - b0.x - w) * 0.5f, b0.y + (b1.y - b0.y - h) * 0.5f);
+        const ImU32 tint = it.meta.flag == library::Rejected ? IM_COL32(255, 255, 255, 90) : IM_COL32_WHITE;
+        dl->AddImage(ImTextureID(intptr_t(it.tex.id())), i0, ImVec2(i0.x + w, i0.y + h), ImVec2(0, 0), ImVec2(1, 1), tint);
+    }
+    // Badges: flag at the top left, an edited corner at the top right.
+    if (it.meta.flag == library::Picked) {
+        dl->AddRectFilled(ImVec2(b0.x + 5, b0.y + 5), ImVec2(b0.x + 7, b0.y + 19), IM_COL32_WHITE);
+        dl->AddTriangleFilled(ImVec2(b0.x + 7, b0.y + 5), ImVec2(b0.x + 17, b0.y + 9), ImVec2(b0.x + 7, b0.y + 13), IM_COL32_WHITE);
+    } else if (it.meta.flag == library::Rejected) {
+        const ImU32 red = IM_COL32(235, 70, 60, 255);
+        dl->AddLine(ImVec2(b0.x + 6, b0.y + 6), ImVec2(b0.x + 16, b0.y + 16), red, 2.5f);
+        dl->AddLine(ImVec2(b0.x + 16, b0.y + 6), ImVec2(b0.x + 6, b0.y + 16), red, 2.5f);
+    }
+    if (it.meta.edited) {
+        // Outlined, so it shows on a blue sky too.
+        dl->AddTriangleFilled(ImVec2(b1.x - 17, b0.y), ImVec2(b1.x, b0.y), ImVec2(b1.x, b0.y + 17), IM_COL32(0, 0, 0, 160));
+        dl->AddTriangleFilled(ImVec2(b1.x - 14, b0.y), ImVec2(b1.x, b0.y), ImVec2(b1.x, b0.y + 14), kAccent);
+    }
+}
+
+LibraryPanel::Actions LibraryPanel::drawGrid(bool keys) {
+    Actions a;
+    ImGuiIO& io = ImGui::GetIO();
+    // The cells: the photos the filter shows, in order.
+    std::vector<int> shown;
+    for (int i = 0; i < size(); ++i)
+        if (passes(*items_[size_t(i)])) shown.push_back(i);
+    auto posOf = [&](int i) { return int(std::find(shown.begin(), shown.end(), i) - shown.begin()); };
+    if (focus_ < 0 || focus_ >= size() || !passes(*items_[size_t(focus_)]))
+        focus_ = current_ >= 0 && passes(*items_[size_t(current_)]) ? current_ : shown.empty() ? -1 : shown[0];
+
+    toolbar(a);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(110);
+    ImGui::SliderFloat("##size", &gridSize_, 100.0f, 360.0f, "Size %.0f");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Thumbnail size (Ctrl+wheel)");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Loupe")) grid = false;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Back to the editor (Escape; E or a double-click opens a photo)");
+
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+    ImGui::BeginChild("##grid", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_NoMove);
+    const float availW = ImGui::GetContentRegionAvail().x;
+    const int cols = std::max(1, int(availW / gridSize_));
+    const float cellW = std::floor(availW / cols);
+    const float headH = ImGui::GetTextLineHeight() + 6, footH = 22.0f;
+    const float thumbH = std::floor((cellW - 12) * 0.75f), cellH = headH + thumbH + footH + 8;
+    const int rows = (int(shown.size()) + cols - 1) / cols;
+
+    if (ImGui::IsWindowHovered() && io.KeyCtrl && io.MouseWheel != 0.0f)
+        gridSize_ = std::clamp(gridSize_ * (io.MouseWheel > 0 ? 1.15f : 1 / 1.15f), 100.0f, 360.0f);
+
+    // ---- keys: culling, arrows move through the grid (Shift extends), Enter / E open
+    if (keys && !io.KeyAlt && !shown.empty()) {
+        if (!io.KeyCtrl) cullKeys();
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, false)) {
+            for (int i : shown) items_[size_t(i)]->selected = true;
+        } else if (!io.KeyCtrl) {
+            int move = 0;
+            if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) move = -1;
+            if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) move = 1;
+            if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) move = -cols;
+            if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) move = cols;
+            if (move) {
+                const int p = std::clamp(posOf(focus_) + move, 0, int(shown.size()) - 1);
+                focus_ = shown[size_t(p)];
+                select(focus_, false, io.KeyShift);
+                scrollToFocus_ = true;
+            }
+            if ((ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false) ||
+                 ImGui::IsKeyPressed(ImGuiKey_E, false)) && focus_ >= 0) {
+                a.open = focus_;
+                grid = false;
+            }
+        }
+    }
+    if (keys && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) grid = false;
+
+    // Keep the focused card in view (after arrow keys, or on opening the grid).
+    if (scrollToFocus_ && focus_ >= 0) {
+        const float top = float(posOf(focus_) / cols) * cellH, winH = ImGui::GetWindowHeight();
+        if (top < ImGui::GetScrollY()) ImGui::SetScrollY(top);
+        else if (top + cellH > ImGui::GetScrollY() + winH) ImGui::SetScrollY(top + cellH - winH);
+        scrollToFocus_ = false;
+    }
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImGuiListClipper clipper;
+    clipper.Begin(rows, cellH);
+    while (clipper.Step()) {
+        for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+            for (int col = 0; col < cols; ++col) {
+                const size_t p = size_t(row) * cols + col;
+                if (p >= shown.size()) break;
+                const int i = shown[p];
+                Item& it = *items_[size_t(i)];
+                if (col) ImGui::SameLine(0, 0);
+                ImGui::PushID(i);
+                const ImVec2 p0 = ImGui::GetCursorScreenPos();
+                ImGui::InvisibleButton("##card", ImVec2(cellW, cellH));
+                const bool hovered = ImGui::IsItemHovered();
+                if (ImGui::IsItemVisible() && !it.requested) request(i, false);
+
+                // The card, lighter when selected (Lightroom's grid).
+                const ImVec2 c0(p0.x + 3, p0.y + 3), c1(p0.x + cellW - 3, p0.y + cellH - 3);
+                const ImU32 card = it.selected ? IM_COL32(88, 88, 96, 255) : hovered ? IM_COL32(62, 62, 68, 255) : IM_COL32(48, 48, 53, 255);
+                dl->AddRectFilled(c0, c1, card, 3.0f);
+                if (i == current_) dl->AddRect(c0, c1, IM_COL32_WHITE, 3.0f, 0, 2.0f);
+                else if (it.selected) dl->AddRect(c0, c1, kAccent, 3.0f, 0, 1.5f);
+                if (i == focus_ && keys) dl->AddRect(ImVec2(c0.x + 2, c0.y + 2), ImVec2(c1.x - 2, c1.y - 2), IM_COL32(255, 255, 255, 60), 2.0f);
+
+                // Header: its number in the folder and the file name.
+                char num[16];
+                std::snprintf(num, sizeof num, "%d", i + 1);
+                dl->AddText(ImVec2(c0.x + 6, c0.y + 3), IM_COL32(150, 150, 158, 255), num);
+                const std::string fname = pathToU8(u8ToPath(it.path).filename());
+                const float numW = ImGui::CalcTextSize(num).x + 14;
+                dl->PushClipRect(ImVec2(c0.x + numW, c0.y), ImVec2(c1.x - 4, c0.y + headH), true);
+                dl->AddText(ImVec2(c0.x + numW, c0.y + 3), IM_COL32(200, 200, 206, 255), fname.c_str());
+                dl->PopClipRect();
+
+                const ImVec2 t0(c0.x + 6, p0.y + headH + 2), t1(c1.x - 6, p0.y + headH + 2 + thumbH);
+                drawThumb(dl, it, t0, t1);
+
+                // Footer: five stars to click (the given rating again clears it, as in Lightroom).
+                const float starR = 6.0f, gap = 16.0f, fy = t1.y + footH * 0.5f + 2;
+                const float sx0 = (c0.x + c1.x) * 0.5f - 2 * gap;
+                int starHit = -1;
+                if (hovered && std::fabs(io.MousePos.y - fy) < 9)
+                    for (int s = 0; s < 5; ++s)
+                        if (std::fabs(io.MousePos.x - (sx0 + s * gap)) < gap * 0.5f) starHit = s;
+                for (int s = 0; s < 5; ++s) {
+                    const bool on = starHit >= 0 ? s <= starHit : s < it.meta.rating;
+                    const ImU32 col = starHit >= 0 ? (on ? IM_COL32(255, 220, 140, 255) : IM_COL32(110, 110, 118, 255))
+                                                   : on ? IM_COL32(235, 235, 235, 255) : it.selected ? IM_COL32(150, 150, 158, 255) : IM_COL32(95, 95, 103, 255);
+                    drawStar(dl, ImVec2(sx0 + s * gap, fy), starR, col, on);
+                }
+
+                if (ImGui::IsItemClicked()) {
+                    if (starHit >= 0) {
+                        const int r = it.meta.rating == starHit + 1 ? 0 : starHit + 1;
+                        it.meta.rating = r;
+                        writeMeta(i);
+                        status = r ? "Rated " + std::to_string(r) + (r == 1 ? " star" : " stars") : "Rating cleared";
+                    } else {
+                        select(i, io.KeyCtrl, io.KeyShift);
+                        focus_ = i;
+                    }
+                }
+                if (hovered && starHit < 0 && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    a.open = i;
+                    grid = false;
+                }
+                if (hovered && starHit < 0)
+                    ImGui::SetTooltip("%s%s%s", fname.c_str(), library::hasSidecar(it.path) ? "\nEdit in " : "",
+                                      library::hasSidecar(it.path) ? pathToU8(u8ToPath(library::sidecarPath(it.path)).filename()).c_str() : "");
+                ImGui::PopID();
+            }
+        }
+    }
+    if (shown.empty()) ImGui::TextDisabled("No photos match the filter");
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
     return a;
 }

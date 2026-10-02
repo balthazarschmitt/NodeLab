@@ -136,8 +136,21 @@ void finishLinear(Image& img) {
     });
 }
 
-// Blends the adjusted image back over the source by a Factor channel (Lightroom's masks plug in here).
-void applyFactor(const Node& node, const Image& src, Image& img, const Value& facIn) {
+// Linear projects blend by Factor in log2(x + kFactorFloor): a mask at 0.5 gives half the
+// adjustment's stops (an Exposure of -2 EV becomes -1 EV), as Lightroom scales the slider amounts
+// by its mask. Mixing linear light instead gave -0.68 EV there, so gradients seemed to do little
+// until near their full end. The floor keeps blacks (and lifts of them) blending smoothly.
+constexpr float kFactorFloor = 1.0f / 256.0f;
+
+inline float factorBlend(float s, float d, float f, bool logBlend) {
+    if (!logBlend || !(s > -kFactorFloor && d > -kFactorFloor)) return s + (d - s) * f;
+    const float a = s + kFactorFloor, b = d + kFactorFloor;
+    return a * std::exp2(f * std::log2(b / a)) - kFactorFloor;
+}
+
+// Blends the adjusted image back over the source by a Factor channel (Lightroom's masks plug in
+// here). Legacy projects mix sRGB-encoded values, already perceptual, so they keep the plain mix.
+void applyFactor(const Node& node, const Image& src, Image& img, const Value& facIn, bool logBlend = false) {
     ChannelPtr fac = channelOr(facIn, 1.0f);
     if (fac->constant && fac->value >= 1.0f) return;
     ChannelSampler sf = paramSampler(node, 1, fac, src.w, src.h);
@@ -147,7 +160,7 @@ void applyFactor(const Node& node, const Image& src, Image& img, const Value& fa
             float f = sf(x, y);
             const float* s = src.pixel(i);
             float* d = img.pixel(i);
-            for (int k = 0; k < 3; ++k) d[k] = s[k] + (d[k] - s[k]) * f;
+            for (int k = 0; k < 3; ++k) d[k] = factorBlend(s[k], d[k], f, logBlend);
         }
     });
 }
@@ -158,7 +171,15 @@ float smoothT(float e0, float e1, float x) {
     float t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
     return t * t * (3.0 - 2.0 * t);
 }
-vec4 applyFactor(vec4 s, vec3 d, float f) { return vec4(s.rgb + (d - s.rgb) * f, s.a); }
+const float kFactorFloor = 1.0 / 256.0;
+vec4 applyFactor(vec4 s, vec3 d, float f, bool logBlend) {
+    vec3 mixed = s.rgb + (d - s.rgb) * f;
+    if (!logBlend) return vec4(mixed, s.a);
+    vec3 a = s.rgb + kFactorFloor, b = d + kFactorFloor;
+    vec3 l = a * exp2(f * log2(max(b, 1e-30) / max(a, 1e-30))) - kFactorFloor;
+    vec3 ok = vec3(greaterThan(a, vec3(0.0))) * vec3(greaterThan(b, vec3(0.0)));
+    return vec4(mix(mixed, l, ok), s.a);
+}
 )";
 
 // ---------------------------------------------------------------- GPU local filters
@@ -545,7 +566,7 @@ public:
         op.functions = functions;
         op.body = R"(
     vec4 s = img0(p);
-    out0 = applyFactor(s, basicFinish(img2(p).rgb, has3, ch3(p), has4, ch4(p), has5, ch5(p)), par1(p));)";
+    out0 = applyFactor(s, basicFinish(img2(p).rgb, has3, ch3(p), has4, ch4(p), has5, ch5(p)), par1(p), LIN);)";
         gpu::runOver(ctx, *this, op, {in[0], in[1], cur, lum, coarse, fine}, out);
     }
 
@@ -664,7 +685,7 @@ private:
             });
         }
         finishLinear(*img);
-        applyFactor(*this, *src, *img, facIn);
+        applyFactor(*this, *src, *img, facIn, true);
         return img;
     }
 
@@ -1039,7 +1060,7 @@ vec3 bandAdjust(float hueDeg) {
         float l = luminance(c), m = max(0.0, 1.0 + adj.y * colourful);
         d = clamp01(linearToSrgb(srgbToLinear(max(l + (c - l) * m, 0.0)) * exp2(adj.z * colourful)));
     }
-    out0 = applyFactor(s, d, par1(p));)";
+    out0 = applyFactor(s, d, par1(p), LIN);)";
         gpu::runOver(ctx, *this, op, in, out);
     }
 
@@ -1094,7 +1115,7 @@ private:
             d[3] = s[3];
         });
         finishLinear(*img);
-        applyFactor(*this, *src, *img, facIn);
+        applyFactor(*this, *src, *img, facIn, true);
         return img;
     }
 };
@@ -1209,7 +1230,7 @@ public:
         for (int z = 0; z < 4; ++z) d += (vec3(P[z * 3], P[z * 3 + 1], P[z * 3 + 2]) + P[12 + z]) * wz[z];
         d = clamp01(d);
     }
-    out0 = applyFactor(s, d, par1(p));)";
+    out0 = applyFactor(s, d, par1(p), LIN);)";
         gpu::runOver(ctx, *this, op, in, out);
     }
 
@@ -1268,7 +1289,7 @@ private:
             d[3] = s[3];
         });
         finishLinear(*img);
-        applyFactor(*this, *src, *img, facIn);
+        applyFactor(*this, *src, *img, facIn, true);
         return img;
     }
 };

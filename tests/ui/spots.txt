@@ -1,0 +1,17 @@
+# NodeLab.exe tests\ui\spots.nlproj --script tests\ui\spots.txt
+# Spot Removal: select the node, click the sun to add a spot, then drag its source onto the sky.
+settle
+click 780 100
+settle
+click 1537 392
+settle
+wait 3
+shot build/smoke/spot1_added.png
+drag 1459 392 1300 380
+settle
+wait 3
+shot build/smoke/spot2_source.png
+move 1300 700
+wait 2
+shot build/smoke/spot3.png
+quit

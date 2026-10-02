@@ -470,6 +470,31 @@ public:
 
 // ---------------------------------------------------------------- morphology
 
+// Lightroom's Detail > Sharpening (see imageops::sharpenImage). Like Lightroom's, it is easiest to
+// judge at 100%: the preview proxy scales the radius down with the image.
+class SharpenNode : public Node {
+public:
+    NODELAB_NODE({"filter.sharpen", "Sharpen", "Filter",
+                  {{"Image", PinType::Image}},
+                  {{"Image", PinType::Image}},
+                  {ParamDesc::Float("Amount", 40.0f, 0.0f, 150.0f), ParamDesc::Float("Radius", 1.0f, 0.5f, 3.0f),
+                   ParamDesc::Float("Detail", 25.0f, 0.0f, 100.0f), ParamDesc::Float("Masking", 0.0f, 0.0f, 100.0f)}})
+    imageops::SharpenSettings settings(const EvalContext& ctx) const {
+        return {paramF(0), paramF(1) * ctx.scale, paramF(2), paramF(3)};
+    }
+    int roiPadding(const EvalContext& ctx) const override { return sharpenReach(paramF(1) * ctx.scale); }
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        ImagePtr src = toImage(in[0], 0, 0);
+        if (!src) return;
+        auto img = copyOf(*src);
+        sharpenImage(*img, settings(ctx), ctx.linear());
+        if (!ctx.linear())
+            for (size_t i = 0; i < img->px.size(); i += 4)
+                for (int c = 0; c < 3; ++c) img->px[i + c] = clampColor(false, img->px[i + c]);
+        out[0] = Value(ImagePtr(img));
+    }
+};
+
 class DilateErodeNode : public Node {
 public:
     NODELAB_NODE({"filter.dilate_erode", "Dilate / Erode", "Filter",
@@ -935,6 +960,8 @@ void registerFilterNodes(NodeRegistry& r) {
     r.add<BilateralBlurNode>();
     registerDenoiseNode(r);
     r.add<FilterNode>();
+    r.add<SharpenNode>();
+    registerSpotRemovalNode(r);
     r.add<DilateErodeNode>();
     r.add<KuwaharaNode>();
     r.add<PixelateNode>();

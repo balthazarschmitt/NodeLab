@@ -1,0 +1,31 @@
+# Library Grid: copy photos to build\smoke\lib (see library.txt), then
+#   NodeLab.exe build\smoke\lib --script tests\ui\grid.txt
+# G opens the grid; a click selects, Ctrl+click adds, a star click rates, 2 rates the
+# selection, P picks it; a double-click opens a photo and leaves the grid.
+settle
+wait 20
+settle
+move 800 500
+key g
+settle
+wait 30
+settle
+shot build/smoke/grid1.png
+# The fourth star of the second photo, then select it and Ctrl+click the third
+click 323 267
+click 307 180
+ctrl on
+click 504 180
+ctrl off
+key 2
+key p
+settle
+shot build/smoke/grid2.png
+# Double-click the fourth: it opens, and the grid closes
+click 701 180
+click 701 180
+settle
+wait 30
+settle
+shot build/smoke/grid3.png
+quit

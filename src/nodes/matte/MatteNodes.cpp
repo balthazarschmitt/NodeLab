@@ -223,7 +223,9 @@ public:
     }
 };
 
-// Lightroom's Linear Gradient: full strength before Start, fading to nothing at End.
+// Lightroom's Linear Gradient: full strength before Start, fading to nothing at End. Linear
+// projects fade evenly across the whole Start-End span, as Lightroom does; legacy ones keep the
+// smoothstep they were made with, which packs most of the change into the middle half.
 class LinearGradientNode : public MaskBase {
 public:
     NODELAB_NODE({"matte.linear_gradient", "Linear Gradient", "Matte",
@@ -246,10 +248,12 @@ public:
         const float dx = paramF(2) * w - x0, dy = paramF(3) * h - y0;
         const float len2 = std::max(dx * dx + dy * dy, 1e-6f);
         const int op = paramI(5);
+        const bool even = ctx.linear();
         out[0] = Value(ChannelPtr(makeChannel(bw, bh, [&](int bx, int by) {
             const int x = bx + fr.x0, y = by + fr.y0;
             float t = ((x + 0.5f - x0) * dx + (y + 0.5f - y0) * dy) / len2;
-            return combineMask(op, sb(bx, by), sv(bx, by) * (1.0f - smoothstep(0.0f, 1.0f, t)));
+            const float fade = even ? clamp01(t) : smoothstep(0.0f, 1.0f, t);
+            return combineMask(op, sb(bx, by), sv(bx, by) * (1.0f - fade));
         })));
     }
     void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
@@ -259,9 +263,9 @@ public:
         const float dx = paramF(2) * w - x0, dy = paramF(3) * h - y0;
         runGpu(ctx, in, out,
                R"(    float t = dot(xy - vec2(P[0], P[1]), vec2(P[2], P[3])) / P[4];
-    float shape = 1.0 - smoothstepC(0.0, 1.0, t);
+    float shape = 1.0 - (P[5] > 0.5 ? clamp(t, 0.0, 1.0) : smoothstepC(0.0, 1.0, t));
 )",
-               {x0, y0, dx, dy, std::max(dx * dx + dy * dy, 1e-6f)}, paramI(5));
+               {x0, y0, dx, dy, std::max(dx * dx + dy * dy, 1e-6f), ctx.linear() ? 1.0f : 0.0f}, paramI(5));
     }
 };
 

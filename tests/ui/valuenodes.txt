@@ -1,0 +1,34 @@
+# NodeLab.exe tests\ui\interact.nlproj --script tests\ui\valuenodes.txt
+# Group a node, enter it, and add a Value Input from Add > Group.
+settle
+drag 739 345 789 115
+settle
+ctrl on
+key g
+ctrl off
+settle
+key tab
+settle
+wait 5
+move 900 500
+shift on
+key a
+shift off
+wait 3
+shot build/smoke/v1_menu.png
+move 950 797
+wait 5
+shot build/smoke/v2_sub.png
+move 1450 797
+wait 3
+click 1450 797
+settle
+wait 3
+shot build/smoke/v3_added.png
+key tab
+settle
+wait 3
+click 789 115
+wait 3
+shot build/smoke/v4_outside.png
+quit

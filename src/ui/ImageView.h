@@ -107,12 +107,23 @@ struct ViewInfo {
     float u0 = 0, v0 = 0, u1 = 1, v1 = 1;  // visible part of the image, in 0..1
 };
 
+// Lightroom's Before / After split: `before` (the unedited image) left of a draggable divider,
+// the view's own texture right of it. Both share the zoom and pan.
+struct SplitView {
+    const GLTexture* before = nullptr;
+    const ViewDetail* beforeDetail = nullptr;
+    ViewInfo* beforeInfo = nullptr;  // out: what the before side showed (for its detail), or null
+    float* pos = nullptr;            // divider, 0..1 of the view's width
+    bool* dragging = nullptr;        // the divider is being dragged
+    bool full = false;               // show only the before image (Lightroom's \ key)
+};
+
 // Draws the texture fitted to the current region with zoom/pan interaction.
 // Wheel zooms around the cursor, left/middle drag pans, double-click resets.
 // With pick set (and pick->image non-null), left mouse picks colours instead of panning.
 void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const char* emptyText,
                    PickRequest* pick = nullptr, ImageOverlay* overlay = nullptr, const ViewDetail* detail = nullptr,
-                   ViewInfo* info = nullptr);
+                   ViewInfo* info = nullptr, SplitView* split = nullptr);
 
 // Histogram box (RGB + luminance) drawn at `pos`, with Lightroom's clipping triangles in the top
 // corners. Returns true when a triangle was clicked (toggles the clipping warning).

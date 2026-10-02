@@ -9,6 +9,8 @@ class Node;
 //  - Linear Gradient: Start/End lines, drag either end or the middle.
 //  - Radial Gradient / Box Mask / Ellipse Mask: outline with centre, size and rotation handles.
 //  - Brush Mask: paint with the left mouse, Alt+drag erases, [ and ] change the size.
+//  - Spot Removal: click to add a spot, drag a spot or its source to move it, drag its edge to
+//    resize; Alt+click or Delete removes one, [ and ] change the size.
 // With a mask texture set, the mask is tinted over the image (Lightroom's mask overlay).
 class NodeOverlay : public ImageOverlay {
 public:
@@ -35,6 +37,7 @@ private:
     bool updateLinear(ImDrawList* dl, const ImVec2& a, const ImVec2& b, bool hovered, bool active);
     bool updateShape(ImDrawList* dl, const ImVec2& a, const ImVec2& b, bool hovered, bool active);
     bool updateBrush(ImDrawList* dl, const ImVec2& a, const ImVec2& b, bool hovered, bool active);
+    bool updateSpots(ImDrawList* dl, const ImVec2& a, const ImVec2& b, bool hovered, bool active);
     void setParam(int i, float v);
 
     Node* node_ = nullptr;

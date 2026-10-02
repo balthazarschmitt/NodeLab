@@ -99,24 +99,26 @@ build\nodelab_tests.exe
 src/core      Image/Channel/Value types + conversions, ColorMath, ColorScience (Oklab, CAT16 white
               balance, gamut compression), Curve, Ramp, Noise, Parallel
 src/graph     Node (params, flags, region policy), Graph (links, frames, JSON), Evaluator (cache levels,
-              region evaluation, +AsyncEvaluator with drafts and details), NodeRegistry, Recipes
+              region evaluation, +AsyncEvaluator with drafts and details), NodeRegistry, NodeMenu (Add menu layout), Recipes
               (one-click graph edits such as Add Mask)
 src/nodes     one file per family: io, color, math (Mix), converter (+Expression), filter, transform,
-              matte, texture, utility, group; filter/Denoise (a-trous wavelets); ImageOps (sampling,
-              box blur, distance transform)
+              matte, texture, utility, group; filter/Denoise (a-trous wavelets); filter/SpotRemoval
+              (spots edited by ViewerOverlay); color/AutoTone (solves Basic's tone sliders by
+              running Basic); ImageOps (sampling, box blur, distance transform)
 src/io        image load (stb; PngDecode with zlib-ng and JpegDecode, a parallel copy of stb's
               JPEG decoder, both bit-identical to stb), ImageWrite (PNG/JPEG/TIFF/EXR, ICC, parallel zlib-ng and JPEG strips; Tiff.h IFD writer),
               RawDecode (LibRaw), Exif (orientation, export EXIF), Icc (embedded input profiles), Export (Lanczos resize), ImageCache (proxies
               per edge; full-res decoded on demand, scaled levels kept for regions; RAW proxies from a
               half-size decode), project files, Library (folder listing, sidecars `photo.ext.nlproj`
-              with rating/flag/thumbnail in `ui.library`, default graph, paste edit, thumbnails)
+              with rating/flag/thumbnail in `ui.library`, default graph, paste edit, thumbnails),
+              Presets (`.nlpreset` node snippets in %APPDATA%\NodeLab\presets)
 src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (custom canvas), Inspector,
               GuideWindow (renders the embedded GUIDE.md), Eyedropper (pick state), Theme (preset
               and custom colour themes: NodeEditor and ImageView draw themeable colours with
               theme::col), Preferences window and layout presets (in App),
               ParamWidgets (curve/ramp editors), ImageView, DisplayWorker (view transform and
-              histograms off the UI thread), LibraryPanel (filmstrip, culling keys, thumbnail
-              worker), FileDialog (Win32), UiScript
+              histograms off the UI thread), LibraryPanel (filmstrip and Grid view, culling keys,
+              thumbnail worker), FileDialog (Win32), UiScript
 src/gpu       Device (hidden GL 4.3 context sharing textures with the UI, texture pool, programs, timer queries, PBO downloads),
               GL (loader), PointOp (per-pixel nodes as GLSL bodies, fused into chains), Blur,
               Reduce (exact percentiles by radix select), Display (viewer bytes and histogram)
@@ -128,6 +130,8 @@ src/gpu       Device (hidden GL 4.3 context sharing textures with the UI, textur
   1. Write a class with `NODELAB_NODE({type, name, category, inputs, outputs, params})` and `evaluate()`.
   2. Register it in the family's `register*Nodes()`.
   3. Add a `**Display Name**` entry to GUIDE.md (enforced by `test_guide.cpp`).
+  4. List it in the Add menu's layout in `graph/NodeMenu.cpp` (otherwise it lands at the end of
+     its category's menu). `test_node_menu.cpp` keeps each menu at 20 nodes or fewer.
 
   The `type` string is saved in projects, so never rename one.
 - **Wires:** Image (RGBA float), Channel (float plane; `constant` = sizeless), or Number.
@@ -211,7 +215,7 @@ src/gpu       Device (hidden GL 4.3 context sharing textures with the UI, textur
     - `gpu::boxBlur` blurs a texture, and `gpu::select` gives exact ranks (percentiles).
     - Basic's `guidedGpu`/`sumGpu` show a guided filter and a sum read back.
 - **Preferences:** `App::loadPreferences`/`savePreferences` (`%APPDATA%\NodeLab\preferences.json`).
-  Automated runs neither load nor save them and keep the Inspector as a docked panel, so their
+  Automated runs neither load nor save them, never auto save, and keep the Inspector as a docked panel, so their
   scripts' coordinates hold.
 - **Image buffers:** `Image::px` uses `UninitAllocator`, so `Image(w, h)` zeroes and copies
   across threads. Big scratch buffers that are written before they're read can use it too

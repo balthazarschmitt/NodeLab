@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <memory>
 #include <set>
 #include <string>
@@ -34,6 +35,45 @@ public:
 
 private:
     NodeInfo info_ = staticInfo();
+};
+
+// A single group socket as its own node, which can sit anywhere inside the group: Value Input
+// reads one of the group's inputs and Value Output feeds one of its outputs. Adding one (from the
+// Add menu's Group submenu, shown only inside a group) adds a socket to the group, renaming it
+// (F2 or the Inspector) renames the socket, and deleting the last node of a socket it made
+// removes the socket again. The node shows the socket's name as its title.
+class GroupValueNode : public Node {
+public:
+    const NodeInfo& info() const override { return info_; }
+    void saveExtra(nlohmann::json& j) const override { j = {{"pin", pin}}; }
+    void loadExtra(const nlohmann::json& j) override;
+    std::string signatureExtra() const override { return std::to_string(pin); }
+    virtual bool isOutput() const = 0;
+    // Shows the socket it is bound to (null: not bound yet).
+    void bind(const PinDesc* p);
+
+    int pin = -1;  // the group socket index; -1 until the group binds it
+
+protected:
+    explicit GroupValueNode(const NodeInfo& inf) : info_(inf) {}
+    NodeInfo info_;
+};
+
+class GroupValueInputNode : public GroupValueNode {
+public:
+    GroupValueInputNode() : GroupValueNode(staticInfo()) {}
+    static const NodeInfo& staticInfo();
+    bool isOutput() const override { return false; }
+    void evaluate(EvalContext&, const std::vector<Value>&, std::vector<Value>& out) override { out[0] = provided; }
+    Value provided;
+};
+
+class GroupValueOutputNode : public GroupValueNode {
+public:
+    GroupValueOutputNode() : GroupValueNode(staticInfo()) {}
+    static const NodeInfo& staticInfo();
+    bool isOutput() const override { return true; }
+    void evaluate(EvalContext&, const std::vector<Value>&, std::vector<Value>&) override {}
 };
 
 class GroupNode : public Node {
@@ -81,12 +121,23 @@ public:
     void removePin(Graph& outer, bool output, int index);
     void movePin(Graph& outer, bool output, int index, int dir);
     void setPinType(Graph& outer, bool output, int index, PinType type);
+    void renamePin(bool output, int index, const std::string& name);
+
+    // Brings the inner Value Input / Output nodes and the interface in step after an edit inside
+    // the group: a new value node gets a new socket, a renamed one (its label) renames its socket,
+    // and a socket whose last value node was deleted is removed, if it was made by one and nothing
+    // else uses it inside. True if anything changed.
+    bool syncValueNodes(Graph& outer);
 
 private:
     void injectInputs(const std::vector<Value>& in);
 
+    void remapInner(bool output, const std::function<int(int)>& f);
+
     std::unique_ptr<Graph> inner_;
     NodeInfo info_;
+    // Sockets that had value nodes at the last sync (see syncValueNodes), per side.
+    std::set<int> valuePins_[2];
 };
 
 // Moves `ids` into a new group node (boundary wires become group pins). Returns its id, or 0.

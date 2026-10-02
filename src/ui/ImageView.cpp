@@ -63,7 +63,9 @@ std::vector<unsigned char> displayBytes(const Image& img, bool clipping) {
         for (size_t i = size_t(y) * img.w * 4; i < end; i += 4) {
             for (int k = 0; k < 3; ++k)
                 bytes[i + k] = static_cast<unsigned char>(std::lround(std::clamp(img.px[i + k], 0.0f, 1.0f) * 255.0f));
-            bytes[i + 3] = 255;  // show alpha as opaque; transparency display comes later
+            // Straight alpha: the viewer draws the image over a checkerboard (drawImageView).
+            const float a = img.px[i + 3];
+            bytes[i + 3] = static_cast<unsigned char>(std::lround((a >= 0.0f ? std::min(a, 1.0f) : 0.0f) * 255.0f));
             if (clipping) {
                 const unsigned char mx = std::max({bytes[i], bytes[i + 1], bytes[i + 2]});
                 if (mx == 255) bytes[i] = 255, bytes[i + 1] = 0, bytes[i + 2] = 0;
@@ -288,8 +290,32 @@ void drawPicker(PickRequest& pick, ImGuiID id, ImVec2 imgMin, float scale, const
 }
 }  // namespace
 
+// A checkerboard under the rectangle a..b (clipped to clipMin..clipMax), as Blender's image editor
+// shows transparency. Fixed to the screen, 8-pixel squares; one repeating 2x2 texture.
+void drawChecker(ImDrawList* dl, ImVec2 a, ImVec2 b, ImVec2 clipMin, ImVec2 clipMax) {
+    static GLuint tex = 0;
+    if (!tex) {
+        const unsigned char dark = 58, light = 88;
+        const unsigned char px[16] = {dark, dark, dark, 255, light, light, light, 255,
+                                      light, light, light, 255, dark, dark, dark, 255};
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    }
+    a = ImVec2(std::max(a.x, clipMin.x), std::max(a.y, clipMin.y));
+    b = ImVec2(std::min(b.x, clipMax.x), std::min(b.y, clipMax.y));
+    if (a.x >= b.x || a.y >= b.y) return;
+    const float period = 16.0f;  // two squares
+    dl->AddImage((ImTextureID)(intptr_t)tex, a, b, ImVec2(a.x / period, a.y / period), ImVec2(b.x / period, b.y / period));
+}
+
 void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const char* emptyText, PickRequest* pick,
-                   ImageOverlay* overlay, const ViewDetail* detail, ViewInfo* info) {
+                   ImageOverlay* overlay, const ViewDetail* detail, ViewInfo* info, SplitView* split) {
     ImVec2 origin = ImGui::GetCursorScreenPos();
     ImVec2 avail = ImGui::GetContentRegionAvail();
     avail.x = std::max(avail.x, 1.0f);
@@ -338,10 +364,14 @@ void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const 
     const float hw = tex.width() * scale * 0.5f, hh = tex.height() * scale * 0.5f;
     const float cx = center.x + view.panX * view.zoom, cy = center.y + view.panY * view.zoom;
     dl->PushClipRect(origin, end, true);
+    drawChecker(dl, ImVec2(cx - hw, cy - hh), ImVec2(cx + hw, cy + hh), origin, end);
     dl->AddImage((ImTextureID)(intptr_t)tex.id(), ImVec2(cx - hw, cy - hh), ImVec2(cx + hw, cy + hh));
     if (detail && detail->tex && detail->tex->valid()) {
         // Pixel edges of the detail land on the image's, so it lines up exactly with the preview.
         const float x0 = cx - hw, y0 = cy - hh;
+        // A fresh checkerboard under it, so transparent pixels don't show the preview through.
+        drawChecker(dl, ImVec2(x0 + detail->u0 * 2 * hw, y0 + detail->v0 * 2 * hh),
+                    ImVec2(x0 + detail->u1 * 2 * hw, y0 + detail->v1 * 2 * hh), origin, end);
         dl->AddImage((ImTextureID)(intptr_t)detail->tex->id(), ImVec2(x0 + detail->u0 * 2 * hw, y0 + detail->v0 * 2 * hh),
                      ImVec2(x0 + detail->u1 * 2 * hw, y0 + detail->v1 * 2 * hh));
     }
@@ -353,8 +383,76 @@ void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const 
         info->v1 = std::clamp((end.y - (cy - hh)) / (2 * hh), 0.0f, 1.0f);
     }
     bool captured = false;
+    if (split && split->before && split->before->valid() && split->pos) {
+        // The before image is fitted on its own (a crop can change the shape) around the same
+        // centre, so zoom and pan move both halves together.
+        const GLTexture& bt = *split->before;
+        const float bscale = std::min(avail.x / bt.width(), avail.y / bt.height()) * view.zoom;
+        const float bhw = bt.width() * bscale * 0.5f, bhh = bt.height() * bscale * 0.5f;
+        const ImVec2 b0(cx - bhw, cy - bhh), b1(cx + bhw, cy + bhh);
+        float& pos = *split->pos;
+        pos = std::clamp(pos, 0.0f, 1.0f);
+        const float divX = split->full ? end.x : origin.x + avail.x * pos;
+        if (divX > origin.x) {
+            const ImVec2 clipMax(divX, end.y);
+            dl->PushClipRect(origin, clipMax, true);
+            dl->AddRectFilled(origin, clipMax, theme::col(theme::ImageBackground));
+            drawChecker(dl, b0, b1, origin, clipMax);
+            dl->AddImage((ImTextureID)(intptr_t)bt.id(), b0, b1);
+            if (const ViewDetail* d = split->beforeDetail; d && d->tex && d->tex->valid()) {
+                const ImVec2 d0(b0.x + d->u0 * 2 * bhw, b0.y + d->v0 * 2 * bhh), d1(b0.x + d->u1 * 2 * bhw, b0.y + d->v1 * 2 * bhh);
+                drawChecker(dl, d0, d1, origin, clipMax);
+                dl->AddImage((ImTextureID)(intptr_t)d->tex->id(), d0, d1);
+            }
+            dl->PopClipRect();
+        }
+        if (split->beforeInfo) {
+            ViewInfo& bi = *split->beforeInfo;
+            bi.panelW = avail.x * fbScale.x;
+            bi.panelH = avail.y * fbScale.y;
+            bi.imageW = 2 * bhw * fbScale.x;
+            bi.u0 = std::clamp((origin.x - b0.x) / (2 * bhw), 0.0f, 1.0f);
+            bi.u1 = std::clamp((std::min(divX, end.x) - b0.x) / (2 * bhw), 0.0f, 1.0f);
+            bi.v0 = std::clamp((origin.y - b0.y) / (2 * bhh), 0.0f, 1.0f);
+            bi.v1 = std::clamp((end.y - b0.y) / (2 * bhh), 0.0f, 1.0f);
+        }
+        const auto label = [&](const char* text, float x, bool right) {
+            const ImVec2 ts = ImGui::CalcTextSize(text);
+            const ImVec2 p(right ? x - ts.x - 14 : x + 8, end.y - ts.y - 14);
+            dl->AddRectFilled(ImVec2(p.x - 6, p.y - 3), ImVec2(p.x + ts.x + 6, p.y + ts.y + 3), IM_COL32(20, 20, 24, 200), 4);
+            dl->AddText(p, IM_COL32(230, 230, 235, 255), text);
+        };
+        if (split->full) {
+            label("Before", origin.x, false);
+        } else {
+            // The divider: a line with a round grip, dragged anywhere along it.
+            // Only a fresh press grabs it, so a mask handle dragged across the line keeps going.
+            const bool near = hovered && !picking && std::fabs(io.MousePos.x - divX) <= 6.0f &&
+                              (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsMouseClicked(ImGuiMouseButton_Left));
+            bool& drag = split->dragging ? *split->dragging : captured;
+            if (near && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) drag = true;
+            if (drag) {
+                if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) pos = std::clamp((io.MousePos.x - origin.x) / avail.x, 0.0f, 1.0f);
+                else drag = false;
+            }
+            if (near || drag) {
+                captured = true;
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+            }
+            const float x = origin.x + avail.x * pos, gy = (origin.y + end.y) * 0.5f;
+            const ImU32 line = (near || drag) ? IM_COL32(255, 255, 255, 255) : IM_COL32(235, 235, 240, 220);
+            dl->AddLine(ImVec2(x, origin.y), ImVec2(x, end.y), IM_COL32(0, 0, 0, 120), 3.0f);
+            dl->AddLine(ImVec2(x, origin.y), ImVec2(x, end.y), line, 1.0f);
+            dl->AddCircleFilled(ImVec2(x, gy), 9.0f, IM_COL32(30, 30, 34, 230));
+            dl->AddCircle(ImVec2(x, gy), 9.0f, line, 0, 1.5f);
+            dl->AddTriangleFilled(ImVec2(x - 6, gy), ImVec2(x - 2, gy - 4), ImVec2(x - 2, gy + 4), line);
+            dl->AddTriangleFilled(ImVec2(x + 6, gy), ImVec2(x + 2, gy + 4), ImVec2(x + 2, gy - 4), line);
+            if (x - origin.x > 70) label("Before", x, true);
+            if (end.x - x > 70) label("After", x, false);
+        }
+    }
     if (picking) drawPicker(*pick, ImGui::GetItemID(), ImVec2(cx - hw, cy - hh), scale, tex, dl);
-    else if (overlay) captured = overlay->update(dl, ImVec2(cx - hw, cy - hh), ImVec2(cx + hw, cy + hh), hovered, active);
+    else if (overlay) captured |= overlay->update(dl, ImVec2(cx - hw, cy - hh), ImVec2(cx + hw, cy + hh), hovered && !captured, active && !captured);
     dl->PopClipRect();
 
     // Pan after the overlay had its say, so dragging a handle doesn't also move the image.

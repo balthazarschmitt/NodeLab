@@ -228,3 +228,37 @@ TEST_CASE("Brush Mask's paint cache matches painting every stroke") {
     n.strokes.pop_back();
     CHECK(evalNow()->data == fresh());
 }
+
+TEST_CASE("a mask at half strength gives half the stops in linear projects, as in Lightroom") {
+    // Grey 0.18 in linear light; Exposure -2 EV through a Factor of 0.5 should land near -1 EV,
+    // where mixing linear light gave -0.68 EV.
+    const float grey[3] = {0.18f, 0.18f, 0.18f};
+    auto img = halves(grey, grey, 8, 4);
+    auto expose = [&](float ev, float factor) {
+        Graph g;
+        Node* b = g.addNode("color.basic");
+        set(b, "Exposure", ev);
+        std::vector<Value> in{Value(ImagePtr(img)), Value(ChannelPtr(std::make_shared<Channel>(Channel::makeConstant(factor))))};
+        std::vector<Value> out(1);
+        EvalContext ctx;
+        ctx.defaultW = 8, ctx.defaultH = 4;
+        ctx.colorManagement = ColorManagement::sceneLinear();
+        b->evaluate(ctx, in, out);
+        return toImage(out[0], 8, 4)->pixel(0)[1];
+    };
+    const float full = expose(-1.0f, 1.0f), half = expose(-2.0f, 0.5f);
+    CHECK(std::log2(half / 0.18f) == doctest::Approx(std::log2(full / 0.18f)).epsilon(0.05));
+}
+
+TEST_CASE("Linear Gradient fades evenly from Start to End in linear projects") {
+    Graph g;
+    Node* n = g.addNode("matte.linear_gradient");
+    set(n, "Start X", 0.0f), set(n, "Start Y", 0.0f), set(n, "End X", 1.0f), set(n, "End Y", 0.0f);
+    ChannelPtr lin = run(n, {}, true, 100, 2);
+    CHECK(at(*lin, 24, 0) == doctest::Approx(0.75f).epsilon(0.01));
+    CHECK(at(*lin, 49, 0) == doctest::Approx(0.5f).epsilon(0.01));
+    CHECK(at(*lin, 74, 0) == doctest::Approx(0.25f).epsilon(0.01));
+    // Legacy projects keep their smoothstep, so they render as before.
+    ChannelPtr legacy = run(n, {}, false, 100, 2);
+    CHECK(at(*legacy, 24, 0) > 0.8f);
+}

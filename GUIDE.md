@@ -102,6 +102,23 @@ at the same time, open an extra viewer:
 Viewers are ordinary panels: drag the tab to dock them next to the others. Open as many as you
 like; they are saved with the project.
 
+### Transparency
+
+Images with alpha are drawn over a grey checkerboard, as in Blender's image editor, so transparent
+and half-transparent areas (a crop's outside, a keyed background, Set Alpha) are easy to see. The
+viewer's own background colour (Edit > Preferences > Viewer) shows around the image.
+
+### Before / After
+
+Like Lightroom's, with the mouse over the Result panel (or the **Before / After** toggle on its
+toolbar):
+
+- **Y** splits the Result: the original on the left of the divider, the edit on the right. Drag
+  the divider's handle to move it. Both halves zoom and pan together.
+- `\` (backslash) shows the original alone in the Result panel (press it again to go back).
+
+The "before" is what the Original panel shows: the first Image Input.
+
 ### Histogram and Clipping
 
 The Result panel's toolbar has two toggles (hover the Result panel to use the keys):
@@ -124,6 +141,8 @@ Some nodes are edited directly on the Result panel while they are selected:
 - **Linear Gradient:** drag the Start or End handle, or the middle one to move both.
 - **Brush Mask:** paint with the left mouse, Alt+paint to erase, and `[` / `]` to change the
   brush size. Turn on Auto Mask to keep strokes from spilling over edges onto other colours.
+- **Spot Removal:** click a blemish to add a spot, then drag its source circle onto clean
+  texture (see Spot Removal under Filter).
 - **Mask Overlay (O):** a selected mask node is tinted red over the image, so you can see what it
   covers even before it is wired into anything.
 
@@ -486,10 +505,15 @@ Blender. Invert, Posterize and the curve-based nodes still work on 0..1.
   light.
 - **Tone:** Exposure (in stops), Contrast, then Highlights and Shadows (recover or open up the
   bright and dark tones), and Whites and Blacks (set the end points).
+- **Auto** (in the Inspector, by Tone) is Lightroom's Auto Tone: it looks at the image coming into
+  the node and sets Exposure, Contrast, Highlights, Shadows, Whites and Blacks for a balanced
+  starting point, which you can then adjust. One Ctrl+Z undoes it.
 - **Presence:** Texture (fine detail), Clarity (local midtone contrast), Dehaze (removes or adds
   atmospheric haze), Vibrance (boosts muted colours more than saturated ones and protects skin
   tones), and Saturation.
-- Factor blends with the original. Wire a mask into it to make a local adjustment.
+- Factor blends with the original. Wire a mask into it to make a local adjustment. In
+  scene-linear projects it blends in stops, as Lightroom does, so a 50% mask gives half the
+  adjustment (Exposure -2 becomes -1 EV). Color Grading and Color Mixer work the same way.
 - **In scene-linear projects** Basic uses darktable-style maths on the linear light:
   - White balance is a CAT16 chromatic adaptation. Temperature moves the assumed light along the
     blackbody (Planckian) locus, and Tint moves it across toward green or magenta. Brightness stays
@@ -697,6 +721,33 @@ Sizes are in full-resolution pixels.
 - Works on wavelet bands, so edges stay sharp. Strengths are set for the full-resolution image,
   and the preview matches the export.
 
+**Sharpen**
+- Lightroom's Detail > Sharpening. It sharpens brightness only, so coloured edges get no
+  fringes. Put it after Denoise and Basic.
+- **Amount:** how strong. 40 is Lightroom's default for RAWs.
+- **Radius:** the size of the details sharpened, in full-resolution pixels. 1 suits most photos;
+  fine textures want less, soft images more.
+- **Detail:** 0 keeps every edge within its neighbours' range, so no light or dark halos appear.
+  Higher lets the full overshoot through and brings out fine texture.
+- **Masking:** 0 sharpens everything. Higher protects flat areas (sky, skin) and sharpens only
+  edges, which keeps noise from being sharpened. Feed a mask through Mix to limit it to a region.
+- Like Lightroom's, judge it at 100%: the preview's proxy scales the radius down with the image.
+
+**Spot Removal**
+- Lightroom's Spot Removal: removes dust spots, blemishes and small distractions by covering
+  each with pixels from somewhere else in the photo. Select the node and work on the Result panel.
+- **Click** a blemish to add a spot. Its source (the second circle, with an arrow pointing to the
+  spot) is picked beside it; drag right after clicking, or drag the source circle later, to take
+  it from clean texture instead.
+- Drag a spot to move it and its edge to resize it. `[` / `]` change the Size, **Alt+click** or
+  **Delete** removes a spot, and **Remove All** in the Inspector clears them.
+- **Mode:** **Heal** copies the source's texture but matches the colour and brightness around the
+  spot, so the patch blends in; **Clone** copies the source exactly (better next to hard edges).
+- **Size** (a share of the image's long edge), **Feather** (how soft the edge is) and **Opacity**
+  apply to the selected spot and to new ones.
+- Spots are kept in image-relative positions, so they stay in place at any preview size and in
+  the export. Put the node early, before Basic and other adjustments.
+
 **Filter**
 - Classic 3x3 kernels:
   - **Soften:** a slight blur.
@@ -808,7 +859,9 @@ with the matte applied as alpha.
 
 **Linear Gradient**
 - Fully on at Start and fading to nothing at End (points as 0..1 fractions of the image), like
-  Lightroom's Linear Gradient. Drag the handles on the Result panel.
+  Lightroom's Linear Gradient. Drag the handles on the Result panel. In scene-linear projects
+  the fade is even across the whole Start-End span (older sRGB projects keep a smoother S-shaped
+  fade, so they render as they were made).
 - **Uses:** darken a sky (Start at the top, End at the horizon) by wiring it into a Basic node's
   Factor.
 
@@ -951,11 +1004,34 @@ Coordinates are relative to the image, so textures look the same in the preview 
   - Image inputs have no value: unconnected, they are empty.
 - **Ctrl+Alt+G** ungroups. Groups can be nested.
 
+**Value Input**
+- One of the group's input sockets as a node of its own, to place wherever the value is used
+  instead of wiring everything from the Group Input node. Only offered inside a group: Add menu >
+  Group.
+- Adding one adds a Number input to the group (a slider on the group node). Rename it with F2 or
+  in the Inspector, which also sets its Default, Min and Max. Several Value Input nodes can read
+  the same socket (duplicate one).
+- Deleting the last Value Input of a socket it made removes the socket again, unless the Group
+  Input node still uses it.
+
+**Value Output**
+- One of the group's output sockets as a node: what is wired into it comes out of the group.
+  Adding one adds a Number output; change its type in the Inspector to pass images or channels.
+- If the Group Output node's pin for the same socket is wired too, that wire wins.
+
+### Presets
+
+- Right-click a node (usually a group with its sliders) and choose **Save as Preset...** to keep
+  the selected nodes under a name. **Add > Presets** inserts them into any project, and
+  Add > Presets > Delete Preset removes one.
+- Presets are files in `%APPDATA%\NodeLab\presets` (`.nlpreset`), which can be copied to another
+  computer.
+
 ## Working in the Node Editor
 
 | Action | How |
 |---|---|
-| Add a node | Right-click empty space, or press Shift+A. Type to search, then press Enter or click. |
+| Add a node | Right-click empty space, or press Shift+A. Type to search, then press Enter or click, or browse the menus. Over a menu name or its list, the wheel steps through its nodes (Enter adds the highlighted one). |
 | Connect | Drag from an output pin to an input pin (or the other way round). |
 | Add a connected node | Drag a wire into empty space and pick a node from the menu. |
 | Insert into a wire | Drag a node onto a wire; it is connected when you release. |
@@ -1022,6 +1098,9 @@ progress, and **Cancel** stops it.
 - **Size:** Original, **Long edge** (pixels), or **Percent**. Exports are only ever made smaller,
   with a sharp Lanczos filter in linear light (the same as Blender's and darktable's high-quality
   resize), so fine detail stays crisp without halos.
+- **Output Sharpening** (Lightroom's): **Sharpen for Screen**, **Matte Paper** or **Glossy
+  Paper**, at **Low**, **Standard** or **High**. It is applied after resizing, so it suits the
+  final pixel size; use Screen for web and phone images and the paper options for prints.
 
 The settings and folders are saved with the project. From the command line,
 `NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr] [--depth N] a.jpg b.jpg ...`
@@ -1045,6 +1124,11 @@ saved straight away, in `%APPDATA%\NodeLab\preferences.json`.
 - **Compositor:** the Device (CPU or GPU) and Precision, as in View > Compositor.
 - **New Projects:** the view transform (Standard or AgX, with a look) new projects and library
   photos start with. RAW photos always start with AgX.
+- **Save & Load:** **Auto Save** (on by default) and its **Timer** (5 minutes by default). Unsaved
+  changes are saved that long after the first one. A project that has a file, and a library
+  photo's edit, are saved in place. An untitled project is saved to
+  `%APPDATA%\NodeLab\autosave\Untitled.nlproj` instead; **File > Recover Auto Save** opens it
+  (as an untitled project, so Save asks where to keep it).
 
 ## Library
 
@@ -1076,6 +1160,17 @@ The Library panel along the bottom shows the folder's photos.
 - **Export Selected...** exports each selected photo with its own edit, using the Export
   window's format, size and **Name suffix**, into the Batch output folder (asked for the first
   time).
+- **Grid view (G):** the whole folder as a grid of cards over the window, like Lightroom's
+  Library grid, to look over an import. **Grid** on the Library toolbar or View > Library Grid
+  opens it too.
+  - Click a card to select it, Ctrl+click to add or remove, Shift+click for a range, Ctrl+A for
+    all; the arrow keys move (Shift extends).
+  - Click the stars under a card to rate it (click the same star again to clear); 0-5, P, X and U
+    work on the selection as in the filmstrip.
+  - **Double-click** a card (or press Enter or E) to open the photo and go back to the editor;
+    **Escape** or **Loupe** goes back without opening one.
+  - **Size** (or Ctrl+wheel) changes the card size. The filter, Copy / Paste Edit and Export
+    Selected work as in the filmstrip.
 - **Thumbnails** load in the background: a RAW's embedded preview, or the photo itself. An edited
   photo (a blue corner) shows its edit, rendered once and kept in the sidecar.
 

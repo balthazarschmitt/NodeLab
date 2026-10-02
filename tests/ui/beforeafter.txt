@@ -1,0 +1,11 @@
+# NodeLab.exe tests\ui\develop.nlproj --script tests\ui\beforeafter.txt
+# Y over the Result splits Before / After; dragging the divider moves it without panning.
+settle
+move 1384 700
+key y
+wait 3
+shot build/smoke/ba1_split.png
+drag 1384 485 1250 485
+wait 3
+shot build/smoke/ba2_dragged.png
+quit
