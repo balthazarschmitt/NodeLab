@@ -2,7 +2,9 @@
 // equalizer, log-space contrast and Oklch colour work.
 #include <doctest/doctest.h>
 
+#include <bit>
 #include <cmath>
+#include <cstdint>
 
 #include "core/ColorScience.h"
 #include "graph/Graph.h"
@@ -104,6 +106,25 @@ TEST_CASE("CAT16 white balance: identity at zero, neutralises its own light, kee
     colorsci::mul(m, grey, out);
     CHECK(out[1] < out[0]);
     CHECK(out[1] < out[2]);
+}
+
+TEST_CASE("colorsci::cbrt is correctly rounded") {
+    // Every 97th float from 1e-30 to 1e30, both signs, against the double cube root rounded to
+    // float (MinGW's float std::cbrt is up to 2 ulps off), plus the special values.
+    int worst = 0;
+    for (uint32_t u = std::bit_cast<uint32_t>(1e-30f); u <= std::bit_cast<uint32_t>(1e30f); u += 97)
+        for (float x : {std::bit_cast<float>(u), -std::bit_cast<float>(u)}) {
+            const float a = colorsci::cbrt(x), b = float(std::cbrt(double(x)));
+            const int ulps = std::abs(int(std::bit_cast<uint32_t>(a)) - int(std::bit_cast<uint32_t>(b)));
+            worst = std::max(worst, ulps);
+        }
+    CHECK(worst == 0);
+    CHECK(colorsci::cbrt(0.0f) == 0.0f);
+    CHECK(colorsci::cbrt(8.0f) == 2.0f);
+    CHECK(colorsci::cbrt(-27.0f) == -3.0f);
+    CHECK(std::isinf(colorsci::cbrt(INFINITY)));
+    CHECK(std::isnan(colorsci::cbrt(NAN)));
+    CHECK(colorsci::cbrt(1e-40f) == std::cbrt(1e-40f));
 }
 
 TEST_CASE("Oklab round-trips and gamut compression keeps luminance") {

@@ -8,6 +8,9 @@ using Mat3 = float[3][3];
 
 void mul(const Mat3 m, const float in[3], float out[3]);
 
+// Cube root, correctly rounded: MinGW's float std::cbrt is up to 2 ulps off and 4x slower.
+float cbrt(float x);
+
 // Björn Ottosson's Oklab: L 0..1 for black..white (unbounded above), a/b about -0.4..0.4.
 // Perceptually uniform, so scaling chroma keeps hue and lightness.
 void rgbToOklab(const float rgb[3], float lab[3]);

@@ -1,7 +1,9 @@
 #include "core/ColorScience.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 
 #include "core/ColorMath.h"
 
@@ -81,10 +83,25 @@ void mul(const Mat3 m, const float v[3], float o[3]) {
     for (int r = 0; r < 3; ++r) o[r] = m[r][0] * a + m[r][1] * b + m[r][2] * c;
 }
 
+float cbrt(float x) {
+    const float a = std::fabs(x);
+    // Zero, infinity, NaN and tiny values (where the first guess is poor) go to the library.
+    if (!(a >= 1e-30f && a <= 1e30f)) return std::cbrt(x);
+    // A first guess from the exponent bits (within about 5%), then two Halley steps in double,
+    // each tripling the correct digits: about 1e-12 relative, so the float rounds as std::cbrt's.
+    double y = std::bit_cast<float>(std::bit_cast<uint32_t>(a) / 3 + 709921077u);
+    const double ad = a;
+    for (int k = 0; k < 2; ++k) {
+        const double y3 = y * y * y;
+        y *= (y3 + 2.0 * ad) / (2.0 * y3 + ad);
+    }
+    return std::copysign(float(y), x);
+}
+
 void rgbToOklab(const float c[3], float lab[3]) {
-    const float l = std::cbrt(0.4122214708f * c[0] + 0.5363325363f * c[1] + 0.0514459929f * c[2]);
-    const float m = std::cbrt(0.2119034982f * c[0] + 0.6806995451f * c[1] + 0.1073969566f * c[2]);
-    const float s = std::cbrt(0.0883024619f * c[0] + 0.2817188376f * c[1] + 0.6299787005f * c[2]);
+    const float l = cbrt(0.4122214708f * c[0] + 0.5363325363f * c[1] + 0.0514459929f * c[2]);
+    const float m = cbrt(0.2119034982f * c[0] + 0.6806995451f * c[1] + 0.1073969566f * c[2]);
+    const float s = cbrt(0.0883024619f * c[0] + 0.2817188376f * c[1] + 0.6299787005f * c[2]);
     lab[0] = 0.2104542553f * l + 0.7936177850f * m - 0.0040720468f * s;
     lab[1] = 1.9779984951f * l - 2.4285922050f * m + 0.4505937099f * s;
     lab[2] = 0.0259040371f * l + 0.7827717662f * m - 0.8086757660f * s;

@@ -15,6 +15,9 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
   all cores, and the decoded image is converted to float in one parallel pass. Pixels are
   unchanged.
 - **Faster Denoise** (about 25%) and faster image allocation for every node.
+- **Faster Oklab conversions:** Basic's Vibrance and Saturation, Color Grading and Range Mask
+  use a correctly rounded cube root that is about 4x faster than MinGW's (which was up to 2 ulps
+  off). Basic's Vibrance pass on a 24 MP image went from about 1.1 s to 0.08 s.
 - `--render ... --timings` prints how long evaluation and saving took.
 
 ## 0.18.0 (2026-10-01)
