@@ -3,7 +3,7 @@
 NodeLab uses [semantic versioning](https://semver.org). While it is 0.x, minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
-## Unreleased
+## 0.20.0 (2026-10-02)
 
 - **Faster image loading:** a 24 MP image opens 2-3x faster, with exactly the same pixels.
   - JPEG decodes on every core (about 330 ms to 120 ms). Restart intervals decode in parallel,
@@ -31,6 +31,14 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 - **Infrared Foliage preset** (`examples/infrared_foliage.nlproj`) is now one group with sliders:
   Shade Lift, Lit Foliage, Sky Contrast, Trunks, Halation and Grain. Dark tree trunks no longer
   glow like leaves, and a light halation is on by default.
+- **Hardening:**
+  - A project with a damaged link (one whose ends aren't two numbers) could crash on opening.
+    It now fails to open with an error, like other damaged files.
+  - Exported images and preferences are written to a temporary file and then renamed, as
+    projects already were, so a full disk or a crash never leaves half a file or destroys the
+    one being replaced.
+  - New fuzz tests: damaged JPEG, PNG and ICC data through the whole load path, and project files
+    damaged anywhere in their structure.
 
 ## 0.19.0 (2026-10-02)
 

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 
@@ -145,11 +146,24 @@ struct Span {
 };
 
 // Writes the pieces one after another, so large outputs aren't first copied into one buffer.
+// They go to a temporary file renamed over the target, as projects are saved: a full disk or a
+// crash mid-write never leaves half an image, and never destroys the file being replaced.
 bool writeFile(const std::string& pathU8, const std::vector<Span>& pieces, std::string& err) {
-    std::ofstream f(u8ToPath(pathU8), std::ios::binary);
-    for (const Span& s : pieces)
-        if (!f || !f.write(reinterpret_cast<const char*>(s.data), std::streamsize(s.size))) break;
-    if (!f || !f.flush()) {
+    namespace fs = std::filesystem;
+    const fs::path path = u8ToPath(pathU8);
+    fs::path tmp = path;
+    tmp += ".nodelab-tmp";
+    bool ok;
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        for (const Span& s : pieces)
+            if (!f || !f.write(reinterpret_cast<const char*>(s.data), std::streamsize(s.size))) break;
+        ok = f && f.flush();
+    }
+    std::error_code ec;
+    if (ok) fs::rename(tmp, path, ec);
+    if (!ok || ec) {
+        fs::remove(tmp, ec);
         err = "could not write file";
         return false;
     }

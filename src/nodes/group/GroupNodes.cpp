@@ -147,8 +147,8 @@ void GroupNode::loadExtra(const nlohmann::json& j) {
             if (auto* go = dynamic_cast<GroupOutputNode*>(n.get())) go->setPins(outs);
         }
         for (const auto& l : links)
-            inner_->connect(l.at("from")[0].get<int>(), l.at("from")[1].get<int>(), l.at("to")[0].get<int>(),
-                            l.at("to")[1].get<int>());
+            inner_->connect(l.at("from").at(0).get<int>(), l.at("from").at(1).get<int>(), l.at("to").at(0).get<int>(),
+                            l.at("to").at(1).get<int>());
     }
     // An input from an older file was empty while unconnected, so the inner nodes used their own
     // sliders. To render the same, it takes the range and value of the sliders it feeds, or keeps

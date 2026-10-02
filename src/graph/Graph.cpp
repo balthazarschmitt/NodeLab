@@ -369,10 +369,10 @@ void Graph::fromJson(const nlohmann::json& j, const fs::path* baseDir) {
     for (const auto& o : j.at("links")) {
         Link l;
         l.id = o.at("id").get<int>();
-        l.fromNode = o.at("from")[0].get<int>();
-        l.fromPin = o.at("from")[1].get<int>();
-        l.toNode = o.at("to")[0].get<int>();
-        l.toPin = o.at("to")[1].get<int>();
+        l.fromNode = o.at("from").at(0).get<int>();
+        l.fromPin = o.at("from").at(1).get<int>();
+        l.toNode = o.at("to").at(0).get<int>();
+        l.toPin = o.at("to").at(1).get<int>();
         const Node* from = find(l.fromNode);
         const Node* to = find(l.toNode);
         if (!from || !to) continue;

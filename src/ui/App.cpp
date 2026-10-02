@@ -117,7 +117,9 @@ void App::savePreferences() const {
     if (automated_) return;  // test runs never touch the user's preferences
     nlohmann::json custom = nlohmann::json::array();
     for (const theme::Theme& t : customThemes_) custom.push_back(t.toJson());
-    std::ofstream f(settingsDir() / "preferences.json");
+    // A temporary file renamed over the old one, so a crash mid-write keeps the old preferences.
+    const std::filesystem::path path = settingsDir() / "preferences.json", tmp = settingsDir() / "preferences.json.tmp";
+    std::ofstream f(tmp, std::ios::trunc);
     f << nlohmann::json{{"compositorDevice", gpuDevice_ ? "GPU" : "CPU"},
                         {"compositorPrecision", gpuFull_ ? "Full" : "Auto"},
                         {"inspector", inspectorOverlay_ ? "Overlay" : "Panel"},
@@ -128,6 +130,10 @@ void App::savePreferences() const {
                         {"theme", theme::current().toJson()},
                         {"customThemes", custom}}
              .dump(2);
+    f.close();
+    std::error_code ec;
+    if (f) std::filesystem::rename(tmp, path, ec);
+    else std::filesystem::remove(tmp, ec);
 }
 
 ColorManagement App::newProjectColor() const {

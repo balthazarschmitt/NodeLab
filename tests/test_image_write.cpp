@@ -598,3 +598,26 @@ TEST_CASE("export formats: settings, extensions and File Output params") {
     n->params[1] = 1;  // JPEG
     CHECK(n->paramVisible(5));
 }
+
+TEST_CASE("image files are replaced whole, through a temporary file") {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "nodelab_atomic_write";
+    fs::create_directories(dir);
+    const fs::path out = dir / "out.png";
+    Image small(3, 2), big(9, 4);
+    for (float& v : small.px) v = 0.25f;
+    for (float& v : big.px) v = 0.75f;
+    SaveOptions o;
+    std::string err;
+    REQUIRE(writeImage(pathToU8(out), small, o, err));
+    REQUIRE(writeImage(pathToU8(out), big, o, err));
+    // The second write replaced the first, and nothing else is left in the folder.
+    auto img = loadImage(pathToU8(out), err);
+    REQUIRE(img);
+    CHECK(img->w == 9);
+    CHECK(std::distance(fs::directory_iterator(dir), fs::directory_iterator()) == 1);
+    // A folder that doesn't exist fails with an error, and leaves nothing behind.
+    CHECK_FALSE(writeImage(pathToU8(dir / "missing" / "x.jpg"), big, o, err));
+    CHECK(err == "could not write file");
+    fs::remove_all(dir);
+}

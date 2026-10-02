@@ -160,3 +160,82 @@ TEST_CASE("every node survives malformed params and links from a project file") 
         }
     }
 }
+
+#include <filesystem>
+#include <fstream>
+#include <random>
+
+#include "io/ProjectFile.h"
+
+// Whole project files damaged anywhere in their structure: any value replaced by one of another
+// type, keys dropped, arrays cut short. Loading may refuse the file, but must not crash, and a
+// graph that loads must evaluate and save again.
+TEST_CASE("damaged project files load or fail cleanly") {
+    namespace fs = std::filesystem;
+    const nlohmann::json junk[] = {"text", nlohmann::json::array(), nlohmann::json::array({1, "x", nullptr}),
+                                   nlohmann::json::object(), nullptr, -1e9, 3, true, -1};
+    const fs::path tmp = fs::temp_directory_path() / "nodelab_fuzz.nlproj";
+    std::mt19937 rng(7);
+    int loaded = 0, runs = 0;
+    for (const char* file : {"examples/demo.nlproj", "examples/effects.nlproj", "examples/infrared_foliage.nlproj",
+                             "tests/ui/groupvalues.nlproj"}) {
+        std::ifstream in(fs::path(NODELAB_SOURCE_DIR) / file);
+        REQUIRE(in);
+        const nlohmann::json good = nlohmann::json::parse(in);
+        // NODELAB_FUZZ_RUNS sets a longer run for local hunting.
+        const int count = getenv("NODELAB_FUZZ_RUNS") ? atoi(getenv("NODELAB_FUZZ_RUNS")) : 150;
+        for (int run = 0; run < count; ++run, ++runs) {
+            nlohmann::json j = good;
+            // Every value in the tree, then damage one or two of them.
+            for (int k = 1 + int(rng() % 2); k > 0; --k) {
+                std::vector<nlohmann::json*> all;
+                std::vector<nlohmann::json*> stack = {&j};
+                while (!stack.empty()) {
+                    nlohmann::json* v = stack.back();
+                    stack.pop_back();
+                    all.push_back(v);
+                    if (v->is_structured())
+                        for (auto& c : *v) stack.push_back(&c);
+                }
+                nlohmann::json* v = all[1 + rng() % (all.size() - 1)];
+                switch (rng() % 3) {
+                    case 0: *v = junk[rng() % std::size(junk)]; break;
+                    case 1:
+                        if (v->is_object() && !v->empty()) v->erase(std::next(v->begin(), long(rng() % v->size())));
+                        break;
+                    default:
+                        if (v->is_array() && !v->empty()) v->erase(v->begin() + long(rng() % v->size()), v->end());
+                }
+            }
+            CAPTURE(file);
+            CAPTURE(run);
+            {
+                std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+                out << j.dump();
+            }
+            // A crash gives no CAPTURE output: NODELAB_FUZZ_TRACE keeps the last file to replay.
+            if (getenv("NODELAB_FUZZ_TRACE")) {
+                std::ofstream("fuzz_last.json") << j.dump(1);
+                fprintf(stderr, "%s %d\n", file, run);
+            }
+            Graph g;
+            nlohmann::json ui;
+            std::string err;
+            if (!loadProject(tmp.string(), g, ui, err)) continue;
+            ++loaded;
+            EvalContext ctx;
+            ctx.defaultW = 16;
+            ctx.defaultH = 9;
+            ctx.scale = 0.05f;
+            Evaluator ev;
+            for (const auto& [id, n] : g.nodes())
+                if (n->info().type == "io.output") try {
+                        ev.evaluateOutput(g, id, 0, ctx);
+                    } catch (const std::exception&) {
+                    }
+            CHECK_NOTHROW(g.toJson());
+        }
+    }
+    fs::remove(tmp);
+    MESSAGE(loaded << " of " << runs << " damaged projects still loaded");
+}

@@ -63,7 +63,11 @@ build\nodelab_tests.exe
   - New nodes are covered automatically, but add behaviour checks for anything non-trivial.
   - `test_fuzz.cpp` runs every node on 1-pixel-wide images, params at their range ends, NaN and
     infinite pixels, and malformed project params and links. It checks for crashes, hangs and
-    non-finite output (except Math and Converter nodes).
+    non-finite output (except Math and Converter nodes). Its last case loads the example projects
+    with random damage anywhere in their JSON.
+  - `test_decode_fuzz.cpp` loads damaged JPEG/PNG files and ICC profiles. Set
+    `NODELAB_FUZZ_RUNS=5000` for a longer local hunt, and `NODELAB_FUZZ_RAW=<file>` to damage a
+    camera RAW too (opt-in, as it needs a real file).
   - `test_guide.cpp` fails if a node has no `**Display Name**` entry in GUIDE.md. Document new
     nodes there (and in the README node table). GUIDE.md is compiled into the exe
     (`cmake/EmbedText.cmake`) and shown by Help > Guide.
