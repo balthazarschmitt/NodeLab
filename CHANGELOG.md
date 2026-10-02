@@ -15,6 +15,9 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 - **Faster Color Mixer and Color Grading** in scene-linear projects (about 1.3x and 1.6x at
   24 MP): the band and zone adjustments come from tables by hue and lightness, and the hue turn is
   a rotation of Oklab a/b. Legacy projects are unchanged.
+- **Quality: Fast** for Directional Blur and Bilateral Blur, on the CPU and the GPU. At 24 MP,
+  Directional Blur takes 1.7 s instead of 8 s and Bilateral Blur 3 s instead of 13 s. Fast
+  changes the look slightly, so High stays the default and existing projects are unchanged.
 
 ## 0.19.0 (2026-10-02)
 

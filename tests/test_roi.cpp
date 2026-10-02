@@ -175,6 +175,7 @@ void checkSettings() {
         {"filter.blur", {{"Size X", 40.0}, {"Size Y", 7.0}}},
         {"filter.blur", {{"Relative", true}, {"Factor X", 5.0}, {"Factor Y", 3.0}, {"Aspect Correction", 1}}},
         {"filter.bilateral_blur", {{"Radius", 20.0}}},
+        {"filter.bilateral_blur", {{"Radius", 20.0}, {"Quality", 1}}},
         {"filter.denoise", {{"Luminance", 60.0}, {"Detail", 20.0}, {"Color", 50.0}}},
         {"filter.denoise", {{"Color", 100.0}, {"Color Detail", 0.0}}},
         {"filter.dilate_erode", {{"Mode", 1}, {"Distance", -9.0}}},

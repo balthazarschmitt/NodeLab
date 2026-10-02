@@ -673,12 +673,17 @@ Sizes are in full-resolution pixels.
   - **Spin:** rotates around the centre, like a spinning camera.
   - **Zoom:** zooms from the centre, like a zoom-burst photo.
   - **Center X/Y:** the centre for Spin and Zoom, 0..1 across the image.
+- **Quality:** High takes every sample. Fast builds the same streak by repeatedly averaging the
+  image with a moved copy of itself, about 5x faster on large photos. It is slightly softer, and
+  Zoom fades geometrically rather than linearly.
 
 **Bilateral Blur**
 - Smooths areas while keeping edges sharp (skin smoothing, noise reduction, painterly looks).
 - Radius: how far to smooth. Color Sigma: how different colours may be and still be blended.
   Smaller values keep more edges.
 - Determinator: an optional image whose edges are used instead of the input's own.
+- **Quality:** High weighs a full square of neighbours. Fast blurs across, then down (about 4x
+  faster on large photos); it can leave faint streaks along diagonal edges.
 
 **Denoise**
 - Removes noise from photos, with Lightroom's Detail-panel controls. Put it right after the

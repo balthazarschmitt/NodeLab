@@ -124,7 +124,29 @@ public:
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Distance", 30.0f, 0.0f, 400.0f), ParamDesc::Float("Angle", 0.0f, -180.0f, 180.0f),
                    ParamDesc::Float("Spin", 0.0f, -90.0f, 90.0f), ParamDesc::Float("Zoom", 0.0f, 0.0f, 1.0f),
-                   ParamDesc::Float("Center X", 0.5f, 0.0f, 1.0f), ParamDesc::Float("Center Y", 0.5f, 0.0f, 1.0f)}})
+                   ParamDesc::Float("Center X", 0.5f, 0.0f, 1.0f), ParamDesc::Float("Center Y", 0.5f, 0.0f, 1.0f),
+                   ParamDesc::Enum("Quality", 0, {"High", "Fast"})}})
+    // One step along the blur's path, about the centre: q -> A q + t (q relative to the centre).
+    struct Affine {
+        float a, b, c, d, tx, ty;
+        Affine twice() const {
+            return {a * a + b * c, a * b + b * d, c * a + d * c, c * b + d * d, a * tx + b * ty + tx, c * tx + d * ty + ty};
+        }
+    };
+    // Fast: N = 2^passes samples spread over the same path (zoom shrinks geometrically, not
+    // linearly). Each pass averages the image with itself moved 2^j steps along the path, so N
+    // samples cost log2(N) bilinear lookups instead of N, at the price of a little extra softness
+    // from resampling resampled pixels.
+    static int fastPasses(int steps) {
+        int k = 0;
+        while ((1 << k) < steps) ++k;
+        return k;
+    }
+    static Affine fastStep(int n, float spin, float zoom, float dx, float dy) {
+        const float th = spin / float(n - 1), r = std::pow(std::max(1.0f - zoom, 0.01f), 1.0f / float(n - 1));
+        return {r * std::cos(th), -r * std::sin(th), r * std::sin(th), r * std::cos(th), dx / float(n - 1), dy / float(n - 1)};
+    }
+
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         ImagePtr src = toImage(in[0], 0, 0);
         if (!src) return;
@@ -133,6 +155,24 @@ public:
         const float cx = paramF(4) * src->w, cy = paramF(5) * src->h;
         const int steps = std::clamp(int(std::max({dist, std::fabs(spin) * src->w * 0.5f, zoom * src->w * 0.5f})), 1, 96);
         const float dx = std::cos(ang) * dist, dy = std::sin(ang) * dist;
+        if (paramI(6) == 1) {
+            const int passes = fastPasses(steps);
+            ImagePtr cur = src;
+            if (passes > 0) {
+                Affine m = fastStep(1 << passes, spin, zoom, dx, dy);
+                for (int j = 0; j < passes; ++j, m = m.twice()) {
+                    const Image& from = *cur;
+                    cur = mapImage(from, [&](int x, int y, const float* s, float* d) {
+                        const float qx = x + 0.5f - cx, qy = y + 0.5f - cy;
+                        float c[4];
+                        sampleBilinear(from, m.a * qx + m.b * qy + m.tx + cx, m.c * qx + m.d * qy + m.ty + cy, c);
+                        for (int k = 0; k < 4; ++k) d[k] = 0.5f * (s[k] + c[k]);
+                    });
+                }
+            }
+            out[0] = Value(cur);
+            return;
+        }
         // The steps' rotations, scales and offsets are the same for every pixel, so work them out
         // once (in the same order of operations, so results are unchanged).
         struct Step {
@@ -165,6 +205,28 @@ public:
         const float dist = paramF(0) * ctx.scale, ang = paramF(1) * kPi / 180.0f;
         const float spin = paramF(2) * kPi / 180.0f, zoom = paramF(3);
         const int steps = std::clamp(int(std::max({dist, std::fabs(spin) * w * 0.5f, zoom * w * 0.5f})), 1, 96);
+        if (paramI(6) == 1) {
+            // The fast passes, as on the CPU (one plain copy when there is nothing to blur).
+            const int passes = fastPasses(steps), runs = std::max(passes, 1);
+            Affine m = fastStep(1 << runs, spin, zoom, std::cos(ang) * dist, std::sin(ang) * dist);
+            Value cur = in[0];
+            for (int j = 0; j < runs; ++j, m = m.twice()) {
+                gpu::PointOp op = gatherOp(cur, passes == 0 ? "    out0 = fetch0(p);" : R"(
+    vec2 c = vec2(P[6], P[7]);
+    vec2 q = vec2(p) + 0.5 - c;
+    out0 = 0.5 * (fetch0(p) + bilinear0(vec2(P[0] * q.x + P[1] * q.y + P[4], P[2] * q.x + P[3] * q.y + P[5]) + c, false));
+)",
+                                           {m.a, m.b, m.c, m.d, m.tx, m.ty, paramF(4) * float(w), paramF(5) * float(h)});
+                op.inlinable = false;
+                if (j + 1 < runs) {
+                    op.full = true;
+                    cur = gpu::runPass(ctx, op, {cur}, {true})[0];
+                } else {
+                    gpu::runPoint(ctx, *this, op, {cur}, out);
+                }
+            }
+            return;
+        }
         gpu::PointOp op = gatherOp(in[0], R"(
     int steps = int(P[0]);
     vec2 c = vec2(P[4], P[5]) * vec2(size0);
@@ -189,7 +251,8 @@ public:
     NODELAB_NODE({"filter.bilateral_blur", "Bilateral Blur", "Filter",
                   {{"Image", PinType::Image}, {"Determinator", PinType::Image}},
                   {{"Image", PinType::Image}},
-                  {ParamDesc::Float("Radius", 8.0f, 0.0f, 60.0f), ParamDesc::Float("Color Sigma", 0.1f, 0.001f, 1.0f)}})
+                  {ParamDesc::Float("Radius", 8.0f, 0.0f, 60.0f), ParamDesc::Float("Color Sigma", 0.1f, 0.001f, 1.0f),
+                   ParamDesc::Enum("Quality", 0, {"High", "Fast"})}})
     int roiPadding(const EvalContext& ctx) const override { return int(std::ceil(paramF(0) * ctx.scale)) + 1; }
     void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
         ImagePtr src = toImage(in[0], 0, 0);
@@ -210,6 +273,29 @@ public:
             float spatial;
         };
         const int w = src->w, h = src->h;
+        if (paramI(2) == 1) {
+            // Fast: a horizontal then a vertical pass (the separable approximation of Pham and
+            // van Vliet), both weighted by the determinator's colours: 2 x 15 taps, not 15 x 15.
+            auto pass = [&](const Image& from, bool vertical) {
+                return mapImage(from, [&](int x, int y, const float* s, float* d) {
+                    const float* c0 = det->pixel(size_t(y) * w + x);
+                    float acc[4] = {0, 0, 0, 0}, wsum = 0;
+                    for (int o = -ri; o <= ri; o += step) {
+                        const int xx = vertical ? x : std::clamp(x + o, 0, w - 1), yy = vertical ? std::clamp(y + o, 0, h - 1) : y;
+                        const size_t idx = size_t(yy) * w + xx;
+                        const float* c = det->pixel(idx);
+                        const float dc = (c[0] - c0[0]) * (c[0] - c0[0]) + (c[1] - c0[1]) * (c[1] - c0[1]) + (c[2] - c0[2]) * (c[2] - c0[2]);
+                        const float wt = std::exp(-float(o * o) * inv2s2 - dc * inv2c2);
+                        const float* p = from.pixel(idx);
+                        for (int k = 0; k < 4; ++k) acc[k] += p[k] * wt;
+                        wsum += wt;
+                    }
+                    for (int k = 0; k < 4; ++k) d[k] = wsum > 0 ? acc[k] / wsum : s[k];
+                });
+            };
+            out[0] = Value(ImagePtr(pass(*pass(*src, false), true)));
+            return;
+        }
         std::vector<Tap> taps;
         for (int j = -ri; j <= ri; j += step)
             for (int i = -ri; i <= ri; i += step) taps.push_back({i, j, ptrdiff_t(j) * w + i, -float(i * i + j * j) * inv2s2});
@@ -241,6 +327,38 @@ public:
         const float r = paramF(0) * ctx.scale, cs = paramF(1);
         const int ri = int(std::ceil(r));
         const float sr = std::max(r * 0.5f, 0.5f);
+        if (paramI(2) == 1) {
+            // The fast passes, as on the CPU; pin 1 is the image the edges come from.
+            const Value guide = det ? in[1] : in[0];
+            Value cur = in[0];
+            for (int pass = 0; pass < 2; ++pass) {
+                gpu::PointOp op = gatherOp(cur, R"(
+    int ri = int(P[0]), step = int(P[1]);
+    ivec2 dir = P[4] != 0.0 ? ivec2(0, 1) : ivec2(1, 0);
+    vec3 c0 = fetch1(p).rgb;
+    vec4 acc = vec4(0.0);
+    float wsum = 0.0;
+    for (int o = -ri; o <= ri; o += step) {
+        ivec2 q = p + dir * o;
+        vec3 c = fetch1(q).rgb - c0;
+        float wt = exp(-float(o * o) * P[2] - dot(c, c) * P[3]);
+        acc += fetch0(q) * wt;
+        wsum += wt;
+    }
+    out0 = wsum > 0.0 ? acc / wsum : fetch0(p);
+)",
+                                           {float(ri), float(std::max(1, ri / 7)), 1.0f / (2.0f * sr * sr), 1.0f / (2.0f * cs * cs), float(pass)},
+                                           {0, 1});
+                op.inlinable = false;
+                if (pass == 0) {
+                    op.full = true;
+                    cur = gpu::runPass(ctx, op, {cur, guide}, {true})[0];
+                } else {
+                    gpu::runPoint(ctx, *this, op, {cur, guide}, out);
+                }
+            }
+            return;
+        }
         gpu::PointOp op = gatherOp(in[0], R"(
     int ri = int(P[0]), step = int(P[1]);
     bool det = P[4] != 0.0;

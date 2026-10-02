@@ -192,3 +192,32 @@ TEST_CASE("noise is deterministic and in range") {
         CHECK(a->data[i] <= 1.05f);
     }
 }
+
+TEST_CASE("Fast directional and bilateral blurs stay close to High quality") {
+    auto meanDiff = [](const Image& a, const Image& b) {
+        double s = 0;
+        for (size_t i = 0; i < a.pixelCount(); ++i)
+            for (int k = 0; k < 3; ++k) s += std::fabs(a.pixel(i)[k] - b.pixel(i)[k]);
+        return float(s / (a.pixelCount() * 3));
+    };
+    struct Case {
+        const char* type;
+        std::vector<std::pair<int, float>> params;
+        int quality;
+    };
+    for (const Case& c : {Case{"filter.directional_blur", {{0, 6.0f}}, 6}, Case{"filter.directional_blur", {{0, 9.0f}, {1, 40.0f}, {2, 5.0f}}, 6},
+                          Case{"filter.bilateral_blur", {{0, 4.0f}, {1, 0.3f}}, 2}}) {
+        CAPTURE(c.type);
+        Graph g;
+        Node* src = gradientSource(g);
+        Node* hi = g.addNode(c.type);
+        Node* lo = g.addNode(c.type);
+        for (auto [i, v] : c.params) hi->params[size_t(i)] = v, lo->params[size_t(i)] = v;
+        lo->params[size_t(c.quality)] = 1;
+        g.connect(src->id, 0, hi->id, 0);
+        g.connect(src->id, 0, lo->id, 0);
+        ImagePtr s = evalImage(g, src->id), a = evalImage(g, hi->id), b = evalImage(g, lo->id);
+        CHECK(meanDiff(*a, *s) > 0.002f);  // it does blur
+        CHECK(meanDiff(*a, *b) < 0.25f * meanDiff(*a, *s));
+    }
+}
