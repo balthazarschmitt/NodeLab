@@ -136,21 +136,6 @@ void finishLinear(Image& img) {
     });
 }
 
-void toOklch(const float* rgb, float& L, float& C, float& hDeg) {
-    float lab[3];
-    colorsci::rgbToOklab(rgb, lab);
-    L = lab[0];
-    C = std::sqrt(lab[1] * lab[1] + lab[2] * lab[2]);
-    hDeg = std::atan2(lab[2], lab[1]) * 57.29578f;
-    if (hDeg < 0) hDeg += 360.0f;
-}
-
-void fromOklch(float L, float C, float hDeg, float* rgb) {
-    const float h = hDeg * 0.017453293f;
-    const float lab[3] = {L, C * std::cos(h), C * std::sin(h)};
-    colorsci::oklabToRgb(lab, rgb);
-}
-
 // Blends the adjusted image back over the source by a Factor channel (Lightroom's masks plug in here).
 void applyFactor(const Node& node, const Image& src, Image& img, const Value& facIn) {
     ChannelPtr fac = channelOr(facIn, 1.0f);
@@ -928,6 +913,19 @@ void bandWeightsAt(float hueDeg, const float* centre, float wgt[8]) {
     wgt[0] = 1.0f;
 }
 
+// sin and cos of an angle in radians, by Taylor series where |x| < 1 (within 1e-8 there, and
+// several times faster than MinGW's sinf/cosf).
+void sinCosSmall(float x, float& s, float& c) {
+    if (std::fabs(x) >= 1.0f) {
+        s = std::sin(x);
+        c = std::cos(x);
+        return;
+    }
+    const float x2 = x * x;
+    s = x * (1.0f - x2 / 6.0f * (1.0f - x2 / 20.0f * (1.0f - x2 / 42.0f * (1.0f - x2 / 72.0f * (1.0f - x2 / 110.0f)))));
+    c = 1.0f - x2 / 2.0f * (1.0f - x2 / 12.0f * (1.0f - x2 / 30.0f * (1.0f - x2 / 56.0f * (1.0f - x2 / 90.0f))));
+}
+
 float hueGap(const float* centre, int from, int to) {
     float d = std::fabs(centre[to] - centre[from]);
     return d > 180.0f ? 360.0f - d : d;
@@ -1057,17 +1055,41 @@ private:
         float shift[8];
         for (int i = 0; i < 8; ++i)
             shift[i] = hue[i] * 0.5f * (hue[i] > 0 ? hueGap(centre, i, (i + 1) % 8) : hueGap(centre, i, (i + 7) % 8));
-        auto img = mapImage(*src, [&](int, int, const float* s, float* d) {
-            float L, C, hDeg;
-            toOklch(s, L, C, hDeg);
+        // The blended band adjustments (hue move in radians, saturation, luminance) depend only
+        // on the hue, so they come from a table at 0.1 degree steps, interpolated.
+        constexpr int kSteps = 3600;
+        std::vector<float> table(size_t(kSteps + 1) * 3);
+        for (int i = 0; i <= kSteps; ++i) {
             float wgt[8];
-            bandWeightsAt(hDeg, centre, wgt);
-            float dh = 0, ds = 0, dl = 0;
-            for (int i = 0; i < 8; ++i) dh += wgt[i] * shift[i], ds += wgt[i] * sat[i], dl += wgt[i] * lum[i];
+            bandWeightsAt(float(i % kSteps) * (360.0f / kSteps), centre, wgt);
+            float* t = &table[size_t(i) * 3];
+            t[0] = t[1] = t[2] = 0.0f;
+            for (int b = 0; b < 8; ++b) t[0] += wgt[b] * shift[b], t[1] += wgt[b] * sat[b], t[2] += wgt[b] * lum[b];
+            t[0] *= 0.017453293f;
+        }
+        auto img = mapImage(*src, [&](int, int, const float* s, float* d) {
+            float lab[3];
+            colorsci::rgbToOklab(s, lab);
+            const float C = std::sqrt(lab[1] * lab[1] + lab[2] * lab[2]);
+            float hDeg = std::atan2(lab[2], lab[1]) * 57.29578f;
+            if (hDeg < 0) hDeg += 360.0f;
+            const float f = hDeg > 0.0f ? std::min(hDeg * (kSteps / 360.0f), float(kSteps)) : 0.0f;  // NaN to 0
+            const int i = std::min(int(f), kSteps - 1);
+            const float u = f - float(i);
+            const float* t0 = &table[size_t(i) * 3];
+            const float* t1 = t0 + 3;
             // Greys have no hue, so the bands fade out as colour does.
             const float colourful = smooth(0.0f, 0.04f, C);
-            fromOklch(L, C * std::max(0.0f, 1.0f + ds * colourful), hDeg + dh * colourful, d);
-            const float lm = std::exp2(dl * colourful);
+            const float dh = (t0[0] + (t1[0] - t0[0]) * u) * colourful;
+            const float ds = (t0[1] + (t1[1] - t0[1]) * u) * colourful;
+            const float dl = (t0[2] + (t1[2] - t0[2]) * u) * colourful;
+            // Turning the hue by dh and scaling chroma is a rotation and scale of (a, b).
+            const float m = std::max(0.0f, 1.0f + ds);
+            float c, sn;
+            sinCosSmall(dh, sn, c);
+            const float o[3] = {lab[0], m * (lab[1] * c - lab[2] * sn), m * (lab[1] * sn + lab[2] * c)};
+            colorsci::oklabToRgb(o, d);
+            const float lm = std::exp2(dl);
             for (int k = 0; k < 3; ++k) d[k] *= lm;
             d[3] = s[3];
         });
@@ -1209,10 +1231,12 @@ private:
         if (!any) return src;
         const float pivot = 0.5f - paramF(14) / 100 * 0.3f;
         const float k = 1.0f + 3.0f * (1.0f - paramF(13) / 100);
-        auto img = mapImage(*src, [&](int, int, const float* s, float* d) {
-            float lab[3];
-            colorsci::rgbToOklab(s, lab);
-            const float l = clamp01(lab[0]);
+        // The shifts of L, a and b depend only on the pixel's lightness (clamped to 0..1), so
+        // they come from a table, interpolated: the two powers per pixel cost more than the rest.
+        constexpr int kSteps = 4096;
+        std::vector<float> table(size_t(kSteps + 1) * 3);
+        for (int i = 0; i <= kSteps; ++i) {
+            const float l = float(i) / kSteps;
             float wz[4];
             wz[0] = std::pow(1.0f - smooth(0.0f, 2.0f * pivot, l), k);
             wz[2] = std::pow(smooth(2.0f * pivot - 1.0f, 1.0f, l), k);
@@ -1220,12 +1244,25 @@ private:
             wz[3] = 1.0f;
             // Tints fade out toward black, so black stays neutral.
             const float tintFade = smooth(0.0f, 0.25f, l);
-            float L = lab[0], a = lab[1], b = lab[2];
+            float* t = &table[size_t(i) * 3];
+            t[0] = t[1] = t[2] = 0.0f;
             for (int z = 0; z < 4; ++z) {
-                a += dir[z][0] * amt[z] * wz[z] * tintFade;
-                b += dir[z][1] * amt[z] * wz[z] * tintFade;
-                L += lift[z] * wz[z];
+                t[0] += lift[z] * wz[z];
+                t[1] += dir[z][0] * amt[z] * wz[z] * tintFade;
+                t[2] += dir[z][1] * amt[z] * wz[z] * tintFade;
             }
+        }
+        auto img = mapImage(*src, [&](int, int, const float* s, float* d) {
+            float lab[3];
+            colorsci::rgbToOklab(s, lab);
+            const float f = lab[0] > 0.0f ? std::min(lab[0], 1.0f) * kSteps : 0.0f;  // NaN to 0
+            const int i = std::min(int(f), kSteps - 1);
+            const float u = f - float(i);
+            const float* t0 = &table[size_t(i) * 3];
+            const float* t1 = t0 + 3;
+            const float L = lab[0] + t0[0] + (t1[0] - t0[0]) * u;
+            const float a = lab[1] + t0[1] + (t1[1] - t0[1]) * u;
+            const float b = lab[2] + t0[2] + (t1[2] - t0[2]) * u;
             const float o[3] = {std::max(L, 0.0f), a, b};
             colorsci::oklabToRgb(o, d);
             d[3] = s[3];

@@ -12,6 +12,9 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
     16-bit: 1.35 s to 0.66 s).
   - Embedded ICC profiles are found by reading only the file's header segments, not the
     whole file (up to 0.4 s saved per image). RAW files are read in one go.
+- **Faster Color Mixer and Color Grading** in scene-linear projects (about 1.3x and 1.6x at
+  24 MP): the band and zone adjustments come from tables by hue and lightness, and the hue turn is
+  a rotation of Oklab a/b. Legacy projects are unchanged.
 
 ## 0.19.0 (2026-10-02)
 
