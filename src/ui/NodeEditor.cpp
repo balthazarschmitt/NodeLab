@@ -19,6 +19,7 @@
 #include "ui/Eyedropper.h"
 #include "ui/FileDialog.h"
 #include "ui/GuideWindow.h"
+#include "ui/Theme.h"
 
 namespace {
 
@@ -41,19 +42,7 @@ bool containsNoCase(const std::string& hay, const char* needle) {
     return h.find(n) != std::string::npos;
 }
 
-ImU32 categoryColor(const std::string& cat) {
-    if (cat == "Input / Output") return IM_COL32(56, 108, 78, 255);
-    if (cat == "Color") return IM_COL32(64, 88, 148, 255);
-    if (cat == "Mix") return IM_COL32(104, 74, 136, 255);
-    if (cat == "Converter") return IM_COL32(42, 108, 118, 255);
-    if (cat == "Filter") return IM_COL32(120, 70, 60, 255);
-    if (cat == "Transform") return IM_COL32(110, 96, 48, 255);
-    if (cat == "Matte") return IM_COL32(70, 70, 110, 255);
-    if (cat == "Texture") return IM_COL32(126, 76, 104, 255);
-    if (cat == "Utility") return IM_COL32(70, 76, 84, 255);
-    if (cat == "Group") return IM_COL32(40, 120, 60, 255);
-    return IM_COL32(80, 80, 92, 255);
-}
+ImU32 categoryColor(const std::string& cat) { return theme::categoryColor(cat); }
 
 bool pinBacked(const NodeInfo& info, int param) {
     for (const auto& p : info.inputs)
@@ -125,9 +114,9 @@ void drawValueField(ImDrawList* dl, const ImRect& box, const char* label, float 
                     float zoom, bool hovered) {
     const float frac = d.max > d.min ? std::clamp((v - d.min) / (d.max - d.min), 0.0f, 1.0f) : 0.0f;
     const float round = 3.0f * zoom;
-    dl->AddRectFilled(box.Min, box.Max, hovered ? IM_COL32(34, 34, 40, 255) : IM_COL32(26, 26, 30, 255), round);
+    dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::FieldHover : theme::Field), round);
     dl->AddRectFilled(box.Min, ImVec2(box.Min.x + box.GetWidth() * frac, box.Max.y),
-                      hovered ? IM_COL32(78, 108, 170, 255) : IM_COL32(60, 88, 146, 255), round);
+                      theme::col(hovered ? theme::SliderFillHover : theme::SliderFill), round);
     if (fs < 6.0f) return;
     char buf[32];
     std::snprintf(buf, sizeof(buf), "%.3f", v);
@@ -136,17 +125,17 @@ void drawValueField(ImDrawList* dl, const ImRect& box, const char* label, float 
     const float ty = box.GetCenter().y - fs * 0.5f;
     const float pad = 6.0f * zoom;
     ImVec4 clip(box.Min.x, box.Min.y, box.Max.x - vs.x - pad * 2, box.Max.y);
-    dl->AddText(font, fs, ImVec2(box.Min.x + pad, ty), IM_COL32(222, 222, 228, 255), label, nullptr, 0.0f, &clip);
-    dl->AddText(font, fs, ImVec2(box.Max.x - pad - vs.x, ty), IM_COL32(240, 240, 245, 255), buf);
+    dl->AddText(font, fs, ImVec2(box.Min.x + pad, ty), theme::col(theme::FieldText), label, nullptr, 0.0f, &clip);
+    dl->AddText(font, fs, ImVec2(box.Max.x - pad - vs.x, ty), theme::col(theme::FieldValue), buf);
 }
 
 }  // namespace
 
 ImU32 pinColor(PinType t) {
     switch (t) {
-        case PinType::Image: return IM_COL32(236, 184, 72, 255);    // amber
-        case PinType::Channel: return IM_COL32(176, 176, 190, 255); // gray
-        case PinType::Number: return IM_COL32(96, 160, 236, 255);   // blue
+        case PinType::Image: return theme::col(theme::WireImage);
+        case PinType::Channel: return theme::col(theme::WireChannel);
+        case PinType::Number: return theme::col(theme::WireNumber);
     }
     return IM_COL32_WHITE;
 }
@@ -318,7 +307,7 @@ int NodeEditor::hitLink(const Graph& g, ImVec2 p) const {
 void NodeEditor::drawGrid(ImDrawList* dl) const {
     float step = 24.0f * zoom_;
     while (step < 10.0f) step *= 4.0f;
-    const ImU32 col = IM_COL32(44, 44, 52, 255);
+    const ImU32 col = theme::col(theme::Grid);
     for (float x = std::fmod(pan_.x, step); x < size_.x; x += step)
         dl->AddLine(ImVec2(origin_.x + x, origin_.y), ImVec2(origin_.x + x, origin_.y + size_.y), col);
     for (float y = std::fmod(pan_.y, step); y < size_.y; y += step)
@@ -400,7 +389,7 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
     const float z = zoom_;
     const float fs = ImGui::GetFontSize() * z;
     const bool showText = fs >= 5.0f;
-    const ImU32 textCol = IM_COL32(222, 222, 228, 255);
+    const ImU32 textCol = theme::col(theme::FieldText);
     const ImVec4 bclip(box.Min.x + 3 * z, box.Min.y, box.Max.x - 3 * z, box.Max.y);
     auto text = [&](float x, const char* s, ImU32 col) {
         if (showText) dl->AddText(ImGui::GetFont(), fs, ImVec2(x, box.GetCenter().y - fs * 0.5f), col, s, nullptr, 0.0f, &bclip);
@@ -434,7 +423,7 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
                 }
             }
             if (hovered && !path.empty()) ImGui::SetTooltip("%s", path.c_str());
-            dl->AddRectFilled(box.Min, box.Max, hovered ? IM_COL32(70, 74, 88, 255) : IM_COL32(54, 56, 66, 255), 3 * z);
+            dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::ButtonHover : theme::Button), 3 * z);
             text(box.Min.x + 6 * z, label.c_str(), textCol);
             break;
         }
@@ -446,7 +435,7 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
                 enumParam_ = i;
                 ImGui::OpenPopup("##enum");
             }
-            dl->AddRectFilled(box.Min, box.Max, hovered ? IM_COL32(70, 74, 88, 255) : IM_COL32(54, 56, 66, 255), 3 * z);
+            dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::ButtonHover : theme::Button), 3 * z);
             text(box.Min.x + 6 * z, opt, textCol);
             float ax = box.Max.x - 10 * z, ay = box.GetCenter().y, as = 3.5f * z;
             dl->AddTriangleFilled(ImVec2(ax - as, ay - as * 0.6f), ImVec2(ax + as, ay - as * 0.6f), ImVec2(ax, ay + as * 0.8f), textCol);
@@ -475,10 +464,10 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
             }
             const float sz = box.GetHeight() - 4 * z;
             ImVec2 c0(box.Min.x + 2 * z, box.GetCenter().y - sz * 0.5f), c1(c0.x + sz, c0.y + sz);
-            dl->AddRectFilled(c0, c1, hovered ? IM_COL32(70, 74, 88, 255) : IM_COL32(54, 56, 66, 255), 3 * z);
+            dl->AddRectFilled(c0, c1, theme::col(hovered ? theme::ButtonHover : theme::Button), 3 * z);
             if (n.paramB(i))
                 dl->AddRectFilled(ImVec2(c0.x + 3 * z, c0.y + 3 * z), ImVec2(c1.x - 3 * z, c1.y - 3 * z),
-                                  IM_COL32(90, 130, 210, 255), 2 * z);
+                                  theme::col(theme::CheckFill), 2 * z);
             text(c1.x + 6 * z, d.name.c_str(), textCol);
             break;
         }
@@ -501,7 +490,7 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
                 break;
             }
             if (canInteract && button()) editing_ = EditState{n.id, i, 0, false};
-            dl->AddRectFilled(box.Min, box.Max, hovered ? IM_COL32(34, 34, 40, 255) : IM_COL32(26, 26, 30, 255), 3 * z);
+            dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::FieldHover : theme::Field), 3 * z);
             text(box.Min.x + 6 * z, n.paramS(i).c_str(), IM_COL32(200, 230, 200, 255));
             if (hovered) ImGui::SetTooltip("%s - click to edit", d.name.c_str());
             break;
@@ -561,7 +550,7 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
             if (canInteract && button()) ImGui::OpenPopup("##color");
             const float sw = box.GetHeight() * 1.6f;
             ImRect swatch(ImVec2(box.Max.x - sw, box.Min.y), box.Max);
-            dl->AddRectFilled(box.Min, box.Max, hovered ? IM_COL32(34, 34, 40, 255) : IM_COL32(26, 26, 30, 255), 3 * z);
+            dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::FieldHover : theme::Field), 3 * z);
             dl->AddRectFilled(swatch.Min, swatch.Max,
                               ImGui::GetColorU32(ImVec4(std::min(c[0], 1.0f), std::min(c[1], 1.0f), std::min(c[2], 1.0f), 1.0f)), 3 * z);
             text(box.Min.x + 6 * z, d.name.c_str(), textCol);
@@ -597,7 +586,7 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
                 }
             }
             if (hovered && !path.empty()) ImGui::SetTooltip("%s", path.c_str());
-            dl->AddRectFilled(box.Min, box.Max, hovered ? IM_COL32(70, 74, 88, 255) : IM_COL32(54, 56, 66, 255), 3 * z);
+            dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::ButtonHover : theme::Button), 3 * z);
             text(box.Min.x + 6 * z, label.c_str(), textCol);
             break;
         }
@@ -618,7 +607,7 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
         if (const Link* l = g.inputLink(n.id, 0))
             if (const Node* from = g.find(l->fromNode)) col = pinColor(from->info().outputs[l->fromPin].type);
         dl->AddCircleFilled(c, 6.0f * z + 1.0f, col);
-        dl->AddCircle(c, 6.0f * z + 1.0f, selection_.count(n.id) ? IM_COL32(240, 196, 100, 255) : IM_COL32(20, 20, 24, 255), 0,
+        dl->AddCircle(c, 6.0f * z + 1.0f, selection_.count(n.id) ? theme::col(theme::Selection) : theme::col(theme::NodeOutline), 0,
                       selection_.count(n.id) ? 2.0f : 1.0f);
         (void)r;
         return false;
@@ -633,22 +622,22 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
 
     // body + title
     dl->AddRectFilled(ImVec2(L.min.x + 3, L.min.y + 4), ImVec2(L.max.x + 3, L.max.y + 4), IM_COL32(0, 0, 0, 70), round);
-    dl->AddRectFilled(L.min, L.max, IM_COL32(40, 40, 46, 245), round);
-    ImU32 titleCol = n.id == preview ? IM_COL32(196, 122, 38, 255) : categoryColor(info.category);
-    if (n.muted) titleCol = IM_COL32(92, 58, 58, 255);
+    dl->AddRectFilled(L.min, L.max, theme::col(theme::NodeBody), round);
+    ImU32 titleCol = n.id == preview ? theme::col(theme::PreviewTitle) : categoryColor(info.category);
+    if (n.muted) titleCol = theme::col(theme::MutedTitle);
     dl->AddRectFilled(L.min, ImVec2(L.max.x, L.min.y + L.titleH), titleCol, round,
                       n.collapsed ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersTop);
     if (showText) {
         std::string title = n.label.empty() ? info.displayName : n.label;
         if (n.muted) title += "  (muted)";
         dl->AddText(ImGui::GetFont(), fs, ImVec2(L.min.x + (n.collapsed ? 14 : 8) * z, L.min.y + (L.titleH - fs) * 0.5f),
-                    n.muted ? IM_COL32(200, 170, 170, 255) : IM_COL32(245, 245, 250, 255), title.c_str(), nullptr, 0.0f, &clip);
+                    n.muted ? IM_COL32(200, 170, 170, 255) : theme::col(theme::TitleText), title.c_str(), nullptr, 0.0f, &clip);
     }
     if (n.muted && !n.collapsed && !L.inPins.empty() && !L.outPins.empty()) {
         // Red pass-through line like Blender's muted nodes.
         dl->AddLine(L.inPins[0], L.outPins[0], IM_COL32(200, 70, 70, 200), std::max(1.5f, 2.0f * z));
     }
-    dl->AddRect(L.min, L.max, selected ? IM_COL32(240, 196, 100, 255) : IM_COL32(18, 18, 22, 255), round, 0,
+    dl->AddRect(L.min, L.max, selected ? theme::col(theme::Selection) : theme::col(theme::NodeOutline), round, 0,
                 selected ? 2.0f : 1.0f);
     if (showTimings && showText)
         if (auto t = timings_.find(n.id); t != timings_.end()) {
@@ -659,7 +648,7 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
             std::snprintf(buf, sizeof buf, t->second < 10.0 ? "%.1f ms%s" : "%.0f ms%s", t->second, onGpu ? "  GPU" : "");
             const float tfs = fs * 0.85f;
             dl->AddText(ImGui::GetFont(), tfs, ImVec2(L.min.x + 4 * z, L.min.y - tfs - 3 * z),
-                        t->second >= 50.0 ? IM_COL32(236, 170, 80, 255) : IM_COL32(170, 170, 178, 220), buf);
+                        t->second >= 50.0 ? IM_COL32(236, 170, 80, 255) : ImGui::GetColorU32(ImGuiCol_TextDisabled), buf);
         }
 
     // Only the topmost node under the mouse gets interactive widgets, so overlapping nodes behave.
@@ -670,13 +659,13 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
         float pr = std::max(3.0f, kPinR * z) * (hovered ? 1.4f : 1.0f);
         if (t == PinType::Image) {
             dl->AddRectFilled(ImVec2(p.x - pr, p.y - pr), ImVec2(p.x + pr, p.y + pr), pinColor(t), 1.5f);
-            dl->AddRect(ImVec2(p.x - pr, p.y - pr), ImVec2(p.x + pr, p.y + pr), IM_COL32(20, 20, 24, 255), 1.5f);
+            dl->AddRect(ImVec2(p.x - pr, p.y - pr), ImVec2(p.x + pr, p.y + pr), theme::col(theme::NodeOutline), 1.5f);
         } else {
             dl->AddCircleFilled(p, pr, pinColor(t));
-            dl->AddCircle(p, pr, IM_COL32(20, 20, 24, 255));
+            dl->AddCircle(p, pr, theme::col(theme::NodeOutline));
         }
     };
-    const ImU32 labelCol = IM_COL32(212, 212, 218, 255);
+    const ImU32 labelCol = theme::col(theme::LabelText);
     if (n.collapsed) {
         for (int i = 0; i < int(info.outputs.size()); ++i) drawPin(L.outPins[i], info.outputs[i].type, false);
         for (int i = 0; i < int(info.inputs.size()); ++i) drawPin(L.inPins[i], info.inputs[i].type, false);
@@ -862,7 +851,7 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(canvas.Min, canvas.Max, true);
-    dl->AddRectFilled(canvas.Min, canvas.Max, IM_COL32(30, 30, 36, 255));
+    dl->AddRectFilled(canvas.Min, canvas.Max, theme::col(theme::Canvas));
     drawGrid(dl);
     drawFrames(dl, g);
     drawLinks(dl, g);
@@ -903,7 +892,7 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
     if (g.nodes().empty()) {
         const char* hint = "Right-click to add a node";
         ImVec2 ts = ImGui::CalcTextSize(hint);
-        dl->AddText(ImVec2(canvas.GetCenter().x - ts.x * 0.5f, canvas.GetCenter().y), IM_COL32(120, 120, 130, 255), hint);
+        dl->AddText(ImVec2(canvas.GetCenter().x - ts.x * 0.5f, canvas.GetCenter().y), ImGui::GetColorU32(ImGuiCol_TextDisabled), hint);
     }
     dl->PopClipRect();
 
@@ -1418,6 +1407,8 @@ void NodeEditor::drawNodeMenu(Graph& g, int& preview, Result& r) {
     Node* mn = g.find(menuNode_);
     if (ImGui::MenuItem("Mute", "M", mn && mn->muted) && toggleMute(g)) r.evalChanged = r.docChanged = true;
     if (ImGui::MenuItem("Collapse", "H", mn && mn->collapsed) && toggleCollapse(g)) r.docChanged = true;
+    if (ImGui::MenuItem("Reset to Defaults", nullptr, false, mn && !mn->info().params.empty()) && resetSelection(g))
+        r.evalChanged = r.docChanged = true;
     if (ImGui::MenuItem("Rename...", "F2") && mn) {
         renameNode_ = menuNode_;
         std::snprintf(renameBuf_, sizeof(renameBuf_), "%s", mn->label.c_str());
@@ -1466,7 +1457,7 @@ void NodeEditor::drawFrames(ImDrawList* dl, const Graph& g) const {
         dl->AddRectFilled(a, b, body, 6 * z);
         dl->AddRectFilled(a, ImVec2(b.x, a.y + kTitleH * z), title, 6 * z, ImDrawFlags_RoundCornersTop);
         const bool sel = f.id == selectedFrame_;
-        dl->AddRect(a, b, sel ? IM_COL32(240, 196, 100, 255) : IM_COL32(0, 0, 0, 80), 6 * z, 0, sel ? 2.0f : 1.0f);
+        dl->AddRect(a, b, sel ? theme::col(theme::Selection) : IM_COL32(0, 0, 0, 80), 6 * z, 0, sel ? 2.0f : 1.0f);
         if (fs >= 5.0f) {
             ImVec4 clip(a.x, a.y, b.x, b.y);
             dl->AddText(ImGui::GetFont(), fs * 1.1f, ImVec2(a.x + 8 * z, a.y + (kTitleH * z - fs * 1.1f) * 0.5f),
@@ -1759,6 +1750,17 @@ bool NodeEditor::toggleMute(Graph& g) {
         if (Node* n = g.find(id); n && !n->info().outputs.empty()) {
             n->muted = !allMuted;
             any = true;
+        }
+    return any;
+}
+
+bool NodeEditor::resetSelection(Graph& g) {
+    bool any = false;
+    for (int id : selection_)
+        if (Node* n = g.find(id)) {
+            const std::vector<nlohmann::json> before = n->params;
+            n->resetParams();
+            any |= n->params != before;
         }
     return any;
 }

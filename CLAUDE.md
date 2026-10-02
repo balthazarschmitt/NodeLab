@@ -98,7 +98,9 @@ src/io        image load (stb), ImageWrite (PNG/JPEG/TIFF/EXR, ICC, parallel zli
               half-size decode), project files, Library (folder listing, sidecars `photo.ext.nlproj`
               with rating/flag/thumbnail in `ui.library`, default graph, paste edit, thumbnails)
 src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (custom canvas), Inspector,
-              GuideWindow (renders the embedded GUIDE.md), Eyedropper (pick state),
+              GuideWindow (renders the embedded GUIDE.md), Eyedropper (pick state), Theme (preset
+              and custom colour themes: NodeEditor and ImageView draw themeable colours with
+              theme::col), Preferences window and layout presets (in App),
               ParamWidgets (curve/ramp editors), ImageView, DisplayWorker (view transform and
               histograms off the UI thread), LibraryPanel (filmstrip, culling keys, thumbnail
               worker), FileDialog (Win32), UiScript
@@ -191,6 +193,9 @@ src/gpu       Device (hidden GL 4.3 context, texture pool, programs, timer queri
     - `runPass` chains the passes; mark sums and other intermediates `full`.
     - `gpu::boxBlur` blurs a texture, and `gpu::select` gives exact ranks (percentiles).
     - Basic's `guidedGpu`/`sumGpu` show a guided filter and a sum read back.
+- **Preferences:** `App::loadPreferences`/`savePreferences` (`%APPDATA%\NodeLab\preferences.json`).
+  Automated runs neither load nor save them and keep the Inspector as a docked panel, so their
+  scripts' coordinates hold.
 - **Node state:** `Node::muted`, `collapsed` and `label` persist in JSON. `Graph::cloneNode` copies them.
 - **Groups:** a `GroupNode` owns an inner `Graph`, and its interface pins are pushed to the inner
   Group Input/Output nodes by `syncInner()`. Use `GroupNode::removePin`/`movePin`/`setPinType`, which

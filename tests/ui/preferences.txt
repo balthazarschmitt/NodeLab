@@ -1,0 +1,35 @@
+# Preferences, Reset to Defaults and the inspector overlay:
+#   NodeLab.exe tests\ui\interact.nlproj --script tests\ui\preferences.txt
+# Changes Invert's Factor and resets it from the node menu, switches the Inspector to the
+# overlay in Edit > Preferences, picks the Blender theme, then drags the overlay's slider.
+settle
+drag 740 423 690 423
+settle
+click 700 344 1
+wait 5
+click 783 520
+wait 5
+shot build/smoke/prefs_reset.png
+click 75 10
+wait 3
+click 124 641
+wait 5
+click 553 386
+wait 5
+click 380 177
+wait 3
+click 680 138
+wait 3
+click 600 210
+wait 3
+shot build/smoke/prefs_theme.png
+click 1255 92
+wait 5
+settle
+click 700 344
+wait 5
+drag 900 148 800 148
+wheel 3
+settle
+shot build/smoke/prefs_overlay.png
+quit

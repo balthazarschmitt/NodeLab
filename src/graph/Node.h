@@ -212,6 +212,13 @@ public:
         params.clear();
         for (const auto& p : info().params) params.push_back(p.def);
     }
+    // Reset to Defaults (Blender's Reset to Default Values): every param back to its default,
+    // except file paths, which say what the node works on rather than how.
+    virtual void resetParams() {
+        const auto& ps = info().params;
+        for (size_t i = 0; i < ps.size() && i < params.size(); ++i)
+            if (ps[i].kind != ParamKind::Path && ps[i].kind != ParamKind::SavePath) params[i] = ps[i].def;
+    }
 
     float paramF(int i) const { return params[i].is_number() ? params[i].get<float>() : 0.0f; }
     int paramI(int i) const { return params[i].is_number() ? params[i].get<int>() : 0; }

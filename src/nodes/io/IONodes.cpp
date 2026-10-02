@@ -35,6 +35,13 @@ bool ImageInputNode::chooseFile(const std::string& pathU8) {
     return true;
 }
 
+void ImageInputNode::resetParams() {
+    Node::resetParams();
+    if (!raw::isRawPath(paramS(0))) return;
+    params[3] = kRawBaselineEV;
+    params[4] = true;
+}
+
 float ImageInputNode::exposureGain() const {
     const std::string& path = paramS(0);
     if (path.empty() || !raw::isRawPath(path)) return 1.0f;

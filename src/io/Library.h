@@ -45,6 +45,9 @@ bool writeMeta(const std::string& photoU8, const Meta& m, std::string& err);
 // get the colour noise reduction Lightroom applies by default (Color 25) and the AgX view, which
 // keeps the highlights a RAW holds above 1; other photos start with Denoise off.
 void defaultGraph(Graph& g, const std::string& photoU8);
+// The view transform and look defaultGraph gives photos other than RAWs (Preferences > New
+// Projects; Standard by default). A RAW gets AgX whatever this is, unless it is AgX with a look.
+void setDefaultView(int view, int look);
 
 // The photo's edit as graph JSON with absolute paths (for exports): its sidecar's graph, or the
 // default one.

@@ -13,6 +13,7 @@
 #include "ui/ImageView.h"
 #include "ui/LibraryPanel.h"
 #include "ui/NodeEditor.h"
+#include "ui/Theme.h"
 #include "ui/ViewerOverlay.h"
 
 struct GLFWwindow;
@@ -116,10 +117,14 @@ private:
     void drawFrame();
     void drawMainMenu();
     void drawStatusBar();
-    void buildDefaultLayout(unsigned dockId);
+    void buildLayout(unsigned dockId);  // layoutPreset_'s docked layout
     void drawOriginalWindow();
     void drawEditorWindow();
     void drawInspectorWindow();
+    void drawInspectorContents();
+    void drawInspectorOverlay();
+    void drawPreferencesWindow();
+    ColorManagement newProjectColor() const;  // a new project's working space and view
     void drawViewerWindow(Viewer& v, bool isMain);
     void drawUnsavedModal();
     void drawConvertModal();
@@ -229,6 +234,26 @@ private:
     std::string gpuError_;  // why the GPU is unavailable, or the last node that fell back
     void loadPreferences();
     void savePreferences() const;
+
+    // Edit > Preferences (preferences.json, like the compositor settings above).
+    // Layout presets for View > Layout, like Blender's workspaces; Reset Layout rebuilds the chosen one.
+    enum LayoutPreset { LayoutDefault, LayoutCompositing, LayoutPhoto, LayoutSideBySide, LayoutNodeFocus, kLayouts };
+    static constexpr const char* kLayoutNames[kLayouts] = {"Default", "Compositing", "Photo", "Side by Side", "Node Focus"};
+    int layoutPreset_ = LayoutDefault;
+    // The Inspector floats over the Node Editor's top-right corner while a node is selected,
+    // instead of being a docked panel. Automated runs keep the panel (their scripts click in it).
+    bool inspectorOverlay_ = true;
+    int newView_ = ColorManagement::Standard, newLook_ = ColorManagement::None;  // new projects' view
+    std::vector<theme::Theme> customThemes_;  // saved with Save As in Preferences > Themes
+    bool showPreferences_ = false;
+    int prefsSection_ = 0;
+    bool prefsDirty_ = false;  // saved once no widget is being dragged
+    bool drawCompositorSettings();  // Device and Precision; true when changed
+    char themeName_[64] = {};
+    // The Node Editor's canvas as last drawn, where the inspector overlay goes.
+    bool editorShown_ = false;
+    ImVec2 editorMin_, editorMax_;
+    unsigned editorViewport_ = 0;
 
     LibraryPanel library_;
     bool showLibrary_ = true;

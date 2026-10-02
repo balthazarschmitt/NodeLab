@@ -3,6 +3,20 @@
 NodeLab uses [semantic versioning](https://semver.org). While it is 0.x, minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
+## 0.18.0 (2026-10-01)
+
+- **Preferences** (Edit > Preferences): interface, theme, viewer, compositor and new-project
+  settings in one window, saved per user.
+- **Themes:** NodeLab Dark, Blender, Darkroom, Midnight, High Contrast and Light presets. Every
+  interface and Node Editor colour can be edited and saved as a custom theme.
+- **Inspector overlay:** the selected node's settings float in the Node Editor's top-right
+  corner, like Blender's sidebar. It's the default; Preferences switch it back to a panel.
+- **Layout presets** (View > Layout): Default, Compositing, Photo, Side by Side and Node Focus.
+  Reset Layout rebuilds the chosen one.
+- **Reset to Defaults:** in the node right-click menu and the Edit menu. It keeps file paths and a
+  RAW's defaults.
+- **New projects' view transform:** Standard or AgX (with a look), chosen in Preferences.
+
 ## 0.17.0 (2026-10-01)
 
 - **Denoise node:** noise reduction with Lightroom's Luminance, Detail, Color and Color Detail

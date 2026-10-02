@@ -142,9 +142,20 @@ bool writeMeta(const std::string& photoU8, const Meta& m, std::string& err) {
     return saveProject(side, g, {{"library", m.toJson()}}, err);
 }
 
+namespace {
+int gDefaultView = ColorManagement::Standard, gDefaultLook = ColorManagement::None;
+}
+
+void setDefaultView(int view, int look) {
+    gDefaultView = view;
+    gDefaultLook = look;
+}
+
 void defaultGraph(Graph& g, const std::string& photoU8) {
     g.clear();
     g.colorManagement = ColorManagement::sceneLinear();
+    g.colorManagement.view = gDefaultView;
+    g.colorManagement.look = gDefaultLook;
     Node* in = g.addNode(ImageInputNode::staticInfo().type, 40, 80);
     Node* dn = g.addNode(kDenoise, 300, 80);
     Node* basic = g.addNode(kBasic, 540, 80);
@@ -156,6 +167,7 @@ void defaultGraph(Graph& g, const std::string& photoU8) {
     g.connect(basic->id, 0, out->id, 0);
     if (raw::isRawPath(photoU8)) {
         setParam(*dn, "Color", 25.0f);
+        if (g.colorManagement.view != ColorManagement::AgX) g.colorManagement.look = ColorManagement::None;
         g.colorManagement.view = ColorManagement::AgX;
     }
 }

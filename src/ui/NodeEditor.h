@@ -76,6 +76,7 @@ public:
     bool paste(Graph& g);
     bool toggleMute(Graph& g);
     bool toggleCollapse(Graph& g);
+    bool resetSelection(Graph& g);  // Reset to Defaults: the selected nodes' params (not their files)
     bool makeLinks(Graph& g);
     void beginGrab(Graph& g);
     bool hasSelection() const { return !selection_.empty() || selectedLink_ != 0; }

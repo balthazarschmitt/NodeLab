@@ -23,6 +23,8 @@ public:
     // Sets the file; switching to a RAW from no file or a non-RAW one applies the RAW defaults
     // (returns true then). Moving between RAWs keeps the settings.
     bool chooseFile(const std::string& pathU8);
+    // A RAW's defaults are the ones choosing it applies.
+    void resetParams() override;
     // The scale the Baseline Exposure params apply (1 for non-RAW files).
     float exposureGain() const;
     // img scaled by exposureGain() (img itself when that is 1).

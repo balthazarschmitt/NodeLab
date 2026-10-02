@@ -91,7 +91,10 @@ dark sky (see Help > Guide > Recipes).
 | Group pins | Select the group (or its Group Input/Output inside) and edit in the Inspector |
 | Frame | Ctrl+J around the selection; drag its title to move it with its nodes, corner to resize, double-click to rename, right-click for color |
 | Move nodes between frames | right-click a node → Move to Frame, or select nodes and right-click a frame title → Move Selected Nodes Here; Alt+P removes from frame |
-| Panels | Drag a panel's tab to dock it elsewhere, or out of the window; View > Reset Layout |
+| Panels | Drag a panel's tab to dock it elsewhere, or out of the window; View > Layout picks a preset (Default, Compositing, Photo, Side by Side, Node Focus); View > Reset Layout |
+| Inspector | Floats in the Node Editor's corner while a node is selected; Preferences > Interface (or View > Inspector Overlay) makes it a panel |
+| Reset to defaults | Right-click a node → Reset to Defaults (keeps its file) |
+| Preferences | Edit > Preferences: layout, Inspector, themes (NodeLab Dark, Blender, Darkroom, Midnight, High Contrast, Light, or your own colours), viewer background, compositor device, new projects' view transform |
 | Extra viewers | Right-click a node → Open in New Viewer (or View > New Viewer) to watch an intermediate result; the viewer's drop-down switches node, "Sync view" pans with the other panes |
 | Eyedropper | "Pick" next to a colour setting (or Pick from Image in the node's colour popup), then click a pixel or drag a rectangle on any image panel for the area's average; right-click / Esc cancels |
 | Guide | Help > Guide or F1 (opens at the selected node's entry); also the Inspector's Guide button |

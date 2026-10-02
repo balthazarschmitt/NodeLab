@@ -96,16 +96,45 @@ void App::loadPreferences() {
         const nlohmann::json j = nlohmann::json::parse(f);
         gpuDevice_ = j.value("compositorDevice", std::string("GPU")) == "GPU";
         gpuFull_ = j.value("compositorPrecision", std::string("Auto")) == "Full";
+        inspectorOverlay_ = j.value("inspector", std::string("Overlay")) == "Overlay";
+        editor_.showTimings = j.value("nodeTimings", editor_.showTimings);
+        const std::string layout = j.value("layout", std::string());
+        for (int i = 0; i < kLayouts; ++i)
+            if (layout == kLayoutNames[i]) layoutPreset_ = i;
+        newView_ = j.value("newProjectView", std::string()) == "AgX" ? ColorManagement::AgX : ColorManagement::Standard;
+        newLook_ = std::clamp(j.value("newProjectLook", 0), 0, 2);
+        if (const auto c = j.find("customThemes"); c != j.end() && c->is_array())
+            for (const auto& e : *c) customThemes_.push_back(theme::Theme::fromJson(e));
+        if (const auto th = j.find("theme"); th != j.end()) theme::current() = theme::Theme::fromJson(*th);
     } catch (const std::exception&) {
         // A damaged file keeps the defaults; it is rewritten on the next change.
     }
+    library::setDefaultView(newView_, newLook_);
+    theme::apply();
 }
 
 void App::savePreferences() const {
+    if (automated_) return;  // test runs never touch the user's preferences
+    nlohmann::json custom = nlohmann::json::array();
+    for (const theme::Theme& t : customThemes_) custom.push_back(t.toJson());
     std::ofstream f(settingsDir() / "preferences.json");
     f << nlohmann::json{{"compositorDevice", gpuDevice_ ? "GPU" : "CPU"},
-                        {"compositorPrecision", gpuFull_ ? "Full" : "Auto"}}
+                        {"compositorPrecision", gpuFull_ ? "Full" : "Auto"},
+                        {"inspector", inspectorOverlay_ ? "Overlay" : "Panel"},
+                        {"nodeTimings", editor_.showTimings},
+                        {"layout", kLayoutNames[layoutPreset_]},
+                        {"newProjectView", newView_ == ColorManagement::AgX ? "AgX" : "Standard"},
+                        {"newProjectLook", newLook_},
+                        {"theme", theme::current().toJson()},
+                        {"customThemes", custom}}
              .dump(2);
+}
+
+ColorManagement App::newProjectColor() const {
+    ColorManagement cm = ColorManagement::sceneLinear();
+    cm.view = newView_;
+    cm.look = newView_ == ColorManagement::AgX ? newLook_ : ColorManagement::None;
+    return cm;
 }
 
 // ---------------------------------------------------------------- main loop
@@ -120,6 +149,7 @@ int App::run(const RunOptions& opt) {
         }
     }
     automated_ = !opt.screenshot.empty() || script.active();
+    if (automated_) inspectorOverlay_ = false;
     if (!glfwInit()) {
         std::fprintf(stderr, "failed to init GLFW\n");
         return 1;
@@ -168,13 +198,12 @@ int App::run(const RunOptions& opt) {
     glfwGetWindowContentScale(window_, &xscale, &yscale);
     const float dpi = std::max(1.0f, xscale);
 
-    ImGui::StyleColorsDark();
+    theme::apply();  // the default theme; loadPreferences applies the user's
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowRounding = 0.0f;
     style.FrameRounding = 3.0f;
     style.TabRounding = 3.0f;
     style.ScaleAllSizes(dpi);
-    style.Colors[ImGuiCol_WindowBg].w = 1.0f;  // opaque, also for floating viewports
 
     const char* uiFont = "C:/Windows/Fonts/segoeui.ttf";
     if (fs::exists(uiFont)) io.Fonts->AddFontFromFileTTF(uiFont, 17.0f * dpi);
@@ -322,21 +351,24 @@ void App::drawFrame() {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     const ImGuiID dockId = ImHashStr(kDockName);
     if (resetLayout_) {
-        buildDefaultLayout(dockId);
+        buildLayout(dockId);
         resetLayout_ = false;
     }
     ImGui::DockSpaceOverViewport(dockId, vp);
 
     if (showOriginal_) drawOriginalWindow();
+    editorShown_ = false;
     if (showEditor_) drawEditorWindow();
-    if (showInspector_) drawInspectorWindow();
+    if (showInspector_ && !inspectorOverlay_) drawInspectorWindow();
     if (showResult_) drawViewerWindow(*viewers_[0], true);
     for (size_t i = 1; i < viewers_.size(); ++i) drawViewerWindow(*viewers_[i], false);
     if (library_.active() && showLibrary_) drawLibraryWindow();
     library_.poll();
     if (!library_.status.empty()) status_ = std::move(library_.status), library_.status.clear();
+    if (inspectorOverlay_) drawInspectorOverlay();
     drawGuideWindow();
     drawExportWindow();
+    drawPreferencesWindow();
     pollExport();
     std::erase_if(viewers_, [](const std::unique_ptr<Viewer>& v) { return v->id != 0 && !v->open; });
 
@@ -447,27 +479,74 @@ void App::drawFrame() {
 
 // ---------------------------------------------------------------- layout & panels
 
-void App::buildDefaultLayout(unsigned dockIdU) {
+void App::buildLayout(unsigned dockIdU) {
     const ImGuiID dockId = dockIdU;
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::DockBuilderRemoveNode(dockId);
     ImGui::DockBuilderAddNode(dockId, ImGuiDockNodeFlags_DockSpace);
     ImGui::DockBuilderSetNodeSize(dockId, vp->WorkSize);
     ImGuiID center = dockId;
+    auto split = [](ImGuiID& node, ImGuiDir dir, float ratio) {
+        return ImGui::DockBuilderSplitNode(node, dir, ratio, nullptr, &node);
+    };
     // The Library's filmstrip runs along the bottom, under everything (it shows only while a
     // folder is open; the panels above take its space otherwise).
-    ImGuiID filmstrip = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.2f, nullptr, &center);
-    ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.27f, nullptr, &center);
-    ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.37f, nullptr, &center);
-    ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.34f, nullptr, &center);
-    ImGui::DockBuilderDockWindow("###Original", left);
-    ImGui::DockBuilderDockWindow("###Result", right);
-    ImGui::DockBuilderDockWindow("###NodeEditor", center);
-    ImGui::DockBuilderDockWindow("###Inspector", bottom);
+    const ImGuiID filmstrip = split(center, ImGuiDir_Down, 0.2f);
+    // With the inspector overlay there is no Inspector panel to make room for.
+    const bool panel = !inspectorOverlay_;
+    ImGuiID original = 0, result = 0, editor = 0, inspector = 0;
+    switch (layoutPreset_) {
+        default:
+        case LayoutDefault:
+            original = split(center, ImGuiDir_Left, 0.27f);
+            result = split(center, ImGuiDir_Right, 0.37f);
+            if (panel) inspector = split(center, ImGuiDir_Down, 0.34f);
+            editor = center;
+            break;
+        case LayoutCompositing:
+            // Blender's Compositing workspace: the backdrop (Result) above a wide node editor;
+            // Original is a tab behind Result.
+            result = original = split(center, ImGuiDir_Up, 0.55f);
+            if (panel) inspector = split(center, ImGuiDir_Right, 0.3f);
+            editor = center;
+            break;
+        case LayoutPhoto:
+            // Lightroom's Develop module: the photo in the middle, its settings on the right,
+            // the graph tucked underneath, the original on the left.
+            if (panel) inspector = split(center, ImGuiDir_Right, 0.26f);
+            original = split(center, ImGuiDir_Left, 0.22f);
+            editor = split(center, ImGuiDir_Down, 0.32f);
+            result = center;
+            break;
+        case LayoutSideBySide: {
+            // Before / after at equal sizes over the graph.
+            ImGuiID top = split(center, ImGuiDir_Up, 0.58f);
+            original = split(top, ImGuiDir_Left, 0.5f);
+            result = top;
+            if (panel) inspector = split(center, ImGuiDir_Right, 0.34f);
+            editor = center;
+            break;
+        }
+        case LayoutNodeFocus: {
+            // A big node editor, the images stacked in a column on the right.
+            ImGuiID column = split(center, ImGuiDir_Right, 0.3f);
+            result = split(column, ImGuiDir_Up, panel ? 0.4f : 0.5f);
+            if (panel) inspector = split(column, ImGuiDir_Down, 0.45f);
+            original = column;
+            editor = center;
+            break;
+        }
+    }
+    ImGui::DockBuilderDockWindow("###Original", original);
+    ImGui::DockBuilderDockWindow("###Result", result);
+    ImGui::DockBuilderDockWindow("###NodeEditor", editor);
+    if (inspector) ImGui::DockBuilderDockWindow("###Inspector", inspector);
     ImGui::DockBuilderDockWindow("###Library", filmstrip);
     for (size_t i = 1; i < viewers_.size(); ++i)
-        ImGui::DockBuilderDockWindow(("###Viewer" + std::to_string(viewers_[i]->id)).c_str(), right);
+        ImGui::DockBuilderDockWindow(("###Viewer" + std::to_string(viewers_[i]->id)).c_str(), result);
     ImGui::DockBuilderFinish(dockId);
+    // Where Original shares Result's node, Result is the tab in front.
+    if (ImGuiDockNode* n = ImGui::DockBuilderGetNode(result)) n->SelectedTabId = ImHashStr("###Result");
     showOriginal_ = showEditor_ = showInspector_ = showResult_ = showLibrary_ = true;
 }
 
@@ -489,6 +568,12 @@ void App::drawEditorWindow() {
     const bool visible = ImGui::Begin("Node Editor###NodeEditor", &showEditor_, kCanvasFlags);
     ImGui::PopStyleVar();
     if (visible) {
+        editorShown_ = true;
+        const ImVec2 wp = ImGui::GetWindowPos(), c0 = ImGui::GetWindowContentRegionMin(),
+                     c1 = ImGui::GetWindowContentRegionMax();
+        editorMin_ = ImVec2(wp.x + c0.x, wp.y + c0.y);
+        editorMax_ = ImVec2(wp.x + c1.x, wp.y + c1.y);
+        editorViewport_ = ImGui::GetWindowViewport()->ID;
         // Breadcrumb: Root > Group > ...; click a level to go back up.
         if (!groupPath_.empty()) {
             if (ImGui::SmallButton("Root")) setGroupPath({});
@@ -546,26 +631,57 @@ void App::drawEditorWindow() {
 }
 
 void App::drawInspectorWindow() {
-    if (ImGui::Begin("Inspector###Inspector", &showInspector_)) {
-        Graph& g = currentGraph();
-        Graph* parent = groupPath_.empty()
-                            ? nullptr
-                            : resolveGroupPath(graph_, std::vector<int>(groupPath_.begin(), groupPath_.end() - 1));
-        if (drawInspector(g, selected_, currentGroupOwner(), parent)) markChanged(true);
-        // A mask driving a Basic's Factor (as Add Mask builds) shows that adjustment's sliders
-        // too, the way Lightroom shows a mask's settings and its adjustments together.
-        for (const Link& l : g.links())
-            if (l.fromNode == selected_ && l.toPin == 1)
-                if (const Node* adj = g.find(l.toNode); adj && adj->info().type == "color.basic") {
-                    ImGui::Spacing();
-                    ImGui::SeparatorText(adj->title().c_str());
-                    ImGui::PushID("##adjustment");
-                    if (drawInspector(g, adj->id, currentGroupOwner(), parent)) markChanged(true);
-                    ImGui::PopID();
-                    break;
-                }
+    if (ImGui::Begin("Inspector###Inspector", &showInspector_)) drawInspectorContents();
+    ImGui::End();
+}
+
+// The Inspector as a panel floating over the Node Editor's top-right corner while a node is
+// selected (Preferences > Interface > Inspector: Overlay), like the sidebar of Blender's node
+// editor. It is its own top-level window rather than a child of the editor's, so the editor
+// doesn't take its mouse wheel or keys (X deletes nodes there).
+void App::drawInspectorOverlay() {
+    if (!editorShown_ || !showInspector_ || !selected_ || !currentGraph().find(selected_)) return;
+    const float margin = 8.0f * ImGui::GetFontSize() / 17.0f;
+    const ImVec2 avail(editorMax_.x - editorMin_.x, editorMax_.y - editorMin_.y);
+    const float w = std::min(ImGui::GetFontSize() * 22.0f, avail.x * 0.55f);
+    const float maxH = avail.y - margin * 2;
+    if (w < 120.0f || maxH < 80.0f) return;
+    ImGui::SetNextWindowViewport(editorViewport_);
+    ImGui::SetNextWindowPos(ImVec2(editorMax_.x - margin, editorMin_.y + margin), ImGuiCond_Always, ImVec2(1, 0));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(w, 0), ImVec2(w, maxH));
+    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
+                                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                                       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+    if (ImGui::Begin("Inspector##overlay", nullptr, flags)) {
+        // Clicking the editor raises it over everything docked; keep the overlay on top.
+        ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+        drawInspectorContents();
     }
     ImGui::End();
+    ImGui::PopStyleVar(2);
+}
+
+void App::drawInspectorContents() {
+    Graph& g = currentGraph();
+    Graph* parent = groupPath_.empty()
+                        ? nullptr
+                        : resolveGroupPath(graph_, std::vector<int>(groupPath_.begin(), groupPath_.end() - 1));
+    if (drawInspector(g, selected_, currentGroupOwner(), parent)) markChanged(true);
+    // A mask driving a Basic's Factor (as Add Mask builds) shows that adjustment's sliders
+    // too, the way Lightroom shows a mask's settings and its adjustments together.
+    for (const Link& l : g.links())
+        if (l.fromNode == selected_ && l.toPin == 1)
+            if (const Node* adj = g.find(l.toNode); adj && adj->info().type == "color.basic") {
+                ImGui::Spacing();
+                ImGui::SeparatorText(adj->title().c_str());
+                ImGui::PushID("##adjustment");
+                if (drawInspector(g, adj->id, currentGroupOwner(), parent)) markChanged(true);
+                ImGui::PopID();
+                break;
+            }
 }
 
 void App::drawViewerWindow(Viewer& v, bool isMain) {
@@ -841,6 +957,8 @@ void App::drawMainMenu() {
         if (ImGui::MenuItem("Mute", "M", false, editor_.hasSelection()) && editor_.toggleMute(g)) markChanged(true);
         if (ImGui::MenuItem("Collapse", "H", false, editor_.hasSelection()) && editor_.toggleCollapse(g)) markChanged(false);
         if (ImGui::MenuItem("Make Links", "F", false, editor_.hasSelection()) && editor_.makeLinks(g)) markChanged(true);
+        if (ImGui::MenuItem("Reset to Defaults", nullptr, false, editor_.hasSelection()) && editor_.resetSelection(g))
+            markChanged(true);
         ImGui::Separator();
         if (ImGui::MenuItem("Group Selected", "Ctrl+G", false, editor_.hasSelection()) && editor_.groupSelection(g))
             markChanged(true);
@@ -852,6 +970,8 @@ void App::drawMainMenu() {
         if (ImGui::MenuItem("Frame Selected", "Ctrl+J") && editor_.frameSelection(g)) markChanged(false);
         if (ImGui::MenuItem("Remove from Frame", "Alt+P") && editor_.moveSelectionToFrame(g, 0)) markChanged(false);
         if (ImGui::MenuItem("Arrange Nodes", "Shift+P") && editor_.arrange(g)) markChanged(false);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Preferences...")) showPreferences_ = true;
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("View")) {
@@ -869,26 +989,25 @@ void App::drawMainMenu() {
             openViewer(std::move(pin));
         }
         ImGui::Separator();
+        if (ImGui::BeginMenu("Layout")) {
+            for (int i = 0; i < kLayouts; ++i)
+                if (ImGui::MenuItem(kLayoutNames[i], nullptr, layoutPreset_ == i)) {
+                    layoutPreset_ = i;
+                    resetLayout_ = true;
+                    savePreferences();
+                }
+            ImGui::EndMenu();
+        }
         if (ImGui::MenuItem("Reset Layout")) resetLayout_ = true;
+        if (ImGui::MenuItem("Inspector Overlay", nullptr, inspectorOverlay_)) {
+            inspectorOverlay_ = !inspectorOverlay_;
+            resetLayout_ = true;
+            savePreferences();
+        }
         ImGui::Separator();
         ImGui::MenuItem("Node Timings", nullptr, &editor_.showTimings);
         if (ImGui::BeginMenu("Compositor")) {
-            // As Blender's Render Properties > Performance > Compositor.
-            bool changed = false;
-            ImGui::TextDisabled("Device");
-            if (ImGui::RadioButton("CPU", !gpuDevice_ || !gpu::available())) changed = gpuDevice_, gpuDevice_ = false;
-            ImGui::BeginDisabled(!gpu::available());
-            if (ImGui::RadioButton("GPU", gpuDevice_ && gpu::available())) changed = !gpuDevice_, gpuDevice_ = true;
-            ImGui::EndDisabled();
-            ImGui::TextDisabled("%s", gpu::available() ? gpu::description().c_str() : gpuError_.c_str());
-            ImGui::Separator();
-            ImGui::TextDisabled("Precision");
-            ImGui::BeginDisabled(!gpuDevice_ || !gpu::available());
-            if (ImGui::RadioButton("Auto", !gpuFull_)) changed |= gpuFull_, gpuFull_ = false;
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Half floats on the GPU: half the memory traffic. Exports always use full precision.");
-            if (ImGui::RadioButton("Full", gpuFull_)) changed |= !gpuFull_, gpuFull_ = true;
-            ImGui::EndDisabled();
-            if (changed) {
+            if (drawCompositorSettings()) {
                 savePreferences();
                 evalDirty_ = true;
             }
@@ -1215,7 +1334,7 @@ void App::drawConvertModal() {
 
 void App::newProject() {
     graph_.clear();
-    graph_.colorManagement = ColorManagement::sceneLinear();
+    graph_.colorManagement = newProjectColor();
     Node* in = graph_.addNode(ImageInputNode::staticInfo().type, 40, 80);
     Node* out = graph_.addNode(OutputNode::staticInfo().type, 460, 80);
     graph_.connect(in->id, 0, out->id, 0);
@@ -1437,7 +1556,7 @@ void App::applyRawLook() {
     int images = 0;
     for (const auto& [id, n] : graph_.nodes())
         if (n->info().type == ImageInputNode::staticInfo().type && !n->paramS(0).empty()) ++images;
-    if (!cm.linear || images != 1 || !(cm == ColorManagement::sceneLinear())) return;
+    if (!cm.linear || images != 1 || !(cm == newProjectColor()) || cm.view == ColorManagement::AgX) return;
     // AgX rolls off the highlights a RAW keeps above 1, which Standard would clip.
     cm.view = ColorManagement::AgX;
     status_ = "View transform set to AgX for the RAW";
@@ -1494,6 +1613,227 @@ void App::pollExport() {
     for (std::string& line : exporter_.takeLog()) {
         status_ = line;
         exportLog_.push_back(std::move(line));
+    }
+}
+
+// As Blender's Render Properties > Performance > Compositor (View > Compositor, Preferences).
+bool App::drawCompositorSettings() {
+    bool changed = false;
+    ImGui::TextDisabled("Device");
+    if (ImGui::RadioButton("CPU", !gpuDevice_ || !gpu::available())) changed = gpuDevice_, gpuDevice_ = false;
+    ImGui::BeginDisabled(!gpu::available());
+    if (ImGui::RadioButton("GPU", gpuDevice_ && gpu::available())) changed = !gpuDevice_, gpuDevice_ = true;
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("%s", gpu::available() ? gpu::description().c_str() : gpuError_.c_str());
+    ImGui::Separator();
+    ImGui::TextDisabled("Precision");
+    ImGui::BeginDisabled(!gpuDevice_ || !gpu::available());
+    if (ImGui::RadioButton("Auto", !gpuFull_)) changed |= gpuFull_, gpuFull_ = false;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Half floats on the GPU: half the memory traffic. Exports always use full precision.");
+    if (ImGui::RadioButton("Full", gpuFull_)) changed |= !gpuFull_, gpuFull_ = true;
+    ImGui::EndDisabled();
+    return changed;
+}
+
+// Edit > Preferences, as Blender's: sections on the left, their settings on the right. Every
+// change is kept in preferences.json straight away.
+void App::drawPreferencesWindow() {
+    if (!showPreferences_) return;
+    const float fs = ImGui::GetFontSize();
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowSize(ImVec2(fs * 38, fs * 30), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
+                            ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+    if (!ImGui::Begin("Preferences###Preferences", &showPreferences_, ImGuiWindowFlags_NoDocking)) {
+        ImGui::End();
+        return;
+    }
+    static constexpr const char* kSections[] = {"Interface", "Themes", "Viewer", "Compositor", "New Projects"};
+    ImGui::BeginChild("##sections", ImVec2(fs * 7.5f, 0), ImGuiChildFlags_Borders);
+    for (int i = 0; i < int(std::size(kSections)); ++i)
+        if (ImGui::Selectable(kSections[i], prefsSection_ == i)) prefsSection_ = i;
+    ImGui::EndChild();
+    ImGui::SameLine();
+    ImGui::BeginChild("##settings");
+    bool changed = false;
+    theme::Theme& th = theme::current();
+    // Editing a built-in theme makes it "Custom" (the preset itself stays as it was).
+    auto themeEdited = [&] {
+        for (const theme::Theme& p : theme::presets())
+            if (p.name == th.name) th.name = "Custom";
+        theme::apply();
+        changed = true;
+    };
+    auto colorRow = [&](int c) {
+        ImVec4 v = ImGui::ColorConvertU32ToFloat4(th.col[c]);
+        if (ImGui::ColorEdit4(theme::colName(c), &v.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaPreviewHalf)) {
+            th.col[c] = ImGui::ColorConvertFloat4ToU32(v);
+            themeEdited();
+        }
+    };
+    auto colorTable = [&](const char* id, int from, int to) {
+        if (!ImGui::BeginTable(id, 2)) return;
+        for (int c = from; c < to; ++c) {
+            ImGui::TableNextColumn();
+            colorRow(c);
+        }
+        ImGui::EndTable();
+    };
+    const float combo = fs * 12;
+    switch (prefsSection_) {
+        case 0: {  // Interface
+            ImGui::SeparatorText("Layout");
+            ImGui::SetNextItemWidth(combo);
+            if (ImGui::Combo("Preset", &layoutPreset_, kLayoutNames, kLayouts)) {
+                resetLayout_ = true;
+                changed = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Reset Layout")) resetLayout_ = true;
+            ImGui::TextDisabled("Default: the images either side of the graph.\n"
+                                "Compositing: the result over a wide graph.\n"
+                                "Photo: the photo in the middle, its settings on the right.\n"
+                                "Side by Side: before and after over the graph.\n"
+                                "Node Focus: a big graph, the images on the right.");
+            ImGui::SeparatorText("Inspector");
+            int mode = inspectorOverlay_ ? 0 : 1;
+            bool modeChanged = ImGui::RadioButton("Overlay", &mode, 0);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("The selected node's settings float in the Node Editor's top-right corner.");
+            ImGui::SameLine();
+            modeChanged |= ImGui::RadioButton("Panel", &mode, 1);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("The Inspector is a panel of its own in the layout.");
+            if (modeChanged) {
+                inspectorOverlay_ = mode == 0;
+                resetLayout_ = true;  // make room for the panel, or take it back
+                changed = true;
+            }
+            ImGui::TextDisabled("Changing this rebuilds the layout.");
+            ImGui::SeparatorText("Node Editor");
+            changed |= ImGui::Checkbox("Node Timings", &editor_.showTimings);
+            break;
+        }
+        case 1: {  // Themes
+            ImGui::SetNextItemWidth(combo);
+            if (ImGui::BeginCombo("Theme", th.name.c_str())) {
+                for (const theme::Theme& p : theme::presets())
+                    if (ImGui::Selectable(p.name.c_str(), p.name == th.name)) {
+                        th = p;
+                        theme::apply();
+                        changed = true;
+                    }
+                if (!customThemes_.empty()) ImGui::Separator();
+                for (size_t i = 0; i < customThemes_.size(); ++i) {
+                    ImGui::PushID(int(i));
+                    if (ImGui::Selectable(customThemes_[i].name.c_str(), customThemes_[i].name == th.name)) {
+                        th = customThemes_[i];
+                        theme::apply();
+                        changed = true;
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::EndCombo();
+            }
+            auto custom = std::find_if(customThemes_.begin(), customThemes_.end(),
+                                       [&](const theme::Theme& c) { return c.name == th.name; });
+            const bool isCustom = custom != customThemes_.end();
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!isCustom);
+            if (ImGui::Button("Delete") && isCustom) {
+                customThemes_.erase(custom);
+                th.name = "Custom";
+                changed = true;
+            }
+            ImGui::EndDisabled();
+            ImGui::SetNextItemWidth(combo);
+            ImGui::InputTextWithHint("##themeName", "New theme name", themeName_, sizeof(themeName_));
+            ImGui::SameLine();
+            // Save under the typed name, or over the current custom theme.
+            std::string name = themeName_;
+            if (name.empty() && isCustom) name = th.name;
+            bool builtIn = false;
+            for (const theme::Theme& p : theme::presets()) builtIn |= p.name == name;
+            ImGui::BeginDisabled(name.empty() || builtIn);
+            if (ImGui::Button("Save Theme")) {
+                th.name = name;
+                auto same = std::find_if(customThemes_.begin(), customThemes_.end(),
+                                         [&](const theme::Theme& c) { return c.name == name; });
+                if (same != customThemes_.end()) *same = th;
+                else customThemes_.push_back(th);
+                themeName_[0] = 0;
+                changed = true;
+            }
+            ImGui::EndDisabled();
+
+            ImGui::SeparatorText("Interface");
+            int base = th.light ? 1 : 0;
+            bool baseChanged = ImGui::RadioButton("Dark", &base, 0);
+            ImGui::SameLine();
+            baseChanged |= ImGui::RadioButton("Light", &base, 1);
+            if (baseChanged) {
+                th.light = base == 1;
+                themeEdited();
+            }
+            if (ImGui::BeginTable("##ui", 2)) {
+                for (int k = 0; k < theme::kUiKeys; ++k) {
+                    ImGui::TableNextColumn();
+                    ImVec4 v = theme::uiValue(th, k);
+                    if (ImGui::ColorEdit3(theme::uiKeyName(k), &v.x, ImGuiColorEditFlags_NoInputs)) {
+                        th.uiSet[k] = true;
+                        th.ui[k] = v;
+                        themeEdited();
+                    }
+                }
+                ImGui::EndTable();
+            }
+            ImGui::SeparatorText("Node Editor");
+            colorTable("##editor", theme::Canvas, theme::WireImage);
+            ImGui::SeparatorText("Sockets and Wires");
+            colorTable("##wires", theme::WireImage, theme::CatInputOutput);
+            ImGui::SeparatorText("Node Headers");
+            colorTable("##cats", theme::CatInputOutput, theme::ImageBackground);
+            ImGui::SeparatorText("Viewer");
+            colorTable("##viewer", theme::ImageBackground, theme::kCols);
+            break;
+        }
+        case 2:  // Viewer
+            ImGui::SeparatorText("Theme");
+            colorRow(theme::ImageBackground);
+            ImGui::TextDisabled("The view transform, histogram and clipping warnings are saved\n"
+                                "with each project (Color menu, and the Result viewer's toolbar).");
+            break;
+        case 3:  // Compositor
+            ImGui::SeparatorText("Performance");
+            if (drawCompositorSettings()) {
+                evalDirty_ = true;
+                changed = true;
+            }
+            break;
+        case 4: {  // New Projects
+            ImGui::SeparatorText("Color Management");
+            ImGui::TextDisabled("New projects and library photos without an edit start with this view.\n"
+                                "RAW photos always start with AgX, which keeps their highlights.");
+            int view = newView_ == ColorManagement::AgX ? 1 : 0;
+            static constexpr const char* kViews[] = {"Standard", "AgX"};
+            ImGui::SetNextItemWidth(combo);
+            if (ImGui::Combo("View Transform", &view, kViews, 2)) {
+                newView_ = view == 1 ? ColorManagement::AgX : ColorManagement::Standard;
+                changed = true;
+            }
+            ImGui::BeginDisabled(newView_ != ColorManagement::AgX);
+            ImGui::SetNextItemWidth(combo);
+            changed |= ImGui::Combo("Look", &newLook_, colormgmt::kLookNames, 3);
+            ImGui::EndDisabled();
+            if (changed) library::setDefaultView(newView_, newView_ == ColorManagement::AgX ? newLook_ : 0);
+            break;
+        }
+    }
+    ImGui::EndChild();
+    ImGui::End();
+    if (changed) prefsDirty_ = true;
+    if (prefsDirty_ && !ImGui::IsAnyItemActive()) {
+        savePreferences();
+        prefsDirty_ = false;
     }
 }
 

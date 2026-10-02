@@ -14,12 +14,23 @@ F1 (or the **Guide** button in the Inspector) jumps straight to that node's entr
 
 - **Original** (left): the image loaded by the first Image Input node.
 - **Node Editor** (middle): the graph. Right-click empty space to add nodes.
-- **Inspector** (below the graph): every setting of the selected node, with larger editors for
-  curves and ramps.
+- **Inspector**: every setting of the selected node, with larger editors for curves and ramps.
+  By default it floats in the Node Editor's top-right corner while a node is selected; in
+  **Edit > Preferences > Interface** (or **View > Inspector Overlay**) it can be a panel instead.
 - **Result** (right): what the Output node receives, or the node you are previewing.
 
 Every panel is a tab that can be dragged. Drop it on the edge of another panel to dock it there,
-or outside the window to float it. **View > Reset Layout** puts everything back.
+or outside the window to float it. **View > Layout** offers ready-made arrangements, like
+Blender's workspaces:
+
+- **Default**: the original and the result either side of the graph.
+- **Compositing**: the result over a wide graph, the original as a tab behind it.
+- **Photo**: the photo in the middle, its settings on the right and the graph underneath, like
+  Lightroom's Develop module.
+- **Side by Side**: before and after at equal sizes over the graph.
+- **Node Focus**: a big graph with the images stacked on the right.
+
+**View > Reset Layout** puts the chosen layout back.
 **View > New Viewer** opens an extra image panel that can show any node (see Viewing Intermediate
 Results below). **View > Node Timings** shows how long each node took above it (amber when it is
 50 ms or more), so you can see what slows a graph down. Nodes that ran on the graphics card are
@@ -952,6 +963,7 @@ Coordinates are relative to the image, so textures look the same in the preview 
 | Mute | M: the node passes its input straight through (shown with a red line). |
 | Collapse | H: hides the node's settings. |
 | Rename | F2, or right-click > Rename. |
+| Reset to defaults | Right-click > Reset to Defaults (or Edit > Reset to Defaults) puts every setting of the selected nodes back to its default. File paths are kept, and a RAW gets its RAW defaults again. |
 | Make links | F: connects the selected nodes in a chain. |
 | Reroute | Shift+right-drag across wires. |
 | Preview | Ctrl+click a node; Ctrl+Shift+click for its next output. |
@@ -1004,6 +1016,23 @@ The settings and folders are saved with the project. From the command line,
 does the same batch without the window, and `NodeLab.exe --render project.nlproj out.tif
 [--depth 16]` renders one image (the extension picks the format; `--depth 32` for full-float EXR).
 Add `--device gpu` to render on the graphics card (`--precision half` for speed, full by default).
+
+## Preferences
+
+**Edit > Preferences** holds the settings that belong to you rather than to a project. They are
+saved straight away, in `%APPDATA%\NodeLab\preferences.json`.
+
+- **Interface:** the layout preset, whether the Inspector is an overlay or a panel, and node
+  timings.
+- **Themes:** NodeLab Dark (the default), Blender, Darkroom (neutral greys that don't tint how a
+  photo is judged), Midnight, High Contrast and Light. Every colour can be changed: the interface's
+  background, title bars, widgets, text, accent and borders, and the Node Editor's canvas, nodes,
+  fields, wires and the header colour of each node category. Editing a built-in theme makes a
+  **Custom** one; type a name and choose **Save Theme** to keep it in the list.
+- **Viewer:** the colour behind images.
+- **Compositor:** the Device (CPU or GPU) and Precision, as in View > Compositor.
+- **New Projects:** the view transform (Standard or AgX, with a look) new projects and library
+  photos start with. RAW photos always start with AgX.
 
 ## Library
 

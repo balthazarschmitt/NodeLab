@@ -1,4 +1,5 @@
 #include "ui/ImageView.h"
+#include "ui/Theme.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -272,7 +273,7 @@ void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const 
     ImGui::InvisibleButton(id, avail, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 end(origin.x + avail.x, origin.y + avail.y);
-    dl->AddRectFilled(origin, end, IM_COL32(24, 24, 27, 255));
+    dl->AddRectFilled(origin, end, theme::col(theme::ImageBackground));
 
     if (!tex.valid()) {
         ImVec2 ts = ImGui::CalcTextSize(emptyText);
