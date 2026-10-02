@@ -17,6 +17,7 @@ namespace gpu {
 namespace {
 
 GLFWwindow* g_window = nullptr;
+bool g_shared = false;  // g_window shares textures with the UI's context
 std::string g_description = "GPU device not started";
 std::recursive_mutex g_deviceMutex;
 thread_local int t_depth = 0;
@@ -78,7 +79,7 @@ const char* glslFormat(Format f) {
     return "rgba32f";
 }
 
-bool init(std::string* why) {
+bool init(std::string* why, void* shareWith) {
     if (g_window) return true;
     auto fail = [&](const std::string& reason) {
         g_description = "No GPU device: " + reason;
@@ -92,7 +93,9 @@ bool init(std::string* why) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
-    GLFWwindow* w = glfwCreateWindow(16, 16, "NodeLab GPU", nullptr, nullptr);
+    GLFWwindow* w = shareWith ? glfwCreateWindow(16, 16, "NodeLab GPU", nullptr, static_cast<GLFWwindow*>(shareWith)) : nullptr;
+    g_shared = w != nullptr;
+    if (!w) w = glfwCreateWindow(16, 16, "NodeLab GPU", nullptr, nullptr);
     // Later windows (ImGui's floating panels) must get the UI's usual context.
     glfwDefaultWindowHints();
     if (!w) return fail("the driver has no OpenGL 4.3 (compute shaders)");
@@ -135,6 +138,7 @@ void shutdown() {
 }
 
 bool available() { return g_window != nullptr; }
+bool sharesUiContext() { return g_window != nullptr && g_shared; }
 std::string description() { return g_description; }
 
 Scope::Scope() {
@@ -170,6 +174,13 @@ TexturePtr allocate(int w, int h, Format f) {
             it->second.pop_back();
             g_pooledBytes -= size_t(w) * h * bytesPerPixel(f);
         }
+    }
+    if (id && f == Format::RGBA8) {
+        // A viewer may have shown it with its own filtering (gpu::display).
+        gl::BindTexture(gl::TEXTURE_2D, id);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST);
+        gl::BindTexture(gl::TEXTURE_2D, 0);
     }
     if (!id) {
         gl::GenTextures(1, &id);

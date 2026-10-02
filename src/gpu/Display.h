@@ -8,12 +8,16 @@
 
 #include "core/ColorManagement.h"
 #include "core/Value.h"
+#include "gpu/Device.h"
 
 namespace gpu {
 
 struct DisplayResult {
     int w = 0, h = 0;
     std::vector<unsigned char> bytes;  // RGBA8, as displayBytes() makes them
+    // Instead of bytes when asked to keep it: the RGBA8 texture, finished and set up for a viewer
+    // (linear minification, nearest magnification) in the UI's shared context.
+    TexturePtr texture;
     // When asked for: the r, g, b and luminance bins (256 each), then the clip-high and clip-low
     // flags, counted as Histogram::compute does (rows skipped on images over 2 MP).
     std::vector<uint32_t> histogram;
@@ -21,6 +25,8 @@ struct DisplayResult {
 
 // `scene` is an image or channel on the device (a channel shows as grey), or a CPU image or
 // channel, which is uploaded. Needs a Scope; throws gpu::Error on device failures.
-DisplayResult display(const Value& scene, const ColorManagement& cm, bool clipping, bool histogram);
+// keepTexture (only with sharesUiContext()) returns the texture instead of reading it back.
+DisplayResult display(const Value& scene, const ColorManagement& cm, bool clipping, bool histogram,
+                      bool keepTexture = false);
 
 }  // namespace gpu

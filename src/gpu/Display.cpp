@@ -121,7 +121,7 @@ struct Buffer {
 
 }  // namespace
 
-DisplayResult display(const Value& scene, const ColorManagement& cm, bool clipping, bool histogram) {
+DisplayResult display(const Value& scene, const ColorManagement& cm, bool clipping, bool histogram, bool keepTexture) {
     TexturePtr tex;
     bool channel = false;
     if (auto i = std::get_if<GpuImagePtr>(&scene.v); i && *i) tex = (*i)->texture();
@@ -160,7 +160,15 @@ DisplayResult display(const Value& scene, const ColorManagement& cm, bool clippi
     bindImage(0, *dst);
     dispatch(out.w, out.h);
 
-    out.bytes = downloadBytes(*dst);
+    if (keepTexture) {
+        gl::BindTexture(gl::TEXTURE_2D, dst->id());
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST);
+        gl::BindTexture(gl::TEXTURE_2D, 0);
+        out.texture = dst;
+    } else {
+        out.bytes = downloadBytes(*dst);
+    }
     if (histogram) {
         gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, hist.id);
         gl::GetBufferSubData(gl::SHADER_STORAGE_BUFFER, 0, gl::GLsizeiptr(out.histogram.size() * 4),
@@ -168,6 +176,9 @@ DisplayResult display(const Value& scene, const ColorManagement& cm, bool clippi
     }
     gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, 0);
     if (gl::GetError() != gl::NO_ERROR) throw Error("GPU: display conversion failed");
+    // The UI's context draws it next: it must see the finished pixels (a shared context only
+    // sees another's writes once they have completed).
+    if (keepTexture) gl::Finish();
     return out;
 }
 

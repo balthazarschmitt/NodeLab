@@ -39,9 +39,11 @@ bool DisplayWorker::gpuDisplay(const Request& r, Result& out) {
     if (!gpu::available()) return false;
     try {
         gpu::Scope scope;
-        gpu::DisplayResult d = gpu::display(r.gpuScene.empty() ? Value(r.scene) : r.gpuScene, r.cm, r.clipping, r.histogram);
+        gpu::DisplayResult d = gpu::display(r.gpuScene.empty() ? Value(r.scene) : r.gpuScene, r.cm, r.clipping,
+                                            r.histogram, r.keepTexture && gpu::sharesUiContext());
         if (d.w != out.w || d.h != out.h) return false;
         out.bytes = std::move(d.bytes);
+        out.texture = std::move(d.texture);
         if (r.histogram) out.histogram.setCounts(d.histogram.data());
         return true;
     } catch (const gpu::Error&) {

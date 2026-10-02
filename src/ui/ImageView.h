@@ -1,9 +1,14 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "core/Image.h"
+
+namespace gpu {
+class Texture;
+}
 
 struct ImDrawList;
 struct ImVec2;
@@ -28,13 +33,22 @@ public:
     void reset();
     // Bytes from displayBytes/tintBytes (made off the UI thread by DisplayWorker).
     void uploadBytes(const std::vector<unsigned char>& bytes, int w, int h);
-    bool valid() const { return id_ != 0 && w_ > 0; }
-    uint32_t id() const { return id_; }
+    // Shows the GPU device's display texture (gpu::display in the context shared with the UI's)
+    // instead of uploaded bytes, saving the readback and the upload.
+    void showDevice(std::shared_ptr<gpu::Texture> t, int w, int h);
+    bool valid() const { return id() != 0 && w_ > 0; }
+    uint32_t id() const;
+    // Once per frame, after the frame is submitted: device textures this frame stopped showing
+    // go back to the device's pool a few frames later, once the draws that read them are done.
+    static void endFrame();
     int width() const { return w_; }
     int height() const { return h_; }
 
 private:
+    void releaseDevice();
+
     uint32_t id_ = 0;
+    std::shared_ptr<gpu::Texture> device_;
     int w_ = 0, h_ = 0;
 };
 

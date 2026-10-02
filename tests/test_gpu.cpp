@@ -782,6 +782,19 @@ TEST_CASE("GPU display matches the CPU view transform, bytes and histogram") {
             }
             CHECK(hist[1024] == r.histogram[1024]);
             CHECK(hist[1025] == r.histogram[1025]);
+            // Kept for a viewer in the shared context: the texture holds the same bytes, and the
+            // histogram still comes back.
+            gpu::DisplayResult kept;
+            std::vector<unsigned char> keptBytes;
+            {
+                gpu::Scope scope;
+                kept = gpu::display(Value(img), cms[ci], clipping, true, true);
+                REQUIRE(kept.texture);
+                keptBytes = gpu::downloadBytes(*kept.texture);
+            }
+            CHECK(kept.bytes.empty());
+            CHECK(keptBytes == r.bytes);
+            CHECK(kept.histogram == r.histogram);
         }
 }
 

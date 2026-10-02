@@ -10,12 +10,34 @@
 #include <imgui.h>
 
 #include "core/Parallel.h"
+#include "gpu/Device.h"
 
 #ifndef GL_CLAMP_TO_EDGE
 #define GL_CLAMP_TO_EDGE 0x812F
 #endif
 
+namespace {
+// Device textures the UI stopped showing, with the frame they were last drawn in. A frame's
+// draws are queued, not done, when it is swapped, and the device may overwrite a pooled
+// texture straight away.
+std::vector<std::pair<std::shared_ptr<gpu::Texture>, uint64_t>> g_retired;
+uint64_t g_frame = 0;
+}  // namespace
+
 GLTexture::~GLTexture() { reset(); }
+
+uint32_t GLTexture::id() const { return device_ ? device_->id() : id_; }
+
+void GLTexture::releaseDevice() {
+    if (device_) g_retired.emplace_back(std::move(device_), g_frame);
+    device_.reset();
+}
+
+void GLTexture::endFrame() {
+    ++g_frame;
+    // Drivers queue at most a few frames.
+    std::erase_if(g_retired, [](const auto& r) { return r.second + 4 < g_frame; });
+}
 
 void GLTexture::reset() {
     if (id_) {
@@ -23,7 +45,15 @@ void GLTexture::reset() {
         glDeleteTextures(1, &t);
     }
     id_ = 0;
+    releaseDevice();
     w_ = h_ = 0;
+}
+
+void GLTexture::showDevice(std::shared_ptr<gpu::Texture> t, int w, int h) {
+    releaseDevice();
+    device_ = std::move(t);
+    w_ = w;
+    h_ = h;
 }
 
 std::vector<unsigned char> displayBytes(const Image& img, bool clipping) {
@@ -71,6 +101,7 @@ void GLTexture::uploadTint(const Image& img, float r, float g, float b, float op
 }
 
 void GLTexture::uploadBytes(const std::vector<unsigned char>& bytes, int w, int h) {
+    releaseDevice();
     if (!id_) {
         GLuint t = 0;
         glGenTextures(1, &t);

@@ -23,8 +23,12 @@ struct Error : std::runtime_error {
 
 // Creates the context. Call once on the main thread (GLFW creates windows only there), after
 // glfwInit. False, with the reason, when the driver has no OpenGL 4.3 (the CPU then does
-// everything, as before).
-bool init(std::string* why = nullptr);
+// everything, as before). shareWith (a GLFWwindow*) shares textures with the UI's context, so
+// viewers draw the device's display textures without reading them back; without sharing (the
+// driver refused, or none given) the device still works and viewers get bytes.
+bool init(std::string* why = nullptr, void* shareWith = nullptr);
+// Whether init's shareWith context shares the device's textures.
+bool sharesUiContext();
 // Destroys the context (before glfwTerminate).
 void shutdown();
 bool available();

@@ -13,6 +13,7 @@
 #include "core/ColorManagement.h"
 #include "core/Image.h"
 #include "core/Value.h"
+#include "gpu/Device.h"
 #include "ui/ImageView.h"
 
 class DisplayWorker {
@@ -27,6 +28,9 @@ public:
         // Convert on the GPU device (gpu::display): from gpuScene, else from an upload of
         // scene. Device errors fall back to the CPU.
         bool gpu = false;
+        // With gpu: keep the display texture on the device for a viewer in the shared context
+        // (Result::texture) instead of reading back bytes.
+        bool keepTexture = false;
         ColorManagement cm;
         bool clipping = false;
         bool histogram = false;
@@ -38,6 +42,7 @@ public:
         uint64_t seq = 0;
         ImagePtr scene;
         std::vector<unsigned char> bytes;
+        gpu::TexturePtr texture;  // instead of bytes, when kept on the device
         int w = 0, h = 0;
         Histogram histogram;  // valid when requested
     };

@@ -237,13 +237,14 @@ int App::run(const RunOptions& opt) {
         pio.Platform_ShowWindow = deferShowWindow;
     }
 
-    // The GPU device: a hidden context sharing nothing with the UI's. Test runs stay on the CPU
-    // so their screenshots don't depend on the machine's GPU, unless given --device gpu.
+    // The GPU device: a hidden context sharing textures with the UI's, so viewers draw its
+    // display textures directly. Test runs stay on the CPU so their screenshots don't depend on
+    // the machine's GPU, unless given --device gpu.
     if (automated_) {
-        gpuDevice_ = opt.gpu && gpu::init(&gpuError_);
+        gpuDevice_ = opt.gpu && gpu::init(&gpuError_, window_);
     } else {
         loadPreferences();
-        if (!gpu::init(&gpuError_)) gpuError_ = "GPU unavailable: " + gpuError_;
+        if (!gpu::init(&gpuError_, window_)) gpuError_ = "GPU unavailable: " + gpuError_;
     }
 
     eval_ = std::make_unique<AsyncEvaluator>(cache_);
@@ -292,6 +293,7 @@ int App::run(const RunOptions& opt) {
             renderMain();
             renderPlatformWindows();
             glfwSwapBuffers(window_);
+            GLTexture::endFrame();
             inFrame_ = false;
         };
         glfwSetWindowRefreshCallback(window_, refreshCallback);
@@ -324,15 +326,20 @@ int App::run(const RunOptions& opt) {
 
         renderPlatformWindows();
         glfwSwapBuffers(window_);
+        GLTexture::endFrame();
         inFrame_ = false;
     }
 
     glfwSetWindowRefreshCallback(window_, nullptr);
     redraw_ = nullptr;
     eval_.reset();
-    gpu::shutdown();
+    // Viewers may hold device textures: return them to the pool before the device goes.
     leftTex_.reset();
     viewers_.clear();
+    maskTex_.reset();
+    glFinish();
+    for (int i = 0; i < 8; ++i) GLTexture::endFrame();
+    gpu::shutdown();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
@@ -2138,6 +2145,7 @@ void App::requestDisplay(int slot, const ImagePtr& scene, bool clipping, bool hi
     r.histogram = histogram;
     r.tint = tint;
     r.gpu = gpuDevice_ && gpu::available();
+    r.keepTexture = r.gpu;
     r.gpuScene = gpuScene;
     display_.submit(std::move(r));
 }
@@ -2171,7 +2179,8 @@ void App::applyDisplays() {
     for (DisplayWorker::Result& r : display_.poll()) {
         if (r.seq != displaySeq_[r.slot]) continue;  // superseded while it was prepared
         auto upload = [&](GLTexture& t) {
-            if (r.bytes.empty()) t.reset();
+            if (r.texture) t.showDevice(r.texture, r.w, r.h);
+            else if (r.bytes.empty()) t.reset();
             else t.uploadBytes(r.bytes, r.w, r.h);
         };
         auto uploadDetail = [&](Viewer& v) {

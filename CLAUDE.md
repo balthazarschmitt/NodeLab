@@ -113,7 +113,7 @@ src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (
               ParamWidgets (curve/ramp editors), ImageView, DisplayWorker (view transform and
               histograms off the UI thread), LibraryPanel (filmstrip, culling keys, thumbnail
               worker), FileDialog (Win32), UiScript
-src/gpu       Device (hidden GL 4.3 context, texture pool, programs, timer queries, PBO downloads),
+src/gpu       Device (hidden GL 4.3 context sharing textures with the UI, texture pool, programs, timer queries, PBO downloads),
               GL (loader), PointOp (per-pixel nodes as GLSL bodies, fused into chains), Blur,
               Reduce (exact percentiles by radix select), Display (viewer bytes and histogram)
 ```
@@ -186,6 +186,10 @@ src/gpu       Device (hidden GL 4.3 context, texture pool, programs, timer queri
     - Viewer results evaluated on the GPU stay there (`AsyncEvaluator::Result::gpuImages`, with a
       null image). `DisplayWorker::download` fetches the pixels only for the eyedropper, masks
       and the CPU fallback.
+    - The device context shares textures with the UI's (`gpu::init(why, window)`), so viewers
+      draw the RGBA8 texture itself (`GLTexture::showDevice`), with no readback or upload.
+      `GLTexture::endFrame` returns a replaced texture to the pool a few frames later, once the
+      draws that read it are done. Without sharing, viewers get bytes as before.
   - **Fusion:** `runPoint` doesn't dispatch. Its outputs are *pending* (`GpuValue::pending`), and a
     later point op of the same size compiles the pending stage into its own shader. Each stage's
     names are namespaced with `#define`/`#undef`, so a body and its `functions` use the plain

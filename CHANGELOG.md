@@ -20,6 +20,9 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
   changes the look slightly, so High stays the default and existing projects are unchanged.
 - **Find Node searches inside groups:** nodes in nested groups are listed as "Group > Node", and
   picking one opens its group, then selects and frames it.
+- **Viewers draw GPU results directly:** the GPU device shares its textures with the window,
+  so a result's display image is no longer read back and uploaded again (about 7-9 ms less per
+  update for a 0.7 MP preview, more for bigger viewers and zoomed detail).
 
 ## 0.19.0 (2026-10-02)
 
