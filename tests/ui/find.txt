@@ -14,4 +14,25 @@ key enter
 settle
 wait 3
 shot build/smoke/find3_framed.png
+# Inside groups: splice Invert into the wire, group it (Ctrl+G), then find it from the top level.
+# The result reads "Group > Invert"; Enter opens the group and frames the node there.
+drag 739 345 789 115
+settle
+ctrl on
+key g
+ctrl off
+settle
+click 1000 700
+move 800 480
+ctrl on
+key f
+ctrl off
+wait 3
+text inv
+wait 3
+shot build/smoke/find4_group.png
+key enter
+settle
+wait 5
+shot build/smoke/find5_inside.png
 quit

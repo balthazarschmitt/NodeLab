@@ -959,7 +959,7 @@ Coordinates are relative to the image, so textures look the same in the preview 
 | Disconnect | Drag a wire off an input pin and drop it on empty space, or Ctrl+right-drag across wires (knife). |
 | Pan / zoom | Drag empty space or middle-drag; mouse wheel zooms. |
 | Frame all / selected | Home / . (period) |
-| Find a node | Ctrl+F, or View > Find Node... Type part of a label or node name; Enter (or a click) selects the node and frames it. Labelled nodes are listed first. |
+| Find a node | Ctrl+F, or View > Find Node... Type part of a label or node name; Enter (or a click) selects the node and frames it. Labelled nodes are listed first. Nodes inside groups are listed too, as "Group > Node", and picking one opens that group. |
 | Select | Click; Shift+click adds; Shift+drag box-selects; Ctrl+A selects all. |
 | Select linked | L (upstream) / Shift+L (downstream) |
 | Move | Drag, or G then move the mouse and click. |

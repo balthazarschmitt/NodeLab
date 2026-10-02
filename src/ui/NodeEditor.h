@@ -32,6 +32,10 @@ public:
         int enterGroup = 0;           // Tab / double-click on a group node: open it
         bool exitGroup = false;       // Tab with no group selected: go up one level
         int openViewer = 0;           // node menu "Open in New Viewer": pin this node in a new viewer
+        // Find Node picked a node inside nested groups: open findPath (group ids below the graph
+        // being drawn), then select and frame findNode there.
+        std::vector<int> findPath;
+        int findNode = 0;
     };
 
     // selected: the single selected node (0 if none or several). preview: node shown on the right.
@@ -41,9 +45,12 @@ public:
     // The graph was replaced (new/open/undo): drop selection and in-flight interactions.
     void onGraphReplaced(bool frame);  // also clears the active value field
     void frameAll() { fitFrames_ = 1; }
-    // Ctrl+F: search this graph's nodes by label or name, then select and frame the pick. Opened
-    // next frame from the canvas, as a popup must be opened in the ID scope that draws it.
+    // Ctrl+F: search this graph's nodes and those of the groups inside it by label or name, then
+    // select and frame the pick. Opened next frame from the canvas, as a popup must be opened in
+    // the ID scope that draws it.
     void openFind() { findRequested_ = true; }
+    // Frame the selection on the next draw (after the App switched to a group the size is known).
+    void frameSelectionNext() { frameSelectionNext_ = true; }
     // Blender's "Node Timings" overlay: how long each node took when it last ran, drawn above it.
     // Keyed by node id of the graph being drawn; empty hides the labels.
     // Nodes that ran on the GPU are marked so.
@@ -131,7 +138,7 @@ private:
     void drawAddMenu(Graph& g, Result& r);
     void drawNodeMenu(Graph& g, int& preview, Result& r);
     void drawRenamePopup(Graph& g, Result& r);
-    void drawFindMenu(Graph& g);
+    void drawFindMenu(Graph& g, Result& r);
     void finishDragNodes(Graph& g, Result& r);  // splice + auto-offset
     void selectLinked(const Graph& g, bool downstream);
     void frameSelected(const Graph& g);
@@ -191,6 +198,7 @@ private:
     char search_[64] = {};
     int searchSel_ = 0;  // highlighted search result (Up/Down, Enter)
     bool findRequested_ = false;
+    bool frameSelectionNext_ = false;
 };
 
 ImU32 pinColor(PinType t);

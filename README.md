@@ -85,7 +85,7 @@ dark sky (see Help > Guide > Recipes).
 | Cut wires / add reroutes | Ctrl+right-drag / Shift+right-drag across wires |
 | Preview another output | Ctrl+Shift+click a node cycles through its outputs |
 | Frame all / selected | Home / . |
-| Find a node | Ctrl+F (View > Find Node...): type part of a label or node name, Enter selects and frames it |
+| Find a node | Ctrl+F (View > Find Node...): type part of a label or node name, Enter selects and frames it (opening the group it is in) |
 | Edit a value | Drag the field sideways (Shift = fine), or click it to type |
 | Preview any node | Ctrl+click it (again to clear) |
 | Group / ungroup | Ctrl+G / Ctrl+Alt+G; Tab (or double-click) enters a group, Tab leaves |

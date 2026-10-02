@@ -832,6 +832,11 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
     size_.x = std::max(size_.x, 1.0f);
     size_.y = std::max(size_.y, 1.0f);
     syncOrder(g);
+    if (frameSelectionNext_) {
+        frameSelectionNext_ = false;
+        fitFrames_ = 0;
+        frameSelected(g);
+    }
     if (fitFrames_ > 0) {
         doFrame(g);
         --fitFrames_;
@@ -1249,7 +1254,7 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
         menuPos_ = ImGui::GetMousePos();
         ImGui::OpenPopup("FindNode");
     }
-    drawFindMenu(g);
+    drawFindMenu(g, r);
 
     // Node widgets moved the layout cursor around; leave it at a valid spot covering the canvas.
     ImGui::SetCursorScreenPos(origin_);
@@ -1837,13 +1842,39 @@ void NodeEditor::frameSelected(const Graph& g) {
     pan_ = ImVec2(size_.x * 0.5f - (x0 + x1) * 0.5f * zoom_, size_.y * 0.5f - (y0 + y1) * 0.5f * zoom_);
 }
 
-void NodeEditor::drawFindMenu(Graph& g) {
+void NodeEditor::drawFindMenu(Graph& g, Result& r) {
+    // Labelled matches first (the names users gave), then this graph before nested groups, then
+    // by position: top to bottom, left to right. Nodes inside groups show their group path.
+    struct Hit {
+        int id;
+        std::vector<int> path;  // group ids from g down to the node's graph
+        std::string text, type;
+        float x, y;
+    };
+    std::vector<Hit> hits;
+    size_t total = 0;
+    std::vector<int> path;
+    auto collect = [&](auto& self, const Graph& gr, const std::string& prefix) -> void {
+        for (const auto& [id, n] : gr.nodes()) {
+            ++total;
+            const std::string& name = n->info().displayName;
+            if (!search_[0] || containsNoCase(n->label, search_) || containsNoCase(name, search_))
+                hits.push_back({id, path, prefix + (n->label.empty() ? name : n->label), n->label.empty() ? std::string() : name, n->x, n->y});
+            if (const auto* grp = dynamic_cast<const GroupNode*>(n.get())) {
+                path.push_back(id);
+                self(self, grp->inner(), prefix + (n->label.empty() ? grp->name : n->label) + " > ");
+                path.pop_back();
+            }
+        }
+    };
+    if (!ImGui::IsPopupOpen("FindNode")) return;
+    collect(collect, g, "");
     {
         // Fixed size inside the window, as the add menu (see drawAddMenu): room for every node of a
         // small graph, so it doesn't jump while filtering, and a scrolling list for a big one.
         const ImGuiStyle& st = ImGui::GetStyle();
         const ImGuiViewport* vp = ImGui::GetWindowViewport();
-        const int rows = std::clamp(int(g.nodes().size()), 3, 12);
+        const int rows = std::clamp(int(total), 3, 12);
         const ImVec2 size(ImGui::GetFontSize() * 20.0f, ImGui::GetFrameHeightWithSpacing() * 2 +
                                                           ImGui::GetTextLineHeightWithSpacing() * rows + st.WindowPadding.y * 2);
         ImVec2 pos = menuPos_;
@@ -1858,20 +1889,9 @@ void NodeEditor::drawFindMenu(Graph& g) {
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::InputTextWithHint("##find", "Label or node name...", search_, sizeof(search_))) searchSel_ = 0;
 
-    // Labelled matches first (the names users gave), then by position: top to bottom, left to right.
-    struct Hit {
-        int id;
-        std::string text, type;
-        float x, y;
-    };
-    std::vector<Hit> hits;
-    for (const auto& [id, n] : g.nodes()) {
-        const std::string& name = n->info().displayName;
-        if (search_[0] && !containsNoCase(n->label, search_) && !containsNoCase(name, search_)) continue;
-        hits.push_back({id, n->label.empty() ? name : n->label, n->label.empty() ? std::string() : name, n->x, n->y});
-    }
-    std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) {
+    std::stable_sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) {
         if (a.type.empty() != b.type.empty()) return !a.type.empty();
+        if (a.path != b.path) return a.path.size() != b.path.size() ? a.path.size() < b.path.size() : a.path < b.path;
         return a.y != b.y ? a.y < b.y : a.x < b.x;
     });
     const int n = int(hits.size());
@@ -1882,11 +1902,11 @@ void NodeEditor::drawFindMenu(Graph& g) {
     }
     searchSel_ = n ? std::clamp(searchSel_, 0, n - 1) : 0;
     if (n == 0) ImGui::TextDisabled("No matching nodes");
-    int chosen = 0;
+    int chosen = -1;
     ImGui::BeginChild("##results", ImVec2(0, 0), ImGuiChildFlags_None);
     for (int i = 0; i < n; ++i) {
-        ImGui::PushID(hits[i].id);
-        if (ImGui::Selectable(hits[i].text.c_str(), i == searchSel_)) chosen = hits[i].id;
+        ImGui::PushID(i);  // node ids repeat across groups
+        if (ImGui::Selectable(hits[i].text.c_str(), i == searchSel_)) chosen = i;
         if (i == searchSel_ && moved) ImGui::SetScrollHereY();
         if (!hits[i].type.empty()) {
             ImGui::SameLine(ImGui::GetFontSize() * 10.0f);
@@ -1895,11 +1915,17 @@ void NodeEditor::drawFindMenu(Graph& g) {
         ImGui::PopID();
     }
     ImGui::EndChild();
-    if (!chosen && n > 0 && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))
-        chosen = hits[size_t(searchSel_)].id;
-    if (chosen) {
-        select(chosen);
-        frameSelected(g);
+    if (chosen < 0 && n > 0 && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))
+        chosen = searchSel_;
+    if (chosen >= 0) {
+        const Hit& hit = hits[size_t(chosen)];
+        if (hit.path.empty()) {
+            select(hit.id);
+            frameSelected(g);
+        } else {
+            r.findPath = hit.path;  // the App opens the group; it then selects and frames the node there
+            r.findNode = hit.id;
+        }
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();

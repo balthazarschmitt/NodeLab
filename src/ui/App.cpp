@@ -625,6 +625,13 @@ void App::drawEditorWindow() {
         }
         if (r.enterGroup) enterGroup(r.enterGroup);
         else if (r.exitGroup) exitGroup();
+        else if (r.findNode) {
+            auto p = groupPath_;
+            p.insert(p.end(), r.findPath.begin(), r.findPath.end());
+            setGroupPath(p);
+            editor_.select(r.findNode);
+            editor_.frameSelectionNext();
+        }
     }
     editorFocused_ = visible && ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
     ImGui::End();
