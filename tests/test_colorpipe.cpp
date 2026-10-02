@@ -195,3 +195,46 @@ TEST_CASE("Contrast pivots on middle grey and never goes negative in scene-linea
     CHECK(r->pixel(0)[1] < 0.01f);
     CHECK(r->pixel(0)[2] > 4.0f);  // unclamped highlights
 }
+
+TEST_CASE("displayImage matches viewTransform for every view, look, exposure and gamma") {
+    // displayImage uses tables; viewTransform is the exact reference.
+    auto img = std::make_shared<Image>(256, 64);
+    uint32_t seed = 12345;
+    auto rnd = [&] {
+        seed = seed * 1664525u + 1013904223u;
+        return float(seed >> 8) / float(1u << 24);
+    };
+    for (size_t i = 0; i < img->pixelCount(); ++i) {
+        float* p = img->pixel(i);
+        for (int c = 0; c < 3; ++c) {
+            // Over 20 stops, with some negatives, zeros and very bright values.
+            const float r = rnd();
+            p[c] = r < 0.05f ? -rnd() : r < 0.1f ? 0.0f : std::exp2(rnd() * 22.0f - 16.0f);
+        }
+        p[3] = rnd();
+    }
+    // Worst difference for Standard and Raw, and for AgX.
+    float worst[2] = {};
+    for (int view = 0; view < 3; ++view)
+        for (int look = 0; look < 3; ++look)
+            for (float exposure : {0.0f, -1.3f, 2.0f})
+                for (float gamma : {1.0f, 1.8f}) {
+                    ColorManagement cm = ColorManagement::sceneLinear();
+                    cm.view = view, cm.look = look, cm.exposure = exposure, cm.gamma = gamma;
+                    const ImagePtr d = colormgmt::displayImage(img, cm);
+                    float& w = worst[view == ColorManagement::AgX];
+                    for (size_t i = 0; i < img->pixelCount(); ++i) {
+                        float want[3];
+                        colormgmt::viewTransform(cm, img->pixel(i), want);
+                        // Gamma steepens near black: compare before it.
+                        for (int c = 0; c < 3; ++c)
+                            w = std::max(w, std::abs(std::pow(d->pixel(i)[c], gamma) - std::pow(want[c], gamma)));
+                        REQUIRE(d->pixel(i)[3] == img->pixel(i)[3]);
+                    }
+                }
+    INFO("largest differences " << worst[0] << ", AgX " << worst[1]);
+    CHECK(worst[0] < 4e-6f);  // a 16-bit step is 1.5e-5
+    // viewTransform's float AgX polynomial is itself off by up to about 3e-5 near black, where
+    // the outset's colours cancel; the tables are computed in double.
+    CHECK(worst[1] < 1e-4f);
+}

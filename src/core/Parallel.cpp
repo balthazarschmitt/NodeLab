@@ -145,6 +145,31 @@ void run(int count, int chunk, const std::function<void(int, int)>& fn) {
 
 const std::atomic<bool>* currentCancel() { return tlsCancel; }
 
+namespace {
+
+// Runs fn(begin, end) over [0, n) in 1 MB blocks across the workers; small buffers stay on this
+// thread. Never cancelled: allocating or copying an image shouldn't throw EvalCancelled.
+template <typename Fn>
+void blocks(size_t n, Fn&& fn) {
+    constexpr size_t kBlock = size_t(1) << 18;  // floats
+    if (n <= kBlock * 2 || pool().size() <= 1) {
+        fn(size_t(0), n);
+        return;
+    }
+    CancelScope scope(nullptr);
+    run(int((n + kBlock - 1) / kBlock), 1, [&](int b, int e) { fn(size_t(b) * kBlock, std::min(n, size_t(e) * kBlock)); });
+}
+
+}  // namespace
+
+void zeroFill(float* p, size_t n) {
+    blocks(n, [&](size_t b, size_t e) { std::fill(p + b, p + e, 0.0f); });
+}
+
+void copyFloats(float* dst, const float* src, size_t n) {
+    blocks(n, [&](size_t b, size_t e) { std::copy(src + b, src + e, dst + b); });
+}
+
 CancelScope::CancelScope(const std::atomic<bool>* flag) : prev_(tlsCancel) { tlsCancel = flag; }
 CancelScope::~CancelScope() { tlsCancel = prev_; }
 

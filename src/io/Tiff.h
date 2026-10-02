@@ -57,12 +57,12 @@ public:
     bool empty() const { return entries_.empty(); }
 
     // Appends the directory (word aligned, entries sorted by tag, no next IFD) and its out-of-line
-    // values to `out`, and returns its offset. Offsets are relative to the start of `out`, which
-    // must be the TIFF header.
-    uint32_t write(std::vector<uint8_t>& out) {
+    // values to `out`, and returns its offset. `out` starts `base` bytes into the file, whose
+    // start is the TIFF header (so with base 0, `out` holds the header).
+    uint32_t write(std::vector<uint8_t>& out, size_t base = 0) {
         std::stable_sort(entries_.begin(), entries_.end(), [](const Entry& a, const Entry& b) { return a.tag < b.tag; });
-        if (out.size() & 1) out.push_back(0);
-        const uint32_t start = uint32_t(out.size());
+        if ((base + out.size()) & 1) out.push_back(0);
+        const uint32_t start = uint32_t(base + out.size());
         size_t extra = start + 2 + entries_.size() * 12 + 4;
         put16(out, uint32_t(entries_.size()));
         std::vector<uint8_t> tail;

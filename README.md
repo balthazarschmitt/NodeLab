@@ -8,7 +8,7 @@ glitch/experimental looks.
 
 Requires CMake ≥ 3.24 and a C++20 compiler. CLion's bundled MinGW toolchain works out of the box:
 open the folder in CLion, pick the `NodeLab` target, Run. Dependencies (GLFW, Dear ImGui, imnodes,
-nlohmann/json, stb, tinyexpr, LibRaw, zlib, doctest) are downloaded by CMake on first configure.
+nlohmann/json, stb, tinyexpr, LibRaw, zlib-ng, doctest) are downloaded by CMake on first configure.
 
 LibRaw (camera RAW decoding) is used under its CDDL 1.0 licence option
 (https://github.com/LibRaw/LibRaw/blob/master/LICENSE.CDDL). It is built with OpenMP and linked
@@ -41,7 +41,7 @@ Version: `NodeLab.exe --version` (also in the window title, Help menu and the ex
 See [CHANGELOG.md](CHANGELOG.md).
 
 Headless render: `NodeLab.exe --render project.nlproj out.png [--depth 16]` (the extension picks
-PNG, JPEG, TIFF or OpenEXR; `--depth 32` for full-float EXR)
+PNG, JPEG, TIFF or OpenEXR; `--depth 32` for full-float EXR; `--timings` prints evaluate and save times)
 Headless batch: `NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr] [--depth N] a.jpg b.jpg ...`
 (each source goes into the project's first Image Input and is saved as `outDir\<name>_edit.<ext>`)
 Benchmark: `NodeLab.exe --benchmark project.nlproj [--full] [--runs N]` (median ms per node)

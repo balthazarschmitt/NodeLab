@@ -22,11 +22,15 @@ build\nodelab_tests.exe
     renames the running exe to `NodeLab.old-<timestamp>.exe`, because Windows allows renaming a
     running exe but not overwriting it. The next build deletes old copies that are no longer running.
   - Never kill the user's NodeLab process.
-- **Dependencies:** FetchContent pulls glfw, imgui (v1.91.8-docking), nlohmann/json, stb, tinyexpr, zlib,
+- **Dependencies:** FetchContent pulls glfw, imgui (v1.91.8-docking), nlohmann/json, stb, tinyexpr, zlib-ng,
   LibRaw (0.21.3) and doctest.
   - LibRaw has no CMake build; `CMakeLists.txt` lists its sources (from its `Makefile.dist`). It is
     built with OpenMP, forced on with `LIBRAW_FORCE_OPENMP` because LibRaw disables OpenMP for MinGW.
     `-fopenmp` and the define are PUBLIC because LibRaw's inline allocator differs with OpenMP.
+  - `RawDecode.cpp` replaces LibRaw's single-threaded `recover_highlights` (Highlights:
+    Reconstruct) with a bit-identical parallel copy run from `post_interpolate_cb`, and reads
+    `imgdata.image` through the output curve instead of `dcraw_make_mem_image`. Recheck both
+    against LibRaw's code when upgrading it.
   - If a reconfigure fails while updating a `GIT_TAG master` dependency (stb, tinyexpr) offline,
     pass `-DFETCHCONTENT_UPDATES_DISCONNECTED=ON`.
   - `CMakeLists.txt` defaults `CMAKE_TLS_CAINFO` to Git for Windows' CA bundle, because WinLibs'
@@ -63,7 +67,8 @@ build\nodelab_tests.exe
 - **Node list:** `NodeLab.exe --list-nodes` prints every node with its pins and params.
 - **Headless render:** `NodeLab.exe --render project.nlproj out.png` renders at full resolution and
   also writes File Output nodes. The extension picks the format (.png/.jpg/.tif/.exr), and
-  `--depth 16` (or 32 for full-float EXR) sets the bit depth.
+  `--depth 16` (or 32 for full-float EXR) sets the bit depth. `--timings` prints evaluate and
+  save times.
 - **Benchmark:** `NodeLab.exe --benchmark project.nlproj [--full] [--runs N]` prints the median ms
   per node. Use it before and after performance work.
   - With `--device gpu`, per-node times are timer queries on queued work and can land on the
@@ -92,7 +97,7 @@ src/graph     Node (params, flags, region policy), Graph (links, frames, JSON), 
 src/nodes     one file per family: io, color, math (Mix), converter (+Expression), filter, transform,
               matte, texture, utility, group; filter/Denoise (a-trous wavelets); ImageOps (sampling,
               box blur, distance transform)
-src/io        image load (stb), ImageWrite (PNG/JPEG/TIFF/EXR, ICC, parallel zlib; Tiff.h IFD writer),
+src/io        image load (stb), ImageWrite (PNG/JPEG/TIFF/EXR, ICC, parallel zlib-ng and JPEG strips; Tiff.h IFD writer),
               RawDecode (LibRaw), Exif (orientation, export EXIF), Icc (embedded input profiles), Export (Lanczos resize), ImageCache (proxies
               per edge; full-res decoded on demand, scaled levels kept for regions; RAW proxies from a
               half-size decode), project files, Library (folder listing, sidecars `photo.ext.nlproj`
@@ -196,6 +201,9 @@ src/gpu       Device (hidden GL 4.3 context, texture pool, programs, timer queri
 - **Preferences:** `App::loadPreferences`/`savePreferences` (`%APPDATA%\NodeLab\preferences.json`).
   Automated runs neither load nor save them and keep the Inspector as a docked panel, so their
   scripts' coordinates hold.
+- **Image buffers:** `Image::px` uses `UninitAllocator`, so `Image(w, h)` zeroes and copies
+  across threads. Big scratch buffers that are written before they're read can use it too
+  (Denoise).
 - **Node state:** `Node::muted`, `collapsed` and `label` persist in JSON. `Graph::cloneNode` copies them.
 - **Groups:** a `GroupNode` owns an inner `Graph`, and its interface pins are pushed to the inner
   Group Input/Output nodes by `syncInner()`. Use `GroupNode::removePin`/`movePin`/`setPinType`, which

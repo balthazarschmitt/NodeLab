@@ -45,7 +45,10 @@ struct DenoisePlan {
 
 // Shrinks a band coefficient: d - t^2/d beyond the threshold, 0 within it. Less biased on strong
 // edges than soft thresholding (which takes t off everything), so detail keeps its contrast.
-inline float garrote(float d, float t) { return std::fabs(d) > t ? d - t * t / d : 0.0f; }
+inline float garrote(float d, float t) {
+    const float shrunk = d - t * t / d;  // computed either way, so loops of it vectorise
+    return std::fabs(d) > t ? shrunk : 0.0f;
+}
 
 inline float stabilise(float v, bool lin) { return lin ? std::copysign(std::sqrt(std::fabs(v)), v) : v; }
 inline float unstabilise(float v, bool lin) { return lin ? std::copysign(v * v, v) : v; }
@@ -103,8 +106,10 @@ public:
         const bool lin = ctx.linear();
         const int w = src->w, h = src->h;
         const size_t n = size_t(w) * h;
-        // Y, Cb, Cr interleaved: the passes read and write whole rows.
-        std::vector<float> c(n * 3), tmp(n * 3), next(n * 3), acc(n * 3, 0.0f);
+        // Y, Cb, Cr interleaved: the passes read and write whole rows. Every value is written
+        // before it's read, so the buffers (288 MB each at 24 MP) skip zeroing.
+        using Buffer = std::vector<float, UninitAllocator<float>>;
+        Buffer c(n * 3), tmp(n * 3), acc(n * 3);
         parallelFor(h, [&](int y) {
             for (int x = 0; x < w; ++x) {
                 const size_t i = size_t(y) * w + x;
@@ -114,32 +119,53 @@ public:
                 c[i * 3] = Y, c[i * 3 + 1] = (b - Y) / 1.8556f, c[i * 3 + 2] = (r - Y) / 1.5748f;
             }
         });
+        constexpr float k0 = dn::kTaps[0], k1 = dn::kTaps[1], k2 = dn::kTaps[2], k3 = dn::kTaps[3], k4 = dn::kTaps[4];
+        std::vector<float> thr(size_t(w) * 3);  // this level's threshold for every value of a row
         for (int j = 0; j < p.levels; ++j) {
             const int d = 1 << j;
+            for (size_t i = 0; i < thr.size(); ++i) thr[i] = p.t[j][i % 3];
             parallelFor(h, [&](int y) {
                 const float* row = &c[size_t(y) * w * 3];
                 float* o = &tmp[size_t(y) * w * 3];
-                for (int x = 0; x < w; ++x) {
+                // Taps clamp to the edge near the ends of the row; the middle runs as one flat
+                // loop over the interleaved values, which vectorises.
+                auto clamped = [&](int x) {
                     float s[3] = {0, 0, 0};
                     for (int k = 0; k < 5; ++k) {
                         const float* q = row + size_t(std::clamp(x + (k - 2) * d, 0, w - 1)) * 3;
                         for (int ch = 0; ch < 3; ++ch) s[ch] += dn::kTaps[k] * q[ch];
                     }
                     for (int ch = 0; ch < 3; ++ch) o[x * 3 + ch] = s[ch];
-                }
+                };
+                const int x0 = std::min(w, 2 * d), x1 = std::max(x0, w - 2 * d);
+                for (int x = 0; x < x0; ++x) clamped(x);
+                for (int x = x1; x < w; ++x) clamped(x);
+                const int s1 = 3 * d, s2 = 6 * d;
+                for (int i = x0 * 3; i < x1 * 3; ++i)
+                    o[i] = k0 * row[i - s2] + k1 * row[i - s1] + k2 * row[i] + k3 * row[i + s1] + k4 * row[i + s2];
             });
+            // The vertical half replaces this level with the next in place (it reads `c` only at
+            // the value it writes) and adds the band between them, shrunk, into the sum.
             parallelFor(h, [&](int y) {
-                const float* rows[5];
-                for (int k = 0; k < 5; ++k) rows[k] = &tmp[size_t(std::clamp(y + (k - 2) * d, 0, h - 1)) * w * 3];
+                const float* r[5];
+                for (int k = 0; k < 5; ++k) r[k] = &tmp[size_t(std::clamp(y + (k - 2) * d, 0, h - 1)) * w * 3];
                 const size_t base = size_t(y) * w * 3;
-                for (int x = 0; x < w * 3; ++x) {
-                    float s = 0;
-                    for (int k = 0; k < 5; ++k) s += dn::kTaps[k] * rows[k][x];
-                    next[base + x] = s;
-                    acc[base + x] += garrote(c[base + x] - s, p.t[j][x % 3]);
+                float* cr = &c[base];
+                float* ac = &acc[base];
+                if (j == 0) {
+                    for (int x = 0; x < w * 3; ++x) {
+                        const float s = k0 * r[0][x] + k1 * r[1][x] + k2 * r[2][x] + k3 * r[3][x] + k4 * r[4][x];
+                        ac[x] = garrote(cr[x] - s, thr[x]);
+                        cr[x] = s;
+                    }
+                } else {
+                    for (int x = 0; x < w * 3; ++x) {
+                        const float s = k0 * r[0][x] + k1 * r[1][x] + k2 * r[2][x] + k3 * r[3][x] + k4 * r[4][x];
+                        ac[x] += garrote(cr[x] - s, thr[x]);
+                        cr[x] = s;
+                    }
                 }
             });
-            std::swap(c, next);
         }
         auto img = std::make_shared<Image>(w, h);
         parallelFor(h, [&](int y) {

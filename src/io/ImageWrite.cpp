@@ -1,6 +1,7 @@
 #include "io/ImageWrite.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -27,60 +28,136 @@ void be32(Bytes& o, uint32_t v) {
     be16(o, v & 0xFFFF);
 }
 
+// Runs fn(i) for i in [0, n) on the worker threads, one item at a time (parallelFor runs fewer
+// than 16 items serially, but a handful of 1 MB zlib segments is still worth spreading).
+template <class Fn>
+void forEach(int n, Fn&& fn) {
+    parallel::run(n, 1, [&](int b, int e) {
+        for (int i = b; i < e; ++i) fn(i);
+    });
+}
+
 // zlib level for every format: 6 (zlib's default) packs 16-bit photos about 15% smaller than
 // level 1, and the parallel compression keeps it fast.
 constexpr int kZlibLevel = 6;
 
+// The deflate strategy for a block. A photo's filtered residuals have few long matches, so
+// run-length matching alone (Z_RLE) packs them as small as the full LZ matcher, three to four
+// times faster. Graphics (flat areas, repeated patterns) need the LZ matcher: there it's two to
+// three times smaller. A few 16 KB slices of the block, compressed both ways, decide.
+int strategyFor(const uint8_t* data, size_t n) {
+    constexpr size_t kSlice = 16384;
+    constexpr int kSlices = 4;
+    if (n < kSlice * kSlices) return Z_DEFAULT_STRATEGY;
+    size_t lz = 0, rle = 0;
+    Bytes buf(compressBound(uLong(kSlice)) + 64);
+    for (int s = 0; s < kSlices; ++s) {
+        const uint8_t* at = data + (n - kSlice) * size_t(s) / (kSlices - 1);
+        for (int strategy : {Z_DEFAULT_STRATEGY, Z_RLE}) {
+            z_stream z{};
+            if (deflateInit2(&z, kZlibLevel, Z_DEFLATED, -15, 8, strategy) != Z_OK) return Z_DEFAULT_STRATEGY;
+            z.next_in = const_cast<Bytef*>(at);
+            z.avail_in = uInt(kSlice);
+            z.next_out = buf.data();
+            z.avail_out = uInt(buf.size());
+            deflate(&z, Z_FINISH);
+            (strategy == Z_RLE ? rle : lz) += z.total_out;
+            deflateEnd(&z);
+        }
+    }
+    return lz * 50 < rle * 49 ? Z_DEFAULT_STRATEGY : Z_RLE;  // LZ when it's over 2% smaller
+}
+
+// One deflate stream over data[0, n): zlib-wrapped (windowBits 15) or raw (-15). `dict` primes
+// the window with the bytes before the block; `flush` is Z_FINISH, or Z_SYNC_FLUSH for a
+// segment that another continues.
+Bytes deflateBlock(const uint8_t* data, size_t n, int windowBits, const uint8_t* dict, size_t dictLen, int flush) {
+    z_stream z{};
+    if (deflateInit2(&z, kZlibLevel, Z_DEFLATED, windowBits, 8, strategyFor(data, n)) != Z_OK)
+        throw std::runtime_error("zlib failed");
+    if (dictLen) deflateSetDictionary(&z, dict, uInt(dictLen));
+    Bytes out(deflateBound(&z, uLong(n)) + 16);  // + a sync flush marker
+    z.next_in = const_cast<Bytef*>(data);
+    z.avail_in = uInt(n);
+    z.next_out = out.data();
+    z.avail_out = uInt(out.size());
+    const int r = deflate(&z, flush);
+    out.resize(out.size() - z.avail_out);
+    deflateEnd(&z);
+    if (r != (flush == Z_FINISH ? Z_STREAM_END : Z_OK) || z.avail_in) throw std::runtime_error("zlib failed");
+    return out;
+}
+
 // One zlib stream (the format of TIFF Deflate strips and OpenEXR ZIP blocks), for blocks that
 // are compressed in parallel with each other.
-Bytes zlibBlock(const uint8_t* data, size_t n) {
-    uLongf len = compressBound(uLong(n));
-    Bytes out(len);
-    if (compress2(out.data(), &len, data, uLong(n), kZlibLevel) != Z_OK) throw std::runtime_error("zlib failed");
-    out.resize(len);
-    return out;
+Bytes zlibBlock(const uint8_t* data, size_t n) { return deflateBlock(data, n, 15, nullptr, 0, Z_FINISH); }
+
+// A PNG chunk appended to `o`: length, type, data, CRC of type and data.
+void appendChunk(Bytes& o, const char* type, const uint8_t* data, size_t n) {
+    be32(o, uint32_t(n));
+    o.insert(o.end(), type, type + 4);
+    uLong crc = crc32_z(crc32(0, nullptr, 0), reinterpret_cast<const Bytef*>(type), 4);
+    if (n) {  // crc32 of a null buffer is 0, not the running value
+        o.insert(o.end(), data, data + n);
+        crc = crc32_z(crc, data, n);
+    }
+    be32(o, uint32_t(crc));
 }
 
-// One zlib stream for a large buffer (PNG's image data), compressed in parallel the way pigz
-// does: 1 MB segments, each primed with the 32 KB before it as its dictionary and ended with a
-// sync flush (the last one ends the stream), joined under one header and Adler-32 checksum.
-Bytes zlibParallel(const uint8_t* data, size_t n) {
-    constexpr size_t kSeg = size_t(1) << 20, kDict = 32768;
+// PNG's image data as IDAT chunks, one zlib stream compressed in parallel the way pigz does:
+// 1 MB segments, each primed with the 32 KB before it as its dictionary and ended with a sync
+// flush (the last one ends the stream). Each worker also wraps its segment in IDAT chunks of at
+// most 1 MB (some readers, such as OpenCV, refuse larger ones) and computes their CRCs and its
+// part of the Adler-32 checksum, which goes last in a chunk of its own.
+std::vector<Bytes> idatParallel(const uint8_t* data, size_t n) {
+    constexpr size_t kSeg = size_t(1) << 20, kDict = 32768, kMaxChunk = size_t(1) << 20;
     const int segs = int(std::max<size_t>(1, (n + kSeg - 1) / kSeg));
-    std::vector<Bytes> parts(segs);
-    parallelFor(segs, [&](int i) {
+    std::vector<Bytes> chunks(segs + 1);
+    std::vector<uLong> adlers(segs);
+    forEach(segs, [&](int i) {
         const size_t at = size_t(i) * kSeg, len = std::min(kSeg, n - at);
-        z_stream z{};
-        if (deflateInit2(&z, kZlibLevel, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK)
-            throw std::runtime_error("zlib failed");
-        if (at > 0) {
-            const size_t d = std::min(kDict, at);
-            deflateSetDictionary(&z, data + at - d, uInt(d));
-        }
-        Bytes& out = parts[i];
-        out.resize(deflateBound(&z, uLong(len)) + 16);  // + the sync flush marker
-        z.next_in = const_cast<Bytef*>(data + at);
-        z.avail_in = uInt(len);
-        z.next_out = out.data();
-        z.avail_out = uInt(out.size());
-        const int r = deflate(&z, i + 1 == segs ? Z_FINISH : Z_SYNC_FLUSH);
-        out.resize(out.size() - z.avail_out);
-        deflateEnd(&z);
-        if (r != (i + 1 == segs ? Z_STREAM_END : Z_OK) || z.avail_in) throw std::runtime_error("zlib failed");
+        const size_t d = std::min(kDict, at);
+        Bytes z = deflateBlock(data + at, len, -15, data + at - d, d, i + 1 == segs ? Z_FINISH : Z_SYNC_FLUSH);
+        if (i == 0) z.insert(z.begin(), {0x78, 0x9C});  // deflate, 32 KB window, default level
+        adlers[i] = adler32_z(1, data + at, len);
+        Bytes& out = chunks[i];
+        out.reserve(z.size() + 12 * (z.size() / kMaxChunk + 1));
+        size_t pos = 0;
+        do {
+            const size_t c = std::min(kMaxChunk, z.size() - pos);
+            appendChunk(out, "IDAT", z.data() + pos, c);
+            pos += c;
+        } while (pos < z.size());
     });
-    Bytes out = {0x78, 0x9C};  // deflate, 32 KB window, default level
-    for (const Bytes& p : parts) out.insert(out.end(), p.begin(), p.end());
-    be32(out, uint32_t(adler32_z(adler32(0, nullptr, 0), data, n)));
-    return out;
+    uLong adler = adlers[0];
+    for (int i = 1; i < segs; ++i)
+        adler = adler32_combine(adler, adlers[i], z_off_t(std::min(kSeg, n - size_t(i) * kSeg)));
+    Bytes tail;
+    be32(tail, uint32_t(adler));
+    Bytes& last = chunks[segs];
+    appendChunk(last, "IDAT", tail.data(), tail.size());
+    return chunks;
 }
 
-bool writeFile(const std::string& pathU8, const Bytes& data, std::string& err) {
+struct Span {
+    const uint8_t* data;
+    size_t size;
+};
+
+// Writes the pieces one after another, so large outputs aren't first copied into one buffer.
+bool writeFile(const std::string& pathU8, const std::vector<Span>& pieces, std::string& err) {
     std::ofstream f(u8ToPath(pathU8), std::ios::binary);
-    if (!f || !f.write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size()))) {
+    for (const Span& s : pieces)
+        if (!f || !f.write(reinterpret_cast<const char*>(s.data), std::streamsize(s.size))) break;
+    if (!f || !f.flush()) {
         err = "could not write file";
         return false;
     }
     return true;
+}
+
+bool writeFile(const std::string& pathU8, const Bytes& data, std::string& err) {
+    return writeFile(pathU8, {{data.data(), data.size()}}, err);
 }
 
 bool opaque(const Image& img) {
@@ -89,18 +166,20 @@ bool opaque(const Image& img) {
     return true;
 }
 
-// Display values 0..1 to integers 0..maxV, `comp` channels per pixel, row-major.
+// Display values 0..1 to integers 0..maxV, `comp` channels per pixel, row-major. Rounds as
+// std::lround of the float product did (half away from zero), without its library call.
 template <class T>
 std::vector<T> quantise(const Image& img, int comp, float maxV) {
     std::vector<T> out(img.pixelCount() * comp);
     parallelFor(img.h, [&](int y) {
-        for (int x = 0; x < img.w; ++x) {
-            const size_t i = size_t(y) * img.w + x;
+        const float* s = img.pixel(size_t(y) * img.w);
+        T* d = out.data() + size_t(y) * img.w * comp;
+        for (int x = 0; x < img.w; ++x, s += 4, d += comp)
             for (int c = 0; c < comp; ++c) {
-                const float v = img.px[i * 4 + c];
-                out[i * comp + c] = T(std::lround(std::clamp(v == v ? v : 0.0f, 0.0f, 1.0f) * maxV));
+                const float v = s[c];
+                const float p = std::clamp(v == v ? v : 0.0f, 0.0f, 1.0f) * maxV;
+                d[c] = T(double(p) + 0.5);  // exact in double, so this is lround for p >= 0
             }
-        }
     });
     return out;
 }
@@ -109,25 +188,8 @@ std::vector<T> quantise(const Image& img, int comp, float maxV) {
 
 Bytes pngChunk(const char* type, const Bytes& data) {
     Bytes c;
-    be32(c, uint32_t(data.size()));
-    c.insert(c.end(), type, type + 4);
-    c.insert(c.end(), data.begin(), data.end());
-    be32(c, uint32_t(crc32_z(crc32(0, nullptr, 0), c.data() + 4, c.size() - 4)));
+    appendChunk(c, type, data.data(), data.size());
     return c;
-}
-
-// Image data as IDAT chunks of at most 1 MB: one huge chunk is valid but some readers (OpenCV)
-// refuse chunks that large, and libpng itself writes small ones.
-Bytes idatChunks(const uint8_t* z, size_t n) {
-    constexpr size_t kMax = size_t(1) << 20;
-    Bytes out;
-    size_t at = 0;
-    do {
-        const Bytes c = pngChunk("IDAT", Bytes(z + at, z + std::min(n, at + kMax)));
-        out.insert(out.end(), c.begin(), c.end());
-        at += kMax;
-    } while (at < n);
-    return out;
 }
 
 // The sRGB chunk (perceptual intent) plus the gAMA fallback the PNG spec recommends with it.
@@ -140,10 +202,51 @@ Bytes pngSrgbChunks() {
     return out;
 }
 
-// 8- or 16-bit PNG: rows filtered in parallel (per row, the filter with the smallest sum of
-// absolute differences, the heuristic libpng and stb use), then compressed in parallel.
-Bytes encodePng(const Image& img, int comp, int depth, bool srgb) {
-    const bool sixteen = depth >= 16;
+// One row's PNG filter: per row, the filter with the smallest sum of absolute differences (the
+// heuristic libpng and stb use). Each filter is its own loop, so the compiler can vectorise it.
+void filterRow(const uint8_t* cur, const uint8_t* prev, size_t n, int bpp, uint8_t* out, uint8_t* trial) {
+    auto score = [&](const uint8_t* t) {
+        long s = 0;
+        for (size_t i = 0; i < n; ++i) s += std::abs(int(int8_t(t[i])));
+        return s;
+    };
+    const size_t b = std::min(size_t(bpp), n);
+    long best = score(cur);
+    out[0] = 0;
+    std::memcpy(out + 1, cur, n);
+    auto consider = [&](int f) {
+        const long s = score(trial);
+        if (s < best) {
+            best = s;
+            out[0] = uint8_t(f);
+            std::memcpy(out + 1, trial, n);
+        }
+    };
+    // Sub
+    for (size_t i = 0; i < b; ++i) trial[i] = cur[i];
+    for (size_t i = b; i < n; ++i) trial[i] = uint8_t(cur[i] - cur[i - bpp]);
+    consider(1);
+    // Up
+    for (size_t i = 0; i < n; ++i) trial[i] = uint8_t(cur[i] - prev[i]);
+    consider(2);
+    // Average
+    for (size_t i = 0; i < b; ++i) trial[i] = uint8_t(cur[i] - (prev[i] >> 1));
+    for (size_t i = b; i < n; ++i) trial[i] = uint8_t(cur[i] - ((cur[i - bpp] + prev[i]) >> 1));
+    consider(3);
+    // Paeth
+    for (size_t i = 0; i < b; ++i) trial[i] = uint8_t(cur[i] - prev[i]);  // a = c = 0: predicts b
+    for (size_t i = b; i < n; ++i) {
+        const int a = cur[i - bpp], bb = prev[i], c = prev[i - bpp];
+        const int p = a + bb - c, pa = std::abs(p - a), pb = std::abs(p - bb), pc = std::abs(p - c);
+        trial[i] = uint8_t(cur[i] - (pa <= pb && pa <= pc ? a : pb <= pc ? bb : c));
+    }
+    consider(4);
+}
+
+// 8- or 16-bit PNG: rows filtered in parallel, then compressed in parallel.
+bool writePng(const std::string& pathU8, const Image& img, const SaveOptions& opt, std::string& err) {
+    const int comp = opaque(img) ? 3 : 4;
+    const bool sixteen = opt.depth >= 16;
     std::vector<uint16_t> px16;
     std::vector<uint8_t> px8;
     if (sixteen) px16 = quantise<uint16_t>(img, comp, 65535.0f);
@@ -151,7 +254,7 @@ Bytes encodePng(const Image& img, int comp, int depth, bool srgb) {
     const int bpp = comp * (sixteen ? 2 : 1);
     const size_t rowBytes = size_t(img.w) * bpp;
     Bytes filtered(size_t(img.h) * (rowBytes + 1));
-    parallelFor(img.h, [&](int y) {
+    parallelForChunks(img.h, [&](int y0, int y1) {
         Bytes cur(rowBytes), prev(rowBytes, 0), trial(rowBytes);
         auto load = [&](Bytes& dst, int row) {
             const size_t n = size_t(img.w) * comp;
@@ -165,53 +268,33 @@ Bytes encodePng(const Image& img, int comp, int depth, bool srgb) {
                 dst[i * 2 + 1] = uint8_t(s[i]);
             }
         };
-        load(cur, y);
-        if (y > 0) load(prev, y - 1);
-        uint8_t* outRow = filtered.data() + size_t(y) * (rowBytes + 1);
-        long best = -1;
-        for (int f = 0; f < 5; ++f) {
-            long sum = 0;
-            for (size_t i = 0; i < rowBytes; ++i) {
-                const int a = i >= size_t(bpp) ? cur[i - bpp] : 0, b = prev[i], c = i >= size_t(bpp) ? prev[i - bpp] : 0;
-                int pred = 0;
-                switch (f) {
-                    case 1: pred = a; break;
-                    case 2: pred = b; break;
-                    case 3: pred = (a + b) >> 1; break;
-                    case 4: {
-                        const int p = a + b - c, pa = std::abs(p - a), pb = std::abs(p - b), pc = std::abs(p - c);
-                        pred = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
-                        break;
-                    }
-                }
-                trial[i] = uint8_t(cur[i] - pred);
-                sum += std::abs(int(int8_t(trial[i])));
-            }
-            if (best < 0 || sum < best) {
-                best = sum;
-                outRow[0] = uint8_t(f);
-                std::memcpy(outRow + 1, trial.data(), rowBytes);
-            }
+        if (y0 > 0) load(prev, y0 - 1);
+        for (int y = y0; y < y1; ++y) {
+            load(cur, y);
+            filterRow(cur.data(), prev.data(), rowBytes, bpp, filtered.data() + size_t(y) * (rowBytes + 1), trial.data());
+            std::swap(cur, prev);
         }
     });
-    Bytes png = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+    px16 = {};
+    px8 = {};
+    Bytes head = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
     Bytes ihdr;
     be32(ihdr, uint32_t(img.w));
     be32(ihdr, uint32_t(img.h));
     // Bit depth, colour type RGB(A), deflate, adaptive filtering, no interlace.
     ihdr.insert(ihdr.end(), {uint8_t(sixteen ? 16 : 8), uint8_t(comp == 4 ? 6 : 2), 0, 0, 0});
-    Bytes c = pngChunk("IHDR", ihdr);
-    png.insert(png.end(), c.begin(), c.end());
-    if (srgb) {
+    appendChunk(head, "IHDR", ihdr.data(), ihdr.size());
+    if (opt.srgb) {
         Bytes s = pngSrgbChunks();
-        png.insert(png.end(), s.begin(), s.end());
+        head.insert(head.end(), s.begin(), s.end());
     }
-    const Bytes z = zlibParallel(filtered.data(), filtered.size());
-    c = idatChunks(z.data(), z.size());
-    png.insert(png.end(), c.begin(), c.end());
-    c = pngChunk("IEND", {});
-    png.insert(png.end(), c.begin(), c.end());
-    return png;
+    const std::vector<Bytes> idat = idatParallel(filtered.data(), filtered.size());
+    Bytes end;
+    appendChunk(end, "IEND", nullptr, 0);
+    std::vector<Span> pieces = {{head.data(), head.size()}};
+    for (const Bytes& c : idat) pieces.push_back({c.data(), c.size()});
+    pieces.push_back({end.data(), end.size()});
+    return writeFile(pathU8, pieces, err);
 }
 
 void appendBytes(void* ctx, void* data, int size) {
@@ -219,17 +302,76 @@ void appendBytes(void* ctx, void* data, int size) {
     out->insert(out->end(), static_cast<uint8_t*>(data), static_cast<uint8_t*>(data) + size);
 }
 
-bool writePng(const std::string& pathU8, const Image& img, const SaveOptions& opt, std::string& err) {
-    return writeFile(pathU8, encodePng(img, opaque(img) ? 3 : 4, opt.depth, opt.srgb), err);
+// ---------------------------------------------------------------- JPEG
+
+// Where a JPEG's entropy-coded data starts (after the SOS segment), with the offsets of the SOF0
+// height and the SOS marker; 0 if the headers don't parse.
+size_t jpegScanStart(const Bytes& j, size_t& sofHeight, size_t& sos) {
+    size_t pos = 2;
+    while (pos + 4 <= j.size() && j[pos] == 0xFF) {
+        const size_t len = size_t(j[pos + 2]) << 8 | j[pos + 3];
+        if (j[pos + 1] == 0xC0) sofHeight = pos + 5;
+        if (j[pos + 1] == 0xDA) {
+            sos = pos;
+            return pos + 2 + len;
+        }
+        pos += 2 + len;
+    }
+    return 0;
 }
 
-// ---------------------------------------------------------------- JPEG
+// Baseline JPEG through stb, encoded in strips in parallel. stb writes each strip as a complete
+// JPEG. With a restart interval of one strip's MCUs, a decoder resets its DC predictions at each
+// strip, just as each of stb's encodes started from zero, so the strips join into one file: the
+// first strip's headers (with the full height and a DRI segment added), then each strip's
+// entropy-coded data, with an RSTn marker between strips. It decodes to exactly the pixels of a
+// single stb encode.
+bool encodeJpeg(const uint8_t* rgb, int w, int h, int quality, Bytes& jpg) {
+    const int mcu = quality <= 90 ? 16 : 8;  // stb subsamples chroma (4:2:0) at 90 and below
+    const int mcusPerRow = (w + mcu - 1) / mcu, mcuRows = (h + mcu - 1) / mcu;
+    // Whole MCU rows per strip: enough strips for every worker, within DRI's 16-bit interval.
+    const int perStrip = std::min(std::max(1, mcuRows / (parallel::workerCount() * 4)), 65535 / mcusPerRow);
+    const int strips = perStrip > 0 ? (mcuRows + perStrip - 1) / perStrip : 1;
+    if (strips < 2) return stbi_write_jpg_to_func(appendBytes, &jpg, w, h, 3, rgb, quality) && jpg.size() >= 4;
+    std::vector<Bytes> parts(strips);
+    std::vector<size_t> scan(strips);
+    std::atomic<bool> ok = true;
+    size_t sofHeight = 0, sos = 0;
+    forEach(strips, [&](int s) {
+        const int y0 = s * perStrip * mcu, y1 = std::min(h, y0 + perStrip * mcu);
+        size_t sofAt = 0, sosAt = 0;
+        if (!stbi_write_jpg_to_func(appendBytes, &parts[s], w, y1 - y0, 3, rgb + size_t(y0) * w * 3, quality) ||
+            !(scan[s] = jpegScanStart(parts[s], sofAt, sosAt)) || parts[s].size() < scan[s] + 2) {
+            ok = false;
+            return;
+        }
+        if (s == 0) sofHeight = sofAt, sos = sosAt;
+    });
+    if (!ok || !sofHeight) return false;
+    const Bytes& first = parts[0];
+    jpg.assign(first.begin(), first.begin() + sos);
+    jpg[sofHeight] = uint8_t(h >> 8);
+    jpg[sofHeight + 1] = uint8_t(h);
+    const int interval = perStrip * mcusPerRow;
+    jpg.insert(jpg.end(), {0xFF, 0xDD, 0, 4, uint8_t(interval >> 8), uint8_t(interval)});  // DRI
+    jpg.insert(jpg.end(), first.begin() + sos, first.begin() + scan[0]);                    // SOS
+    size_t total = jpg.size() + 2;
+    for (int s = 0; s < strips; ++s) total += parts[s].size() - scan[s];
+    jpg.reserve(total);
+    for (int s = 0; s < strips; ++s) {
+        // Each strip's data ends with its EOI marker: replaced by RSTn, and by EOI after the last.
+        jpg.insert(jpg.end(), parts[s].begin() + scan[s], parts[s].end() - 2);
+        if (s + 1 < strips) jpg.insert(jpg.end(), {0xFF, uint8_t(0xD0 + s % 8)});
+        Bytes().swap(parts[s]);
+    }
+    jpg.insert(jpg.end(), {0xFF, 0xD9});
+    return true;
+}
 
 bool writeJpeg(const std::string& pathU8, const Image& img, const SaveOptions& opt, std::string& err) {
     const std::vector<uint8_t> bytes = quantise<uint8_t>(img, 3, 255.0f);
     Bytes jpg;
-    if (!stbi_write_jpg_to_func(appendBytes, &jpg, img.w, img.h, 3, bytes.data(), std::clamp(opt.jpegQuality, 1, 100)) ||
-        jpg.size() < 4) {
+    if (!encodeJpeg(bytes.data(), img.w, img.h, std::clamp(opt.jpegQuality, 1, 100), jpg)) {
         err = "could not encode JPEG";
         return false;
     }
@@ -272,7 +414,7 @@ bool writeTiff(const std::string& pathU8, const Image& img, const SaveOptions& o
     else px8 = quantise<uint8_t>(img, comp, 255.0f);
 
     std::vector<Bytes> packed(strips);
-    parallelFor(strips, [&](int s) {
+    forEach(strips, [&](int s) {
         const int y0 = s * rowsPerStrip, y1 = std::min(img.h, y0 + rowsPerStrip);
         Bytes raw(size_t(y1 - y0) * rowBytes);
         const size_t n = size_t(img.w) * comp;  // samples per row
@@ -294,14 +436,17 @@ bool writeTiff(const std::string& pathU8, const Image& img, const SaveOptions& o
         packed[s] = zlibBlock(raw.data(), raw.size());
     });
 
-    Bytes out = tiff::header();
+    px16 = {};
+    px8 = {};
+    Bytes head = tiff::header();
     std::vector<uint32_t> offsets, counts;
+    size_t pos = head.size();
     for (const Bytes& p : packed) {
-        offsets.push_back(uint32_t(out.size()));
+        offsets.push_back(uint32_t(pos));
         counts.push_back(uint32_t(p.size()));
-        out.insert(out.end(), p.begin(), p.end());
+        pos += p.size();
     }
-    if (out.size() > 0xFFFFFFF0u) {
+    if (pos > 0xFFFFFFF0u) {
         err = "image too large for TIFF";
         return false;
     }
@@ -325,8 +470,12 @@ bool writeTiff(const std::string& pathU8, const Image& img, const SaveOptions& o
     if (comp == 4) ifd.shorts(338, {2});                  // ExtraSamples: unassociated alpha
     ifd.shorts(339, std::vector<uint32_t>(comp, 1));      // SampleFormat: unsigned integer
     if (opt.srgb) ifd.undefined(34675, srgbIccProfile());  // InterColorProfile
-    tiff::set32(out, 4, ifd.write(out));
-    return writeFile(pathU8, out, err);
+    Bytes dir;
+    tiff::set32(head, 4, ifd.write(dir, pos));
+    std::vector<Span> pieces = {{head.data(), head.size()}};
+    for (const Bytes& p : packed) pieces.push_back({p.data(), p.size()});
+    pieces.push_back({dir.data(), dir.size()});
+    return writeFile(pathU8, pieces, err);
 }
 
 // ---------------------------------------------------------------- OpenEXR
@@ -387,7 +536,7 @@ bool writeExr(const std::string& pathU8, const Image& img, const SaveOptions& op
     constexpr int kLines = 16;
     const int blocks = (img.h + kLines - 1) / kLines;
     std::vector<Bytes> packed(blocks);
-    parallelFor(blocks, [&](int b) {
+    forEach(blocks, [&](int b) {
         const int y0 = b * kLines, y1 = std::min(img.h, y0 + kLines);
         Bytes raw;
         raw.reserve(size_t(y1 - y0) * img.w * chans.size() * sampleBytes);
@@ -431,8 +580,9 @@ bool writeExr(const std::string& pathU8, const Image& img, const SaveOptions& op
         tiff::put32(out, uint32_t(pos >> 32));
         pos += p.size();
     }
-    for (const Bytes& p : packed) out.insert(out.end(), p.begin(), p.end());
-    return writeFile(pathU8, out, err);
+    std::vector<Span> pieces = {{out.data(), out.size()}};
+    for (const Bytes& p : packed) pieces.push_back({p.data(), p.size()});
+    return writeFile(pathU8, pieces, err);
 }
 
 }  // namespace

@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <vector>
 
 #include "core/ColorMath.h"
 #include "core/Parallel.h"
@@ -109,16 +112,146 @@ void viewTransform(const ColorManagement& cm, const float in[3], float out[3]) {
         for (int k = 0; k < 3; ++k) out[k] = std::pow(out[k], 1.0f / cm.gamma);
 }
 
+namespace {
+
+// viewTransform for whole images: its log2 and pow calls (nine a pixel for AgX) come from tables
+// with linear interpolation. The tables are computed in double, so they're accurate to about
+// 1e-7, closer than viewTransform's own float maths (AgX's polynomial cancels terms of about 30).
+// viewTransform stays the reference (tests compare the two) and serves single pixels.
+struct Lut {
+    float lo = 0, scale = 0;
+    std::vector<float> v;
+    template <class F>
+    Lut(float lo_, float hi, int n, F f) : lo(lo_), scale(n / (hi - lo_)), v(n + 2) {
+        for (int i = 0; i <= n + 1; ++i) v[i] = float(f(lo_ + (double(hi) - lo_) * i / n));
+    }
+    // x within [lo, hi].
+    float operator()(float x) const {
+        const float p = (x - lo) * scale;
+        const int i = int(p);
+        return v[i] + (p - float(i)) * (v[i + 1] - v[i]);
+    }
+};
+
+// sRGB encoding of 0..1.
+const Lut& srgbLut() {
+    static const Lut l(0.0f, 1.0f, 16384, [](double x) {
+        return x <= 0.0031308 ? x * 12.92 : 1.055 * std::pow(x, 1.0 / 2.4) - 0.055;
+    });
+    return l;
+}
+
+// AgX's display gamma, for 0..2 (the outset rarely leaves it; beyond is computed).
+const Lut& gamma22Lut() {
+    static const Lut l(0.0f, 2.0f, 16384, [](double x) { return std::pow(x, 2.2); });
+    return l;
+}
+
+// AgX's log2 encoding and contrast sigmoid in one, indexed by the float's bits: the exponent and
+// the top 10 mantissa bits pick the entry, the remaining bits interpolate (linear in x within
+// each step). It covers 2^-13..2^5, which holds AgX's range of 2^-12.47..2^4.03; below and above
+// it the curve is flat. The two steps holding the range's ends (where the clamp bends the curve)
+// are computed exactly.
+struct AgxCurve {
+    static constexpr int kMinExp = -13, kOctaves = 18, kSub = 10;
+    uint32_t base = 0;
+    std::vector<float> v;
+    float lowV = 0, highV = 0;
+    uint32_t kinkLo = 0, kinkHi = 0;
+    static float exact(float xf) {
+        double x = (std::log2(std::max(double(xf), 1e-10)) - kAgxMinEv) / (double(kAgxMaxEv) - kAgxMinEv);
+        x = std::clamp(x, 0.0, 1.0);
+        const double x2 = x * x, x4 = x2 * x2;  // agxContrast in double
+        return float(15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232);
+    }
+    AgxCurve() {
+        const float first = std::ldexp(1.0f, kMinExp);
+        std::memcpy(&base, &first, 4);
+        const int n = kOctaves << kSub;
+        v.resize(n + 1);
+        for (int i = 0; i <= n; ++i) {
+            const uint32_t bits = base + (uint32_t(i) << (23 - kSub));
+            float x;
+            std::memcpy(&x, &bits, 4);
+            v[i] = exact(x);
+        }
+        lowV = exact(0.0f);
+        highV = exact(std::ldexp(1.0f, kMinExp + kOctaves));
+        auto cell = [&](float ev) {
+            const float x = std::exp2(ev);
+            uint32_t bits;
+            std::memcpy(&bits, &x, 4);
+            return (bits - base) >> (23 - kSub);
+        };
+        kinkLo = cell(kAgxMinEv);
+        kinkHi = cell(kAgxMaxEv);
+    }
+    float operator()(float x) const {
+        uint32_t bits;
+        std::memcpy(&bits, &x, 4);
+        if (!(x > 0.0f) || bits < base) return lowV;  // also NaN
+        const uint32_t off = bits - base;
+        const uint32_t i = off >> (23 - kSub);
+        if (i >= uint32_t(v.size() - 1)) return highV;
+        if (i == kinkLo || i == kinkHi) return exact(x);
+        const float f = float(off & ((1u << (23 - kSub)) - 1)) * (1.0f / float(1u << (23 - kSub)));
+        return v[i] + f * (v[i + 1] - v[i]);
+    }
+};
+
+const AgxCurve& agxCurve() {
+    static const AgxCurve c;
+    return c;
+}
+
+inline float clamp01(float x) { return x > 0.0f ? (x < 1.0f ? x : 1.0f) : 0.0f; }  // NaN -> 0
+
+}  // namespace
+
 ImagePtr displayImage(const ImagePtr& img, const ColorManagement& cm) {
     if (!img || !cm.linear) return img;
     auto out = std::make_shared<Image>(img->w, img->h);
+    const float m = std::exp2(cm.exposure);
+    const float invGamma = 1.0f / cm.gamma;
+    const Lut& srgb = srgbLut();
+    const Lut& g22 = gamma22Lut();
+    const AgxCurve& curve = agxCurve();
+    // 709 -> 2020 -> inset folded into one matrix; the outset comes before the gamma, so it stays.
+    float in[3][3];
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c)
+            in[r][c] = kAgxInset[r][0] * k709To2020[0][c] + kAgxInset[r][1] * k709To2020[1][c] + kAgxInset[r][2] * k709To2020[2][c];
+    const float power = cm.look == ColorManagement::Punchy ? 1.35f : 1.0f;
+    const float sat = cm.look == ColorManagement::Punchy ? 1.4f : 0.0f;
     parallelFor(img->h, [&](int y) {
-        for (int x = 0; x < img->w; ++x) {
-            const size_t i = size_t(y) * img->w + x;
-            const float* s = img->pixel(i);
-            float* d = out->pixel(i);
-            viewTransform(cm, s, d);
-            d[3] = s[3];
+        const float* s = img->pixel(size_t(y) * img->w);
+        float* d = out->pixel(size_t(y) * img->w);
+        for (int x = 0; x < img->w; ++x, s += 4, d += 4) {
+            const float r = s[0] * m, g = s[1] * m, b = s[2] * m;
+            float o[3];
+            if (cm.view == ColorManagement::AgX) {
+                float v[3];
+                for (int k = 0; k < 3; ++k) v[k] = curve(in[k][0] * r + in[k][1] * g + in[k][2] * b);
+                if (cm.look != ColorManagement::None) {
+                    const float luma = 0.2126f * v[0] + 0.7152f * v[1] + 0.0722f * v[2];
+                    for (float& c : v) c = luma + sat * (std::pow(std::max(c, 0.0f), power) - luma);
+                }
+                float e[3];
+                mul(kAgxOutset, v, e);
+                for (float& c : e) {
+                    c = std::max(c, 0.0f);
+                    c = c <= 2.0f ? g22(c) : std::pow(c, 2.2f);
+                }
+                mul(k2020To709, e, o);
+                for (float& c : o) c = srgb(clamp01(c));
+            } else if (cm.view == ColorManagement::Raw) {
+                o[0] = clamp01(r), o[1] = clamp01(g), o[2] = clamp01(b);
+            } else {
+                o[0] = srgb(clamp01(r)), o[1] = srgb(clamp01(g)), o[2] = srgb(clamp01(b));
+            }
+            if (cm.gamma != 1.0f)
+                for (float& c : o) c = std::pow(c, invGamma);
+            d[0] = o[0], d[1] = o[1], d[2] = o[2], d[3] = s[3];
         }
     });
     return out;

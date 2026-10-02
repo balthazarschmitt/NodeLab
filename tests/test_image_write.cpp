@@ -12,6 +12,8 @@
 #include <vector>
 
 #include <stb_image.h>
+#include <stb_image_write.h>
+#include <zlib.h>
 
 #include "core/ColorMath.h"
 #include "graph/Graph.h"
@@ -71,6 +73,44 @@ Image gradient(int w, int h, float alpha = 1.0f) {
             p[0] = float(x) / (w - 1), p[1] = float(y) / (h - 1), p[2] = 0.3f, p[3] = alpha;
         }
     return img;
+}
+
+// Exact 8-bit values (k / 255), so the writers' quantising gives back k: noise over gradients,
+// like a photo, or (`pattern`) a texture that repeats every 23 rows and 37 columns, like graphics.
+Image bytesImage(int w, int h, bool pattern, std::vector<uint8_t>* rgb = nullptr) {
+    Image img(w, h);
+    uint32_t seed = 7;
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            float* p = img.pixel(size_t(y) * w + x);
+            for (int c = 0; c < 3; ++c) {
+                int v;
+                if (pattern) {
+                    v = int((uint32_t((x % 37) * 7919 + (y % 23) * 104729 + c * 31) * 2654435761u) >> 24);
+                } else {
+                    seed = seed * 1664525u + 1013904223u;
+                    v = std::clamp(int(x * 200 / w + y * 40 / h + c * 10) + int(seed >> 28) - 8, 0, 255);
+                }
+                p[c] = v / 255.0f;
+                if (rgb) rgb->push_back(uint8_t(v));
+            }
+            p[3] = 1.0f;
+        }
+    return img;
+}
+
+// Whether every chunk of a PNG file is whole and its CRC holds.
+bool pngChunksValid(const Bytes& b) {
+    size_t pos = 8;
+    while (pos + 12 <= b.size()) {
+        const size_t len = size_t(b[pos]) << 24 | b[pos + 1] << 16 | b[pos + 2] << 8 | b[pos + 3];
+        if (pos + 12 + len > b.size()) return false;
+        const uint32_t crc = uint32_t(b[pos + 8 + len]) << 24 | b[pos + 9 + len] << 16 | b[pos + 10 + len] << 8 | b[pos + 11 + len];
+        if (crc32(0, b.data() + pos + 4, uInt(len + 4)) != crc) return false;
+        if (std::memcmp(&b[pos + 4], "IEND", 4) == 0) return pos + 12 == b.size();
+        pos += 12 + len;
+    }
+    return false;
 }
 
 }  // namespace
@@ -290,6 +330,66 @@ TEST_CASE("OpenEXR export: ZIP blocks decode to the linear values") {
                 }
         }
         CHECK(maxErr < (depth == 16 ? 1e-3f : 1e-7f));
+    }
+    fs::remove_all(dir);
+}
+
+TEST_CASE("PNG and TIFF export: photos and graphics both compress, chunks valid") {
+    // Several 1 MB zlib segments; photos take run-length matching, graphics the LZ matcher.
+    const fs::path dir = tempDir("nodelab_pngzip");
+    std::string err;
+    for (bool pattern : {false, true}) {
+        const Image img = bytesImage(300, 2000, pattern);
+        for (FileFormat f : {FileFormat::PNG, FileFormat::TIFF}) {
+            SaveOptions o;
+            o.format = f;
+            const std::string path = pathToU8(dir / (f == FileFormat::PNG ? "a.png" : "a.tif"));
+            REQUIRE(writeImage(path, img, o, err));
+            const Bytes b = readAll(path);
+            if (f == FileFormat::PNG) CHECK(pngChunksValid(b));
+            // Graphics compress to a fraction of their size; noisy photos less so.
+            if (pattern) CHECK(b.size() < img.pixelCount() * 3 / 10);
+            if (f == FileFormat::TIFF) continue;  // the TIFF test above decodes strips
+            auto back = loadImage(path, err);
+            REQUIRE(back);
+            int wrong = 0;
+            for (size_t i = 0; i < img.pixelCount(); ++i)
+                for (int c = 0; c < 3; ++c) wrong += std::lround(back->pixel(i)[c] * 255.0f) != std::lround(img.pixel(i)[c] * 255.0f);
+            CHECK(wrong == 0);
+        }
+    }
+    fs::remove_all(dir);
+}
+
+TEST_CASE("JPEG export in parallel strips decodes like a single stb encode") {
+    const fs::path dir = tempDir("nodelab_jpegstrips");
+    std::string err;
+    std::vector<uint8_t> rgb;
+    const Image img = bytesImage(203, 150, false, &rgb);  // not whole MCUs either way
+    for (int quality : {95, 80}) {                        // 4:4:4 and 4:2:0 chroma
+        SaveOptions o;
+        o.format = FileFormat::JPEG;
+        o.jpegQuality = quality;
+        const std::string path = pathToU8(dir / "a.jpg");
+        REQUIRE(writeImage(path, img, o, err));
+        const Bytes b = readAll(path);
+        const Bytes dri = {0xFF, 0xDD};  // a restart interval: it was split
+        CHECK(std::search(b.begin(), b.end(), dri.begin(), dri.end()) != b.end());
+        Bytes single;
+        REQUIRE(stbi_write_jpg_to_func([](void* ctx, void* d, int n) {
+            auto* out = static_cast<Bytes*>(ctx);
+            out->insert(out->end(), static_cast<uint8_t*>(d), static_cast<uint8_t*>(d) + n);
+        }, &single, img.w, img.h, 3, rgb.data(), quality));
+        int w1, h1, n1, w2, h2, n2;
+        stbi_uc* a = stbi_load_from_memory(b.data(), int(b.size()), &w1, &h1, &n1, 3);
+        stbi_uc* s = stbi_load_from_memory(single.data(), int(single.size()), &w2, &h2, &n2, 3);
+        REQUIRE(a);
+        REQUIRE(s);
+        CHECK(w1 == img.w);
+        CHECK(h1 == img.h);
+        CHECK(std::memcmp(a, s, size_t(img.w) * img.h * 3) == 0);
+        stbi_image_free(a);
+        stbi_image_free(s);
     }
     fs::remove_all(dir);
 }

@@ -1,7 +1,9 @@
 #include "io/RawDecode.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <map>
@@ -28,6 +30,138 @@ bool isRawPath(const std::string& pathU8) {
     return false;
 }
 
+namespace {
+
+// LibRaw with access to the protected parts that speed up decoding: the processing callbacks and
+// the output curve.
+class Decoder : public LibRaw {
+public:
+    // Run our highlight reconstruction in place of LibRaw's: the hook runs just before it.
+    void hookHighlights() { callbacks.post_interpolate_cb = &Decoder::afterInterpolate; }
+    // The 16-bit output curve that dcraw_make_mem_image applies (built the same way).
+    const ushort* outputCurve() {
+        const auto& o = imgdata.params;
+        int white = 0x2000;  // no_auto_bright: LibRaw's histogram search is skipped
+        gamma_curve(o.gamm[0], o.gamm[1], 2, int((white << 3) / o.bright));
+        return imgdata.color.curve;
+    }
+
+private:
+    static void afterInterpolate(void* ctx);
+};
+
+// LibRaw's recover_highlights (dcraw's "rebuild" highlight modes, -H 3 and up) with its loops
+// spread over threads; in LibRaw it runs on one core and takes about a second at 24 MP. Each
+// step gives exactly LibRaw's numbers: the rows of the map and the image are independent, and
+// a spreading pass only reads cells that were filled before it (cells it fills are marked
+// negative until the pass ends), so the order rows are visited in doesn't matter.
+void recoverHighlights(LibRaw& lr) {
+    auto& d = lr.imgdata;
+    const int colors = d.idata.colors;
+    const unsigned width = d.sizes.width, height = d.sizes.height;
+    ushort(*image)[4] = d.image;
+    const unsigned scale = 4u >> lr.get_internal_data_pointer()->internal_output_params.shrink;
+    const float grow = float(std::pow(2.0, 4 - d.params.highlight));
+    int hsat[4];
+    for (int c = 0; c < colors; ++c) hsat[c] = int(32000 * d.color.pre_mul[c]);
+    for (int c = 0; c < colors; ++c)
+        if (hsat[c] < 1) return;
+    int kc = 0;
+    for (int c = 1; c < colors; ++c)
+        if (d.color.pre_mul[kc] < d.color.pre_mul[c]) kc = c;
+    const int high = int(height / scale), wide = int(width / scale);
+    std::vector<float> map(size_t(high) * wide);
+    // Rows of the map holding a ratio: a spreading pass only touches rows next to one, so the
+    // passes cost nothing where nothing clips.
+    std::vector<uint8_t> filled(high);
+    static const signed char dir[8][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, 1}, {1, 1}, {1, 0}, {1, -1}, {0, -1}};
+    for (int c = 0; c < colors; ++c) {
+        if (c == kc) continue;
+        // Blocks that clip in channel c entirely: the ratio of c to the key channel.
+        parallelFor(high, [&](int mrow) {
+            for (int mcol = 0; mcol < wide; ++mcol) {
+                float sum = 0, wgt = 0;
+                unsigned count = 0;
+                for (unsigned row = mrow * scale; row < (mrow + 1) * scale; ++row)
+                    for (unsigned col = mcol * scale; col < (mcol + 1) * scale; ++col) {
+                        const ushort* px = image[row * width + col];
+                        if (px[c] >= hsat[c] && px[c] < 2 * hsat[c] && px[kc] > 24000) {  // px[c] / hsat[c] == 1
+                            sum += px[c];
+                            wgt += px[kc];
+                            ++count;
+                        }
+                    }
+                map[size_t(mrow) * wide + mcol] = count == scale * scale ? sum / wgt : 0.0f;
+            }
+            filled[mrow] = std::any_of(&map[size_t(mrow) * wide], &map[size_t(mrow + 1) * wide], [](float v) { return v > 0; });
+        });
+        // Spread the ratios into the blocks around them.
+        auto nearRatio = [&](int mrow) {
+            return filled[mrow] || (mrow > 0 && filled[mrow - 1]) || (mrow + 1 < high && filled[mrow + 1]);
+        };
+        for (int spread = int(32 / grow); spread--;) {
+            parallelFor(high, [&](int mrow) {
+                if (!nearRatio(mrow)) return;
+                for (int mcol = 0; mcol < wide; ++mcol) {
+                    float& m = map[size_t(mrow) * wide + mcol];
+                    if (m) continue;
+                    float sum = 0;
+                    int count = 0;
+                    for (int k = 0; k < 8; ++k) {
+                        const int y = mrow + dir[k][0], x = mcol + dir[k][1];
+                        if (y >= 0 && y < high && x >= 0 && x < wide && map[size_t(y) * wide + x] > 0) {
+                            sum += (1 + (k & 1)) * map[size_t(y) * wide + x];
+                            count += 1 + (k & 1);
+                        }
+                    }
+                    if (count > 3) m = -(sum + grow) / (count + grow);
+                }
+            });
+            // Rows gaining ratios are only marked now, after the pass has read its neighbours.
+            std::atomic<bool> change = false;
+            std::vector<uint8_t> gained(high);
+            parallelFor(high, [&](int mrow) {
+                if (!nearRatio(mrow)) return;
+                bool changed = false;
+                for (size_t i = size_t(mrow) * wide; i < size_t(mrow + 1) * wide; ++i)
+                    if (map[i] < 0) {
+                        map[i] = -map[i];
+                        changed = true;
+                    }
+                if (changed) gained[mrow] = 1, change = true;
+            });
+            for (int r = 0; r < high; ++r) filled[r] |= gained[r];
+            if (!change) break;
+        }
+        // Rebuild the clipped channel from the key channel and the ratio.
+        parallelFor(high, [&](int mrow) {
+            for (int mcol = 0; mcol < wide; ++mcol) {
+                const float m = map[size_t(mrow) * wide + mcol] == 0 ? 1.0f : map[size_t(mrow) * wide + mcol];
+                for (unsigned row = mrow * scale; row < (mrow + 1) * scale; ++row)
+                    for (unsigned col = mcol * scale; col < (mcol + 1) * scale; ++col) {
+                        ushort* px = image[row * width + col];
+                        if (px[c] >= 2 * hsat[c]) {  // px[c] / hsat[c] > 1
+                            const int val = int(px[kc] * m);
+                            if (px[c] < val) px[c] = ushort(std::clamp(val, 0, 65535));
+                        }
+                    }
+            }
+        });
+    }
+}
+
+void Decoder::afterInterpolate(void* ctx) {
+    auto* lr = static_cast<LibRaw*>(ctx);
+    auto& o = lr->imgdata.params;
+    // The callback replaces LibRaw's median filter, which we never ask for (med_passes is 0).
+    if (o.highlight > 2) {
+        recoverHighlights(*lr);
+        o.highlight = 0;  // done: LibRaw's own pass would follow
+    }
+}
+
+}  // namespace
+
 std::shared_ptr<Image> load(const std::string& pathU8, std::string& err, int highlights, bool halfSize, int* fullW,
                             int* fullH) {
     // Read the file ourselves: LibRaw's narrow-char open can't take UTF-8 paths on Windows.
@@ -38,7 +172,7 @@ std::shared_ptr<Image> load(const std::string& pathU8, std::string& err, int hig
     }
     std::vector<char> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 
-    auto lr = std::make_unique<LibRaw>();  // large (hundreds of KB): keep it off the stack
+    auto lr = std::make_unique<Decoder>();  // large (hundreds of KB): keep it off the stack
     auto fail = [&](int code) {
         err = std::string("RAW: ") + libraw_strerror(code);
         return nullptr;
@@ -58,16 +192,9 @@ std::shared_ptr<Image> load(const std::string& pathU8, std::string& err, int hig
     const bool threeColour = lr->imgdata.idata.colors == 3;
     p.output_color = threeColour ? 0 : 1;
 
+    lr->hookHighlights();
     if (int r = lr->unpack(); r != LIBRAW_SUCCESS) return fail(r);
     if (int r = lr->dcraw_process(); r != LIBRAW_SUCCESS) return fail(r);
-    int code = 0;
-    libraw_processed_image_t* mem = lr->dcraw_make_mem_image(&code);
-    if (!mem) return fail(code);
-    std::unique_ptr<libraw_processed_image_t, void (*)(libraw_processed_image_t*)> guard(mem, LibRaw::dcraw_clear_mem);
-    if (mem->type != LIBRAW_IMAGE_BITMAP || mem->bits != 16 || (mem->colors != 3 && mem->colors != 1)) {
-        err = "RAW: unsupported output format";
-        return nullptr;
-    }
 
     // With highlight recovery on, LibRaw scales by the largest white-balance multiplier so no
     // channel clips, which leaves the image darker than Clip mode by max/min multiplier. Undo that
@@ -82,22 +209,35 @@ std::shared_ptr<Image> load(const std::string& pathU8, std::string& err, int hig
     for (int r = 0; r < 3; ++r)
         for (int c = 0; c < 3; ++c) m[r][c] = threeColour ? lr->imgdata.color.rgb_cam[r][c] : float(r == c);
 
-    auto img = std::make_shared<Image>(mem->width, mem->height);
-    const auto* data = reinterpret_cast<const unsigned short*>(mem->data);
-    const int nc = mem->colors;
+    // Read LibRaw's image directly, through the output curve and the orientation, as
+    // dcraw_make_mem_image would (on one core, into a 16-bit copy), but in parallel and to float.
+    const auto& s = lr->imgdata.sizes;
+    const int nc = lr->imgdata.idata.colors;
+    int memW = 0, memH = 0, memColors = 0, memBps = 0;
+    lr->get_mem_image_format(&memW, &memH, &memColors, &memBps);
+    const bool swap = (s.flip & 4) != 0;
+    const int srcW = s.width, srcH = s.height;
+    if ((nc != 3 && nc != 1) || memColors != nc || memW != (swap ? srcH : srcW) || memH != (swap ? srcW : srcH)) {
+        err = "RAW: unsupported output format";
+        return nullptr;
+    }
+    const ushort* curve = lr->outputCurve();
+    const ushort(*image)[4] = lr->imgdata.image;
+    auto img = std::make_shared<Image>(memW, memH);
     parallelFor(img->h, [&](int y) {
         for (int x = 0; x < img->w; ++x) {
-            const size_t i = size_t(y) * img->w + x;
-            const unsigned short* s = data + i * nc;
-            const float cam[3] = {s[0] * gain, s[nc > 1 ? 1 : 0] * gain, s[nc > 1 ? 2 : 0] * gain};
-            float* d = img->pixel(i);
+            int row = y, col = x;  // LibRaw's flip_index
+            if (swap) std::swap(row, col);
+            if (s.flip & 2) row = srcH - 1 - row;
+            if (s.flip & 1) col = srcW - 1 - col;
+            const ushort* src = image[size_t(row) * srcW + col];
+            const float cam[3] = {curve[src[0]] * gain, curve[src[nc > 1 ? 1 : 0]] * gain, curve[src[nc > 1 ? 2 : 0]] * gain};
+            float* d = img->pixel(size_t(y) * img->w + x);
             for (int r = 0; r < 3; ++r) d[r] = m[r][0] * cam[0] + m[r][1] * cam[1] + m[r][2] * cam[2];
             d[3] = 1.0f;
         }
     });
 
-    const auto& s = lr->imgdata.sizes;
-    const bool swap = (s.flip & 4) != 0;
     if (fullW) *fullW = swap ? s.height : s.width;
     if (fullH) *fullH = swap ? s.width : s.height;
     return img;

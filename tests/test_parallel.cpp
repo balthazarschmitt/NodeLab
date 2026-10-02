@@ -85,9 +85,9 @@ TEST_CASE("Blocked box blur is bit-identical to the per-column version") {
             imageops::blurChannel(a, w, h, sx, sy);
         } else {
             Image img(w, h);
-            img.px = a;
+            img.px.assign(a.begin(), a.end());
             imageops::blurImage(img, sx, sy);
-            a = img.px;
+            a.assign(img.px.begin(), img.px.end());
         }
         // Mirrors boxRadii() in ImageOps.cpp.
         auto radii = [](float sigma) {

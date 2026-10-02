@@ -3,6 +3,20 @@
 NodeLab uses [semantic versioning](https://semver.org). While it is 0.x, minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
+## Unreleased
+
+- **Faster exports:** saving a 24 MP image takes 0.6-0.9 s instead of 3-5 s in every format.
+  - PNG and TIFF compress with zlib-ng across all cores. Each block picks run-length matching for
+    photos (as small as before, 3-4x faster) or full matching for graphics.
+  - JPEG encodes in strips in parallel, joined with restart markers. The decoded pixels are the
+    same as before.
+  - The view transform (Standard and AgX) uses tables instead of per-pixel powers.
+- **Faster RAW loading:** a 24 MP RAW opens about 1 s faster. Highlight Reconstruct runs across
+  all cores, and the decoded image is converted to float in one parallel pass. Pixels are
+  unchanged.
+- **Faster Denoise** (about 25%) and faster image allocation for every node.
+- `--render ... --timings` prints how long evaluation and saving took.
+
 ## 0.18.0 (2026-10-01)
 
 - **Preferences** (Edit > Preferences): interface, theme, viewer, compositor and new-project

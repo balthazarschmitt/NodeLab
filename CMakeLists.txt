@@ -60,13 +60,18 @@ FetchContent_Declare(libraw
     GIT_SHALLOW TRUE
     SOURCE_SUBDIR _none)
 
-# zlib compresses PNG, TIFF and OpenEXR exports (stb's deflate is single-threaded and fixed-Huffman
-# only). Built from its sources below, like LibRaw, to keep its install and example targets out.
+# zlib-ng (in zlib-compatible mode) compresses PNG, TIFF and OpenEXR exports: stb's deflate is
+# single-threaded and fixed-Huffman only, and zlib-ng deflates about 2-3x faster than zlib with
+# SIMD chosen at run time. It keeps zlib's API, which the parallel PNG writer needs
+# (deflateSetDictionary and sync flushes).
+set(ZLIB_COMPAT ON CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)  # zlib-ng's tests
+set(SKIP_INSTALL_ALL ON CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(zlib
-    GIT_REPOSITORY https://github.com/madler/zlib.git
-    GIT_TAG v1.3.1
-    GIT_SHALLOW TRUE
-    SOURCE_SUBDIR _none)
+    GIT_REPOSITORY https://github.com/zlib-ng/zlib-ng.git
+    GIT_TAG 2.3.3
+    GIT_SHALLOW TRUE)
 
 FetchContent_MakeAvailable(glfw json imgui stb tinyexpr libraw zlib)
 
@@ -181,20 +186,6 @@ target_link_options(libraw PUBLIC -fopenmp)
 if(WIN32)
     target_link_libraries(libraw PUBLIC ws2_32)
 endif()
-
-add_library(zlib STATIC
-    ${zlib_SOURCE_DIR}/adler32.c
-    ${zlib_SOURCE_DIR}/compress.c
-    ${zlib_SOURCE_DIR}/crc32.c
-    ${zlib_SOURCE_DIR}/deflate.c
-    ${zlib_SOURCE_DIR}/inffast.c
-    ${zlib_SOURCE_DIR}/inflate.c
-    ${zlib_SOURCE_DIR}/inftrees.c
-    ${zlib_SOURCE_DIR}/trees.c
-    ${zlib_SOURCE_DIR}/uncompr.c
-    ${zlib_SOURCE_DIR}/zutil.c)
-target_include_directories(zlib PUBLIC ${zlib_SOURCE_DIR})
-target_compile_options(zlib PRIVATE -w)
 
 add_library(stb INTERFACE)
 target_include_directories(stb INTERFACE ${stb_SOURCE_DIR})

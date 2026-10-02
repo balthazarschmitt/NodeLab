@@ -63,10 +63,15 @@ private:
     bool started_ = false;
 };
 
-// NodeLab.exe --render project.nlproj out.png [--depth N] [--device gpu [--precision half]] :
+// NodeLab.exe --render project.nlproj out.png [--depth N] [--device gpu [--precision half]] [--timings] :
 // evaluate at full resolution without a window. The extension picks the format (.png, .jpg, .tif, .exr); --depth 16 for 16-bit PNG/TIFF,
-// 32 for full-float EXR.
-static int renderHeadless(const std::string& project, const std::string& outPath, int depth, const HeadlessDevice& dev) {
+// 32 for full-float EXR. --timings prints how long loading and evaluating, the view transform and
+// encoding took.
+static int renderHeadless(const std::string& project, const std::string& outPath, int depth, const HeadlessDevice& dev,
+                          bool timings) {
+    using Clock = std::chrono::steady_clock;
+    const auto t0 = Clock::now();
+    auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
     Graph g;
     nlohmann::json ui;
     std::string err;
@@ -93,6 +98,7 @@ static int renderHeadless(const std::string& project, const std::string& outPath
             std::fprintf(stderr, "Output node produced no image\n");
             return 1;
         }
+        const auto t1 = Clock::now();
         SaveOptions opt;
         opt.format = formatFromPath(outPath);
         opt.depth = depth;
@@ -101,6 +107,9 @@ static int renderHeadless(const std::string& project, const std::string& outPath
             std::fprintf(stderr, "save failed: %s\n", err.c_str());
             return 1;
         }
+        if (timings)
+            std::fprintf(stderr, "%dx%d: load and evaluate %.0f ms, save %.0f ms\n", img->w, img->h, ms(t0, t1),
+                         ms(t1, Clock::now()));
         for (const auto& line : writeFileOutputs(g, cache)) std::printf("%s\n", line.c_str());
     } catch (const std::exception& e) {
         std::fprintf(stderr, "evaluation failed: %s\n", e.what());
@@ -265,8 +274,10 @@ int main(int argc, char** argv) {
         int depth = 8;
         for (int i = 4; i + 1 < argc; ++i)
             if (std::string(argv[i]) == "--depth") depth = std::atoi(argv[i + 1]);
+        bool timings = false;
+        for (int i = 4; i < argc; ++i) timings |= std::string(argv[i]) == "--timings";
         HeadlessDevice dev(argc, argv, false);
-        return renderHeadless(argv[2], argv[3], depth, dev);
+        return renderHeadless(argv[2], argv[3], depth, dev, timings);
     }
 
     if (argc >= 3 && std::string(argv[1]) == "--benchmark") {
