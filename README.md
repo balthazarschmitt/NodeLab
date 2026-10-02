@@ -89,7 +89,7 @@ dark sky (see Help > Guide > Recipes).
 | Edit a value | Drag the field sideways (Shift = fine), or click it to type |
 | Preview any node | Ctrl+click it (again to clear) |
 | Group / ungroup | Ctrl+G / Ctrl+Alt+G; Tab (or double-click) enters a group, Tab leaves |
-| Group pins | Select the group (or its Group Input/Output inside) and edit in the Inspector |
+| Group pins | Select the group (or its Group Input/Output inside) and edit in the Inspector; Channel and Number inputs have a Default / Min / Max and show a slider on the group node |
 | Frame | Ctrl+J around the selection; drag its title to move it with its nodes, corner to resize, double-click to rename, right-click for color |
 | Move nodes between frames | right-click a node → Move to Frame, or select nodes and right-click a frame title → Move Selected Nodes Here; Alt+P removes from frame |
 | Panels | Drag a panel's tab to dock it elsewhere, or out of the window; View > Layout picks a preset (Default, Compositing, Photo, Side by Side, Node Focus); View > Reset Layout |

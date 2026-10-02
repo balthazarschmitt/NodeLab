@@ -943,6 +943,12 @@ Coordinates are relative to the image, so textures look the same in the preview 
   breadcrumb above the graph shows where you are.
 - Inside, the Group Input and Group Output nodes are the group's pins. Rename, reorder, add, or
   change their type in the Inspector.
+- **Input values:** like Blender's group sockets, a Channel or Number input has a Default, Min and
+  Max (set in the Inspector under the pin). While it is unconnected, the group node shows it as a
+  slider, so a group works like a node with its own settings.
+  - Grouping takes the range and value from the slider of the pin the input feeds, so a grouped
+    graph renders the same.
+  - Image inputs have no value: unconnected, they are empty.
 - **Ctrl+Alt+G** ungroups. Groups can be nested.
 
 ## Working in the Node Editor

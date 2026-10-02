@@ -154,3 +154,102 @@ TEST_CASE("bridge (delete with reconnect) and mute") {
         CHECK(m->label == "Negative");
     }
 }
+
+TEST_CASE("group inputs have values, like Blender's group sockets") {
+    Chain c;
+    const Node* satNode = c.g.find(c.sat);
+    const PinDesc& amountPin = satNode->info().inputs[1];
+    REQUIRE(amountPin.fallbackParam >= 0);
+    // Copies: grouping moves the node into the group.
+    const ParamDesc amount = satNode->info().params[size_t(amountPin.fallbackParam)];
+    const int amountParam = amountPin.fallbackParam;
+    const std::string satType = satNode->info().type;
+
+    int gid = groupNodes(c.g, {c.inv, c.sat});
+    auto* group = dynamic_cast<GroupNode*>(c.g.find(gid));
+    REQUIRE(group);
+    REQUIRE(group->ins.size() == 2);
+    // The channel input took the range of the slider it feeds; the image input has no slider.
+    CHECK(group->ranges[1].min == amount.min);
+    CHECK(group->ranges[1].max == amount.max);
+    CHECK(group->info().inputs[1].fallbackParam == 1);
+    CHECK(group->info().inputs[0].fallbackParam == -1);
+    CHECK_FALSE(group->paramVisible(0));
+    CHECK(group->paramVisible(1));
+
+    // Unconnected, the group's value drives the inner node as its own slider would.
+    for (const Link& l : c.g.links())
+        if (l.toNode == gid && l.toPin == 1) {
+            c.g.removeLink(l.id);
+            break;
+        }
+    group->params[1] = 0.25f;
+    const auto grouped = outputPixel(c.g);
+
+    Chain ref;
+    for (const Link& l : ref.g.links())
+        if (l.toNode == ref.sat && l.toPin == 1) {
+            ref.g.removeLink(l.id);
+            break;
+        }
+    ref.g.find(ref.sat)->params[size_t(amountParam)] = 0.25f;
+    const auto expected = outputPixel(ref.g);
+    for (int k = 0; k < 3; ++k) CHECK(grouped[k] == doctest::Approx(expected[k]));
+
+    SUBCASE("values and ranges survive save/load") {
+        group->setRange(1, {0.5f, -1.0f, 2.0f});
+        Graph g2;
+        g2.fromJson(c.g.toJson());
+        auto* loaded = dynamic_cast<GroupNode*>(g2.find(gid));
+        REQUIRE(loaded);
+        CHECK(loaded->paramF(1) == doctest::Approx(0.25f));
+        CHECK(loaded->ranges[1].def == doctest::Approx(0.5f));
+        CHECK(loaded->ranges[1].min == doctest::Approx(-1.0f));
+        CHECK(loaded->ranges[1].max == doctest::Approx(2.0f));
+        const auto again = outputPixel(g2);
+        for (int k = 0; k < 3; ++k) CHECK(again[k] == doctest::Approx(expected[k]));
+    }
+    SUBCASE("a range clamps the value") {
+        group->setRange(1, {0.0f, 0.5f, 0.2f});  // min > max: max follows min
+        CHECK(group->ranges[1].max == doctest::Approx(0.5f));
+        CHECK(group->paramF(1) == doctest::Approx(0.5f));
+    }
+    SUBCASE("values move with their pins") {
+        group->movePin(c.g, false, 1, -1);
+        CHECK(group->ins[0].type == PinType::Channel);
+        CHECK(group->paramF(0) == doctest::Approx(0.25f));
+        CHECK(group->info().inputs[0].fallbackParam == 0);
+        group->removePin(c.g, false, 1);  // the image input
+        REQUIRE(group->params.size() == 1);
+        CHECK(group->paramF(0) == doctest::Approx(0.25f));
+    }
+    SUBCASE("older files take the value of the inner slider") {
+        nlohmann::json j = c.g.toJson();
+        for (auto& n : j["nodes"])
+            if (n["id"] == gid)
+                for (auto& in : n["extra"]["inputs"]) in = {{"name", in["name"]}, {"type", in["type"]}};
+        Graph g2;
+        g2.fromJson(j);
+        auto* loaded = dynamic_cast<GroupNode*>(g2.find(gid));
+        REQUIRE(loaded);
+        CHECK(loaded->params.size() == 2);
+        // Not the group's 0.25, which the old file didn't have: the inner node's own slider.
+        float inner = -1.0f;
+        for (const auto& [id, n] : loaded->inner().nodes())
+            if (n->info().type == satType) inner = n->paramF(amountParam);
+        CHECK(inner != 0.25f);
+        CHECK(loaded->paramF(1) == inner);
+        CHECK(loaded->info().inputs[1].fallbackParam == 1);
+        // A value saved as null (inner sliders that disagreed) stays empty.
+        for (auto& n : j["nodes"])
+            if (n["id"] == gid) n["extra"]["inputs"][1]["value"] = nullptr;
+        Graph g3;
+        g3.fromJson(j);
+        auto* none = dynamic_cast<GroupNode*>(g3.find(gid));
+        REQUIRE(none);
+        CHECK(none->info().inputs[1].fallbackParam == -1);
+        CHECK(none->paramHidden(1));
+        none->setRange(1, {0.5f, 0.0f, 1.0f});
+        CHECK(none->info().inputs[1].fallbackParam == 1);
+    }
+}

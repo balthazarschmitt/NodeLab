@@ -23,6 +23,11 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 - **Viewers draw GPU results directly:** the GPU device shares its textures with the window,
   so a result's display image is no longer read back and uploaded again (about 7-9 ms less per
   update for a 0.7 MP preview, more for bigger viewers and zoomed detail).
+- **Group inputs have values,** as Blender's group sockets do: a Channel or Number input has a
+  Default, Min and Max in the Inspector and shows a slider on the group node while unconnected.
+  Grouping copies the range and value of the slider the input replaces, so the result is
+  unchanged. In older projects an input takes the value of the inner slider it feeds, so they
+  render as before.
 
 ## 0.19.0 (2026-10-02)
 

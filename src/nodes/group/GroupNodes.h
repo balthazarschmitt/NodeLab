@@ -45,6 +45,10 @@ public:
     void saveExtra(nlohmann::json& j) const override;
     void loadExtra(const nlohmann::json& j) override;
     std::string signatureExtra() const override;
+    // Image inputs have no value (their param slot only keeps params aligned with ins).
+    bool paramHidden(int i) const override {
+        return i < int(ins.size()) && (ins[i].type == PinType::Image || !ranges[size_t(i)].hasValue);
+    }
 
     // Preview a node inside the group (path relative to the inner graph), given this group's inputs.
     ImagePtr previewInner(EvalContext& ctx, const std::vector<Value>& inputs, const std::vector<int>& path, int pin = 0,
@@ -55,6 +59,19 @@ public:
 
     std::string name = "Group";
     std::vector<PinDesc> ins, outs;  // the group's interface
+    // Blender's group socket Default / Min / Max, one per input. Channel and Number inputs show
+    // their value (param i) as a slider on the group node while unconnected, so a group can be
+    // used like a node with settings.
+    struct InputRange {
+        float def = 0.0f, min = 0.0f, max = 1.0f;
+        // False only for an input from an older file whose inner nodes' sliders disagree: it stays
+        // empty while unconnected, so each inner node keeps using its own slider, as before.
+        // Setting a range gives it a value.
+        bool hasValue = true;
+    };
+    std::vector<InputRange> ranges;
+    // Sets input i's range (min <= max), clamping its default and current value into it.
+    void setRange(int i, InputRange r);
 
     // Rebuilds info_ from name/ins/outs and pushes the interface to the inner IO nodes.
     void syncInner();

@@ -1,6 +1,7 @@
 #include "nodes/group/GroupNodes.h"
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 
 #include "graph/Evaluator.h"
@@ -60,6 +61,16 @@ void GroupNode::syncInner() {
     info_.displayName = name;
     info_.inputs = ins;
     info_.outputs = outs;
+    // One param per input, holding its value: the evaluator uses it for an unconnected Channel or
+    // Number pin, like any node's fallback param.
+    ranges.resize(ins.size());
+    params.resize(ins.size());
+    for (size_t i = 0; i < ins.size(); ++i) {
+        const InputRange& r = ranges[i];
+        info_.params.push_back(ParamDesc::Float(ins[i].name, r.def, r.min, r.max));
+        if (!params[i].is_number()) params[i] = r.def;
+        if (ins[i].type != PinType::Image && r.hasValue) info_.inputs[i].fallbackParam = int(i);
+    }
     for (const auto& [id, n] : inner_->nodes()) {
         if (auto* gi = dynamic_cast<GroupInputNode*>(n.get())) gi->setPins(ins);
         if (auto* go = dynamic_cast<GroupOutputNode*>(n.get())) go->setPins(outs);
@@ -73,14 +84,57 @@ void GroupNode::syncInner() {
     }
 }
 
+void GroupNode::setRange(int i, InputRange r) {
+    if (i < 0 || i >= int(ranges.size())) return;
+    if (!(r.min <= r.max)) r.max = r.min;  // also catches NaN
+    r.def = std::clamp(r.def, r.min, r.max);
+    r.hasValue = true;
+    ranges[size_t(i)] = r;
+    params[size_t(i)] = std::clamp(paramF(i), r.min, r.max);
+    syncInner();
+}
+
 void GroupNode::saveExtra(nlohmann::json& j) const {
-    j = {{"name", name}, {"inputs", pinsToJson(ins)}, {"outputs", pinsToJson(outs)}, {"graph", inner_->toJson()}};
+    nlohmann::json in = pinsToJson(ins);
+    for (size_t i = 0; i < ins.size() && i < ranges.size(); ++i) {
+        // Values are kept here, not only in "params": pin names may repeat, and params load before
+        // the pins exist.
+        in[i]["default"] = ranges[i].def;
+        in[i]["min"] = ranges[i].min;
+        in[i]["max"] = ranges[i].max;
+        if (ranges[i].hasValue) in[i]["value"] = paramF(int(i));
+        else in[i]["value"] = nullptr;
+    }
+    j = {{"name", name}, {"inputs", in}, {"outputs", pinsToJson(outs)}, {"graph", inner_->toJson()}};
 }
 
 void GroupNode::loadExtra(const nlohmann::json& j) {
     name = j.value("name", std::string("Group"));
     ins = pinsFromJson(j.value("inputs", nlohmann::json::array()));
     outs = pinsFromJson(j.value("outputs", nlohmann::json::array()));
+    // Older files have no values (see fromInner below).
+    ranges.assign(ins.size(), {});
+    params.assign(ins.size(), nlohmann::json());
+    std::vector<bool> fromInner(ins.size(), true);
+    if (const auto ji = j.find("inputs"); ji != j.end() && ji->is_array()) {
+        auto num = [](const nlohmann::json& o, const char* key, float d) {
+            const auto v = o.find(key);
+            return v != o.end() && v->is_number() && std::isfinite(v->get<float>()) ? v->get<float>() : d;
+        };
+        for (size_t i = 0; i < ins.size() && i < ji->size(); ++i) {
+            const nlohmann::json& o = (*ji)[i];
+            if (!o.is_object()) continue;
+            InputRange r{num(o, "default", 0.0f), num(o, "min", 0.0f), num(o, "max", 1.0f)};
+            if (!(r.min <= r.max)) r.max = r.min;
+            r.def = std::clamp(r.def, r.min, r.max);
+            ranges[i] = r;
+            params[i] = std::clamp(num(o, "value", r.def), r.min, r.max);
+            if (const auto v = o.find("value"); v != o.end()) {
+                fromInner[i] = false;
+                ranges[i].hasValue = v->is_number();
+            }
+        }
+    }
     inner_ = std::make_unique<Graph>();
     if (auto gj = j.find("graph"); gj != j.end()) {
         // IO nodes must know their pins before links to them are restored, so load in two steps.
@@ -95,6 +149,41 @@ void GroupNode::loadExtra(const nlohmann::json& j) {
         for (const auto& l : links)
             inner_->connect(l.at("from")[0].get<int>(), l.at("from")[1].get<int>(), l.at("to")[0].get<int>(),
                             l.at("to")[1].get<int>());
+    }
+    // An input from an older file was empty while unconnected, so the inner nodes used their own
+    // sliders. To render the same, it takes the range and value of the sliders it feeds, or keeps
+    // no value if they differ.
+    for (size_t i = 0; i < ins.size(); ++i) {
+        if (!fromInner[i] || ins[i].type == PinType::Image) continue;
+        bool first = true;
+        for (const Link& l : inner_->links()) {
+            if (l.fromPin != int(i) || !dynamic_cast<const GroupInputNode*>(inner_->find(l.fromNode))) continue;
+            const Node* to = inner_->find(l.toNode);
+            const int fp = to && l.toPin < int(to->info().inputs.size()) ? to->info().inputs[size_t(l.toPin)].fallbackParam : -1;
+            const ParamDesc* d = fp >= 0 ? &to->info().params[size_t(fp)] : nullptr;
+            if (!d || d->kind != ParamKind::Float) {
+                ranges[i].hasValue = false;
+                break;
+            }
+            const float value = to->paramF(fp);
+            if (first) {
+                ranges[i] = {d->def.is_number() ? d->def.get<float>() : value, d->min, d->max};
+                if (!(ranges[i].min <= ranges[i].max)) ranges[i].max = ranges[i].min;
+                ranges[i].def = std::clamp(ranges[i].def, ranges[i].min, ranges[i].max);
+                params[i] = value;
+                first = false;
+            } else if (value != params[i].get<float>()) {
+                ranges[i].hasValue = false;
+                break;
+            }
+        }
+        // The value must reproduce the inner slider exactly; a value outside the slider's range
+        // (set by an expression, say) widens it.
+        if (ranges[i].hasValue && !first) {
+            const float v = params[i].get<float>();
+            ranges[i].min = std::min(ranges[i].min, v);
+            ranges[i].max = std::max(ranges[i].max, v);
+        }
     }
     syncInner();
 }
@@ -133,13 +222,17 @@ ImagePtr GroupNode::previewInner(EvalContext& ctx, const std::vector<Value>& inp
 void GroupNode::addPin(Graph& outer, bool output, const PinDesc& pin) {
     (void)outer;
     (output ? outs : ins).push_back(pin);
-    syncInner();
+    syncInner();  // a new input gets the default range and value
 }
 
 void GroupNode::removePin(Graph& outer, bool output, int index) {
     auto& pins = output ? outs : ins;
     if (index < 0 || index >= int(pins.size())) return;
     pins.erase(pins.begin() + index);
+    if (!output && index < int(ranges.size())) {
+        ranges.erase(ranges.begin() + index);
+        params.erase(params.begin() + index);
+    }
     auto shift = [index](int p) { return p == index ? -1 : (p > index ? p - 1 : p); };
     outer.remapPins(id, output, shift);
     for (const auto& [nid, n] : inner_->nodes()) {
@@ -154,6 +247,10 @@ void GroupNode::movePin(Graph& outer, bool output, int index, int dir) {
     int other = index + dir;
     if (index < 0 || other < 0 || index >= int(pins.size()) || other >= int(pins.size())) return;
     std::swap(pins[index], pins[other]);
+    if (!output && other < int(ranges.size())) {
+        std::swap(ranges[size_t(index)], ranges[size_t(other)]);
+        std::swap(params[size_t(index)], params[size_t(other)]);
+    }
     auto swapIdx = [index, other](int p) { return p == index ? other : (p == other ? index : p); };
     outer.remapPins(id, output, swapIdx);
     for (const auto& [nid, n] : inner_->nodes()) {
@@ -235,9 +332,22 @@ int groupNodes(Graph& g, const std::set<int>& requested) {
     for (const Link& l : incoming) {
         auto key = std::make_pair(l.fromNode, l.fromPin);
         if (!inPinFor.count(key)) {
-            const PinDesc& target = g.find(l.toNode)->info().inputs[l.toPin];
+            const Node* to = g.find(l.toNode);
+            const PinDesc& target = to->info().inputs[l.toPin];
             inPinFor[key] = int(group->ins.size());
             group->ins.push_back({target.name, target.type});
+            // As Blender does: the new input takes the slider's range and value from the pin it feeds.
+            GroupNode::InputRange r;
+            float value = 0.0f;
+            if (target.fallbackParam >= 0) {
+                const ParamDesc& d = to->info().params[size_t(target.fallbackParam)];
+                if (d.kind == ParamKind::Float && d.def.is_number()) {
+                    r = {d.def.get<float>(), d.min, d.max};
+                    value = std::clamp(to->paramF(target.fallbackParam), d.min, d.max);
+                }
+            }
+            group->ranges.push_back(r);
+            group->params.push_back(value);
         }
     }
     for (const Link& l : outgoing) {

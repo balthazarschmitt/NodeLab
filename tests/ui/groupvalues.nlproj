@@ -1,0 +1,13 @@
+{"app":"NodeLab","version":1,"graph":{"nextId":20,
+ "nodes":[{"id":1,"type":"io.image_input","pos":[20,20],"params":{"File":"../../examples/scene.png"}},
+          {"id":2,"type":"io.output","pos":[560,20],"params":{}},
+          {"id":3,"type":"group.group","pos":[280,20],"params":{},
+           "extra":{"name":"Fade","inputs":[{"name":"Image","type":0},{"name":"Amount","type":2,"default":0.5,"min":0,"max":1,"value":0.35}],
+                    "outputs":[{"name":"Image","type":0}],
+                    "graph":{"nextId":20,"nodes":[
+                      {"id":10,"type":"group.input","pos":[0,0],"params":{}},
+                      {"id":11,"type":"color.invert","pos":[260,0],"params":{"Factor":1.0}},
+                      {"id":12,"type":"group.output","pos":[520,0],"params":{}}],
+                     "links":[{"id":13,"from":[10,0],"to":[11,0]},{"id":14,"from":[10,1],"to":[11,1]},{"id":15,"from":[11,0],"to":[12,0]}]}}}],
+ "links":[{"id":4,"from":[1,0],"to":[3,0]},{"id":5,"from":[3,0],"to":[2,0]}]},
+ "ui":{"graphView":[0,0,1]}}

@@ -190,6 +190,22 @@ bool drawGroupInterface(GroupNode& group, Graph& outer) {
                 ImGui::PopID();
                 break;
             }
+            if (!output && pins[i].type != PinType::Image && i < int(group.ranges.size())) {
+                // Blender's socket Default / Min / Max: the slider shown on the group node while
+                // the input is unconnected.
+                GroupNode::InputRange r = group.ranges[size_t(i)];
+                float v[3] = {r.def, r.min, r.max};
+                ImGui::Indent();
+                ImGui::SetNextItemWidth(240);
+                if (ImGui::DragFloat3("Default / Min / Max", v, 0.01f, -1e6f, 1e6f, "%.3f")) {
+                    // Moving min past max (or back) drags the other along.
+                    if (v[1] != r.min) v[2] = std::max(v[2], v[1]);
+                    else if (v[2] != r.max) v[1] = std::min(v[1], v[2]);
+                    group.setRange(i, {v[0], v[1], v[2]});
+                    changed = true;
+                }
+                ImGui::Unindent();
+            }
             ImGui::PopID();
         }
         if (ImGui::SmallButton(output ? "Add Output" : "Add Input")) {

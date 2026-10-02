@@ -1,0 +1,17 @@
+# NodeLab.exe tests\ui\groupvalues.nlproj --script tests\ui\groupvalues.txt
+# A group with a Number input (Amount, 0..1) shows it as a slider on the group node, and the
+# Inspector edits its Default / Min / Max.
+settle
+click 860 90
+settle
+wait 3
+shot build/smoke/gv1_group.png
+# Drag the slider to the right end (clamped to Max = 1): fully inverted.
+drag 780 183 1000 183
+settle
+wait 3
+move 800 760
+wheel -5
+wait 3
+shot build/smoke/gv2_dragged.png
+quit
