@@ -3,7 +3,7 @@
 NodeLab uses [semantic versioning](https://semver.org). While it is 0.x, minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
-## Unreleased
+## 0.19.0 (2026-10-02)
 
 - **Find Node** (Ctrl+F, View > Find Node...): lists the nodes of the graph you are in, filtered by
   label or node name. Enter or a click selects the node and frames it.
