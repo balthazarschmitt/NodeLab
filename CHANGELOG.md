@@ -28,6 +28,9 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
   Grouping copies the range and value of the slider the input replaces, so the result is
   unchanged. In older projects an input takes the value of the inner slider it feeds, so they
   render as before.
+- **Infrared Foliage preset** (`examples/infrared_foliage.nlproj`) is now one group with sliders:
+  Shade Lift, Lit Foliage, Sky Contrast, Trunks, Halation and Grain. Dark tree trunks no longer
+  glow like leaves, and a light halation is on by default.
 
 ## 0.19.0 (2026-10-02)
 

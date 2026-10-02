@@ -1107,7 +1107,17 @@ so we estimate it: foliage is green, and green foliage is bright in infrared.
 
 Open `examples/infrared_foliage.nlproj` and replace the Image Input's file. It is the classic
 full-spectrum infrared look: glowing white-lilac leaves, a dark maroon sky with pink clouds and
-dark ground. It was fitted against a real infrared/colour photo pair. How it works:
+dark ground. It was fitted against a real infrared/colour photo pair.
+
+The whole effect is one **Infrared Foliage** group with sliders:
+
+- **Shade Lift** / **Lit Foliage:** how bright foliage in shadow and in light becomes.
+- **Sky Contrast:** darkens blue sky while clouds and sunset light stay put.
+- **Trunks:** keeps dark, colourless pixels inside foliage (trunks, branches) out of the glow.
+- **Halation:** a red-orange glow around highlights, as on infrared film.
+- **Grain:** film grain, strongest in the mid-tones.
+
+Press **Tab** on the group to see how it works:
 
 1. **Estimate materials.** A lightly blurred copy (Blur, Relative) gives stable colours. Colourful
    pixels with a warm-to-green hue are vegetation. Sunset light hides green, which is why warm hues
@@ -1120,8 +1130,12 @@ dark ground. It was fitted against a real infrared/colour photo pair. How it wor
    (`-0.12 + 0.62 * L`) and everything else follows luminance. L is Normalize 0 / 99 %, so the
    result doesn't depend on exposure.
 4. **Glow:** blend N towards a blurred copy inside foliage, and add a soft bloom above 0.6.
+   **Dark neutral** (dark pixels with little colour) takes trunks out of the foliage mask and the
+   bloom.
 5. **Normalize 1 / 99 %** (auto-exposure), then a **Color Ramp** from near-black brown through mauve
    to white-lilac, plus a redder ramp mixed in by the sky mask.
+6. **Halation and grain:** highlights above 0.7 are blurred and screened back in red-orange, and a
+   White Noise texture adds grain.
 
 Combine RGB packs three masks into one image wherever an Expression needs more than two inputs.
 

@@ -57,7 +57,7 @@ Scripted UI test (feeds input straight to ImGui, ignores the real mouse; see `sr
 
 Try `examples/demo.nlproj`: the red channel drives saturation, so only red things stay colorful.
 `examples/infrared_foliage.nlproj` turns a colour photo into lilac-white infrared foliage under a
-dark sky (see Help > Guide > Recipes).
+dark sky, as one group with sliders (see Help > Guide > Recipes).
 
 ## Using it
 
