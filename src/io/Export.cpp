@@ -1,9 +1,15 @@
 #include "io/Export.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <ctime>
+#include <filesystem>
 #include <numbers>
 #include <optional>
+#include <set>
 
 #include "core/ColorMath.h"
 #include "core/Parallel.h"
@@ -18,6 +24,8 @@
 #include "nodes/io/IONodes.h"
 #include "nodes/utility/UtilityNodes.h"
 
+namespace fs = std::filesystem;
+
 SaveOptions ExportSettings::saveOptions(const std::string& source, int w, int h) const {
     SaveOptions o;
     o.format = FileFormat(format);
@@ -30,7 +38,7 @@ SaveOptions ExportSettings::saveOptions(const std::string& source, int w, int h)
 nlohmann::json ExportSettings::toJson() const {
     return {{"format", format},     {"depth", depth},           {"jpegQuality", jpegQuality},
             {"sizeMode", sizeMode}, {"longEdge", longEdge},     {"percent", percent},
-            {"fileOutputs", fileOutputs}, {"suffix", suffix},   {"sharpenFor", sharpenFor},
+            {"fileOutputs", fileOutputs}, {"nameTemplate", nameTemplate},   {"sharpenFor", sharpenFor},
             {"sharpenAmount", sharpenAmount}};
 }
 
@@ -45,7 +53,47 @@ void ExportSettings::fromJson(const nlohmann::json& j) {
     fileOutputs = j.value("fileOutputs", fileOutputs);
     sharpenFor = std::clamp(j.value("sharpenFor", sharpenFor), 0, 3);
     sharpenAmount = std::clamp(j.value("sharpenAmount", sharpenAmount), 0, 2);
-    suffix = j.value("suffix", suffix);
+    // Before templates there was only a suffix after the source's name.
+    if (auto t = j.find("nameTemplate"); t != j.end() && t->is_string() && !t->get<std::string>().empty())
+        nameTemplate = t->get<std::string>();
+    else if (auto sfx = j.find("suffix"); sfx != j.end() && sfx->is_string())
+        nameTemplate = "{name}" + sfx->get<std::string>();
+}
+
+bool ExportSettings::sameOutput(const ExportSettings& o) const {
+    nlohmann::json a = toJson(), b = o.toJson();
+    a.erase("fileOutputs");
+    b.erase("fileOutputs");
+    // The depth means nothing for JPEG.
+    if (format == JPEG) a.erase("depth"), b.erase("depth");
+    return a == b;
+}
+
+const std::vector<ExportPreset>& builtInExportPresets() {
+    static const std::vector<ExportPreset> presets = [] {
+        std::vector<ExportPreset> v;
+        auto add = [&](const char* name, auto&& set) {
+            ExportPreset p{name, {}};
+            set(p.settings);
+            v.push_back(std::move(p));
+        };
+        add("Full-Size JPEG", [](ExportSettings& s) { s.format = ExportSettings::JPEG; });
+        add("Web JPEG (2048 px)", [](ExportSettings& s) {
+            s.format = ExportSettings::JPEG, s.jpegQuality = 85;
+            s.sizeMode = ExportSettings::LongEdge, s.longEdge = 2048;
+            s.sharpenFor = ExportSettings::Screen;
+        });
+        add("Email (1000 px)", [](ExportSettings& s) {
+            s.format = ExportSettings::JPEG, s.jpegQuality = 75;
+            s.sizeMode = ExportSettings::LongEdge, s.longEdge = 1000;
+            s.sharpenFor = ExportSettings::Screen;
+        });
+        add("Full-Size PNG", [](ExportSettings& s) { s.format = ExportSettings::PNG; });
+        add("16-bit TIFF", [](ExportSettings& s) { s.format = ExportSettings::TIFF, s.depth = 16; });
+        add("OpenEXR (Half Float)", [](ExportSettings& s) { s.format = ExportSettings::EXR, s.depth = 16; });
+        return v;
+    }();
+    return presets;
 }
 
 namespace {
@@ -219,15 +267,172 @@ std::string metadataSource(const Graph& g) {
     return {};
 }
 
-std::string batchOutputPath(const std::string& sourceU8, const std::string& outDirU8, const ExportSettings& s) {
+const NameToken kNameTokens[] = {
+    {"{name}", "File name, without extension"},
+    {"{seq}", "Sequence number (1, 2, 3...)"},
+    {"{seq:3}", "Sequence number, 3 digits (001)"},
+    {"{date}", "Capture date (YYYY-MM-DD)"},
+    {"{time}", "Capture time (HHMMSS)"},
+    {"{year}", "Capture year"},
+    {"{month}", "Capture month (01-12)"},
+    {"{day}", "Capture day (01-31)"},
+    {"{camera}", "Camera model"},
+    {"{make}", "Camera make"},
+    {"{lens}", "Lens"},
+    {"{iso}", "ISO"},
+    {"{focal}", "Focal length (50mm)"},
+    {"{aperture}", "Aperture (f2.8)"},
+    {"{shutter}", "Shutter speed (1-250s)"},
+    {"{copy}", "Virtual copy name (Copy 1)"},
+    {"{folder}", "Folder name"},
+    {"{today}", "Export date (YYYY-MM-DD)"},
+};
+const int kNameTokenCount = int(std::size(kNameTokens));
+
+namespace {
+
+std::string lowerAscii(std::string s) {
+    for (char& c : s) c = char(std::tolower((unsigned char)c));
+    return s;
+}
+
+// "%.*g": no trailing ".0".
+std::string number(double v, int digits) {
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%.*g", digits, v);
+    return buf;
+}
+
+// Windows forbids <>:"/\|?* and control characters in names, and trailing dots or spaces.
+std::string sanitizeName(std::string s) {
+    for (char& c : s)
+        if ((unsigned char)c < 32 || std::strchr("<>:\"/\\|?*", c)) c = '_';
+    while (!s.empty() && (s.back() == '.' || s.back() == ' ')) s.pop_back();
+    while (!s.empty() && s.front() == ' ') s.erase(s.begin());
+    return s;
+}
+
+// A time as EXIF writes it, "YYYY:MM:DD HH:MM:SS".
+std::string exifTime(std::time_t t) {
+    std::tm tm{};
+    char buf[20];
+    if (localtime_s(&tm, &t) != 0 || !std::strftime(buf, sizeof buf, "%Y:%m:%d %H:%M:%S", &tm)) return {};
+    return buf;
+}
+
+}  // namespace
+
+std::string expandNameTemplate(const std::string& tmpl, const NameSource& src) {
+    const fs::path path = u8ToPath(src.path);
+    // EXIF is read only when the template asks for it (a RAW that isn't TIFF-based is read whole).
+    std::optional<exif::PhotoInfo> info;
+    auto meta = [&]() -> const exif::PhotoInfo& {
+        if (!info) {
+            info.emplace();
+            if (!src.path.empty()) exif::readInfo(src.path, *info);
+        }
+        return *info;
+    };
+    // The capture time, else the file's modification time (as Lightroom falls back to it).
+    std::optional<std::string> when;
+    auto captured = [&]() -> const std::string& {
+        if (!when) {
+            when = meta().captureTime;
+            if (when->size() < 19 && !src.path.empty()) {
+                std::error_code ec;
+                const auto ft = fs::last_write_time(path, ec);
+                if (!ec)
+                    when = exifTime(std::chrono::system_clock::to_time_t(std::chrono::clock_cast<std::chrono::system_clock>(ft)));
+            }
+            if (when->size() < 19) when = std::string();
+        }
+        return *when;
+    };
+    auto part = [&](size_t at, size_t len) { return captured().size() >= at + len ? captured().substr(at, len) : std::string(); };
+
+    std::string out;
+    for (size_t i = 0; i < tmpl.size();) {
+        const size_t close = tmpl[i] == '{' ? tmpl.find('}', i) : std::string::npos;
+        if (close == std::string::npos) {
+            out += tmpl[i++];
+            continue;
+        }
+        const std::string raw = tmpl.substr(i, close - i + 1);
+        std::string key = lowerAscii(raw.substr(1, raw.size() - 2));
+        int pad = 0;
+        if (const size_t colon = key.find(':'); colon != std::string::npos) {
+            pad = std::clamp(std::atoi(key.c_str() + colon + 1), 0, 9);
+            key.resize(colon);
+        }
+        std::string v;
+        bool known = true;
+        if (key == "name") v = src.path.empty() ? "export" : pathToU8(path.stem());
+        else if (key == "folder") v = pathToU8(path.parent_path().filename());
+        else if (key == "seq") {
+            v = std::to_string(src.sequence);
+            if (int(v.size()) < pad) v.insert(0, size_t(pad) - v.size(), '0');
+        } else if (key == "copy") v = src.copy > 0 ? "Copy " + std::to_string(src.copy) : "";
+        else if (key == "date") v = captured().empty() ? "" : part(0, 4) + "-" + part(5, 2) + "-" + part(8, 2);
+        else if (key == "year") v = part(0, 4);
+        else if (key == "month") v = part(5, 2);
+        else if (key == "day") v = part(8, 2);
+        else if (key == "hour") v = part(11, 2);
+        else if (key == "minute") v = part(14, 2);
+        else if (key == "second") v = part(17, 2);
+        else if (key == "time") v = part(11, 2) + part(14, 2) + part(17, 2);
+        else if (key == "today") {
+            const std::string t = exifTime(std::time(nullptr));
+            v = t.size() >= 10 ? t.substr(0, 4) + "-" + t.substr(5, 2) + "-" + t.substr(8, 2) : "";
+        } else if (key == "camera") v = meta().model;
+        else if (key == "make") v = meta().make;
+        else if (key == "lens") v = meta().lens;
+        else if (key == "iso") v = meta().iso > 0 ? number(meta().iso, 6) : "";
+        else if (key == "focal") v = meta().focalLength > 0 ? number(meta().focalLength, 4) + "mm" : "";
+        else if (key == "aperture") v = meta().fNumber > 0 ? "f" + number(meta().fNumber, 2) : "";
+        else if (key == "shutter") {
+            const float t = meta().exposureTime;
+            v = t <= 0 ? "" : t < 0.4f ? "1-" + number(std::round(1.0 / t), 6) + "s" : number(t, 3) + "s";
+        } else known = false;
+        out += known ? v : raw;
+        i = close + 1;
+    }
+    out = sanitizeName(out);
+    return out.empty() ? sanitizeName(src.path.empty() ? "export" : pathToU8(path.stem())) : out;
+}
+
+std::string batchOutputPath(const std::string& sourceU8, const std::string& outDirU8, const ExportSettings& s,
+                            int sequence, int copy) {
     const auto src = u8ToPath(sourceU8);
-    auto name = src.stem();
-    auto out = u8ToPath(outDirU8) / u8ToPath(pathToU8(name) + s.suffix + s.extension());
-    // An empty suffix into the source folder would overwrite the original (same name and format).
+    const std::string name = expandNameTemplate(s.nameTemplate, {sourceU8, sequence, copy});
+    auto out = u8ToPath(outDirU8) / u8ToPath(name + s.extension());
+    // A template naming the file as it is, into the source folder, would overwrite the original.
     std::error_code ec;
     if (std::filesystem::equivalent(out, src, ec) || out.lexically_normal() == src.lexically_normal())
-        out = u8ToPath(outDirU8) / u8ToPath(pathToU8(name) + "_edit" + s.extension());
+        out = u8ToPath(outDirU8) / u8ToPath(name + "_edit" + s.extension());
     return pathToU8(out);
+}
+
+std::vector<std::string> batchOutputPaths(const std::vector<NameSource>& sources, const std::string& outDirU8,
+                                          const ExportSettings& s) {
+    std::vector<std::string> out;
+    std::set<std::string> used;  // lower case: Windows names ignore case
+    for (size_t i = 0; i < sources.size(); ++i) {
+        std::string p = batchOutputPath(sources[i].path, outDirU8, s, int(i) + 1, sources[i].copy);
+        if (used.count(lowerAscii(p))) {
+            const fs::path base = u8ToPath(p);
+            for (int k = 2;; ++k) {
+                const fs::path alt =
+                    base.parent_path() / u8ToPath(pathToU8(base.stem()) + " (" + std::to_string(k) + ")" + pathToU8(base.extension()));
+                if (!used.count(lowerAscii(pathToU8(alt)))) {
+                    p = pathToU8(alt);
+                    break;
+                }
+            }
+        }
+        used.insert(lowerAscii(p));
+        out.push_back(std::move(p));
+    }
+    return out;
 }
 
 Exporter::~Exporter() {

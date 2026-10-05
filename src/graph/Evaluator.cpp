@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <new>
 #include <cmath>
 #include <functional>
 
@@ -762,12 +763,17 @@ void AsyncEvaluator::run() {
         // The preview is on screen; now the sharper parts of zoomed-in views.
         std::vector<Tile> tiles;
         bool detailsDone = true;
+        std::string tilesError;
         try {
             tiles = evaluateDetails(g, job, ctx);
         } catch (const EvalCancelled&) {
             detailsDone = false;
-        } catch (const std::exception&) {
+        } catch (const std::bad_alloc&) {
             tiles.clear();  // keep the preview
+            tilesError = "not enough memory";
+        } catch (const std::exception& e) {
+            tiles.clear();
+            tilesError = e.what();
         }
         trimCache();
         std::lock_guard lock(mutex_);
@@ -777,11 +783,13 @@ void AsyncEvaluator::run() {
         if (done_ && done_->generation == job.generation) {
             done_->tiles = std::move(tiles);
             done_->tilesDone = true;
+            done_->tilesError = std::move(tilesError);
         } else {
             Result r;
             r.generation = job.generation;
             r.tiles = std::move(tiles);
             r.tilesDone = true;
+            r.tilesError = std::move(tilesError);
             done_ = std::move(r);
         }
     }

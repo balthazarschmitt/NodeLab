@@ -153,6 +153,27 @@ TEST_CASE("Range Mask Color selects the picked colour") {
     CHECK(at(*run(n, {Value(img2)}), 10, 5) < 0.5f);
 }
 
+TEST_CASE("HSL Mask selects by hue, saturation and lightness") {
+    Graph g;
+    Node* n = g.addNode("matte.hsl_mask");
+    REQUIRE(n);
+    // Hue 0 (red) at the default width takes the red half and leaves the blue one.
+    ChannelPtr m = run(n, {Value(halves(kRed, kBlue))});
+    CHECK(at(*m, 10, 5) == doctest::Approx(1.0f));
+    CHECK(at(*m, 50, 5) == doctest::Approx(0.0f));
+    // Hue 240 is blue.
+    set(n, "Hue", 240.0f);
+    m = run(n, {Value(halves(kRed, kBlue))});
+    CHECK(at(*m, 10, 5) == doctest::Approx(0.0f));
+    CHECK(at(*m, 50, 5) > 0.9f);
+    // A grey has no hue and sits below the default saturation range.
+    const float grey[3] = {0.5f, 0.5f, 0.5f};
+    CHECK(at(*run(n, {Value(halves(grey, grey))}), 10, 5) == doctest::Approx(0.0f));
+    // Invert flips it.
+    set(n, "Invert", true);
+    CHECK(at(*run(n, {Value(halves(grey, grey))}), 10, 5) == doctest::Approx(1.0f));
+}
+
 TEST_CASE("Add Mask inserts a Basic before the Output, driven by a new mask") {
     Graph g;
     Node* in = g.addNode("io.image_input");

@@ -17,7 +17,7 @@ Inspector: about 240 MB for Subject and 190 MB for Sky, into `%APPDATA%\NodeLab\
 ## Build (Windows)
 
 Requires CMake ≥ 3.24 and a C++20 compiler. CLion's bundled MinGW toolchain works out of the box:
-open the folder in CLion, pick the `NodeLab` target, Run. Dependencies (GLFW, Dear ImGui, imnodes,
+open the folder in CLion, pick the `NodeLab` target, Run. Dependencies (GLFW, Dear ImGui,
 nlohmann/json, stb, tinyexpr, LibRaw, zlib-ng, doctest) are downloaded by CMake on first configure.
 
 LibRaw (camera RAW decoding) is used under its CDDL 1.0 licence option
@@ -54,9 +54,10 @@ Headless render: `NodeLab.exe --render project.nlproj out.png [--depth 16]` (the
 PNG, JPEG, TIFF or OpenEXR; `--depth 32` for full-float EXR; `--timings` prints evaluate and save times)
 Headless batch: `NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr] [--depth N] a.jpg b.jpg ...`
 (each source goes into the project's first Image Input and is saved as `outDir\<name>_edit.<ext>`)
-Benchmark: `NodeLab.exe --benchmark project.nlproj [--full] [--runs N]` (median ms per node)
-GPU compositing: `--device gpu|cpu` and `--precision half|full` for `--render` (CPU by default) and
-`--benchmark` (GPU, half by default); `NodeLab.exe --gpu-info` names the GPU device or says why
+Benchmark: `NodeLab.exe --benchmark project.nlproj [--full] [--runs N] [--sync]` (median ms per node)
+GPU compositing: `--device gpu|cpu` and `--precision half|full` for `--render` and `--benchmark`
+(both use the CPU unless given `--device gpu`; `--precision` is full for `--render` and half for
+`--benchmark` by default; the app itself uses the GPU, View > Compositor); `NodeLab.exe --gpu-info` names the GPU device or says why
 there is none. In the app: View > Compositor.
 AI models: `NodeLab.exe --install-model subject|sky` downloads one (and the ONNX Runtime) without
 the UI.
@@ -121,19 +122,24 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Histogram / clipping | Result toolbar, or H / J with the mouse over the Result: RGB histogram, and clipped highlights in red and crushed shadows in blue |
 | Before / after | Result toolbar, or Y with the mouse over the Result: the original left of a draggable divider, the edit right; `\` shows the original alone |
 | Transparency | Images with alpha are drawn over a checkerboard |
-| On-image controls | Select a Crop, gradient, shape or Brush Mask node and edit it on the Result: drag handles; Crop shows the whole frame (drag outside to straighten); Brush paints, Alt erases, `[` `]` size; O toggles the red mask overlay |
-| Spot removal | Select a Spot Removal node, click a blemish on the Result, drag its source onto clean texture; drag a spot to move it, its edge to resize; Alt+click or Delete removes one |
+| On-image controls | Select a Crop, gradient, shape or Brush Mask node and edit it on the Result: drag handles; Crop shows the whole frame (drag outside to straighten); Brush paints, Alt erases, `[` `]` size; O toggles the red mask overlay, or with Crop cycles its guide overlay (Shift+O turns it); Perspective: drag to draw Guided Upright guides, Alt+click removes |
+| Loupe overlay | View > Loupe Overlay: a grid and draggable guide lines over the Result |
+| Spot removal | Select a Spot Removal node, click a blemish on the Result (the source is picked automatically, `/` finds another), or drag its source onto clean texture; drag a spot to move it, its edge to resize; Alt+click or Delete removes one |
 | Auto tone | Basic's Inspector → Auto sets Exposure, Contrast, Highlights, Shadows, Whites and Blacks from the image |
 | Auto save | Every 5 minutes by default (Edit > Preferences > Save & Load), once a project has been saved (library photos always) |
 | Add Mask | Result toolbar → Add Mask (Shift+M over the Result), or M linear, Shift+R radial, K brush (also Luminance Range and the AI masks Subject, Sky and Background): inserts a Basic labelled "Mask N" before the Output, driven by a new mask; the Inspector shows the mask with the Basic's sliders below it |
 | Import image | File > Import Image, or drop a file on the window |
 | Library | File > Open Folder (Ctrl+Shift+O), drop a folder on the window, or `NodeLab.exe <folder>`: a filmstrip of the folder's photos. Click or ←/→ to open one; its edit is saved automatically in `<photo>.nlproj` beside it. New photos start as Image Input → Denoise → Basic → Output |
 | Culling | In the Library: 0-5 rate, P pick, X reject, U unflag; Ctrl+click / Shift+click select several; the filter menu shows picks, stars, rejects or edited photos |
+| Library sort | The Library toolbar's Sort menu: file name, capture time, file type, rating, pick, edit time, camera, lens, ISO, focal length; A-Z / Z-A |
+| Virtual copies | Ctrl+' (or right-click a thumbnail): another edit of the same photo, with its own sidecar, rating and flag |
 | Library grid | G (or the Library's Grid button): the whole folder as cards; click the stars to rate, double-click / Enter / E opens a photo, Esc goes back; Ctrl+wheel resizes |
 | Copy / paste edit | Ctrl+Shift+C copies the open photo's edit, Ctrl+Shift+V pastes it onto the selected photos (each keeps its own file and rating) |
 | Export selected | Library → Export Selected... (or File menu): each selected photo exported with its own edit, using the Export window's format and size |
 | Export | File > Export (Ctrl+E) opens the Export window: renders in the background with a progress bar and Cancel. Format (PNG/TIFF 8 or 16 bit, JPEG + quality with EXIF, OpenEXR half/full float scene-linear), size (original, long edge, percent; Lanczos in linear light) |
-| Batch | Export window → Batch: add files or a folder (or drop them on the window), pick the Image Input they feed and an output folder; each result is saved as `<name><suffix>` |
+| Batch | Export window → Batch: add files or a folder (or drop them on the window), pick the Image Input they feed and an output folder; each result is named by the File Naming template (`{name}_edit`, with tokens for sequence, capture date, camera, lens...) |
+| Export presets | Export window → Preset: Full-Size JPEG, Web JPEG, Email, PNG, 16-bit TIFF, OpenEXR, or Save... your own |
+| Snapshots | View > Snapshots: Create Snapshot keeps the whole edit (saved with the project); click one to restore it |
 
 **Wire types**
 - **Image** (amber, square pins): full RGBA.
@@ -159,8 +165,8 @@ layout is saved per user in `%APPDATA%\NodeLab\layout.ini`.
 | Mix | Mix, Blend (19 modes), Alpha Over |
 | Converter | Color Ramp, Color Key, Map Range, Math (21 ops), Clamp, Threshold, Normalize (min/max or percentiles), Float Curve, Set Alpha, Wavelength (nm to color), Blackbody (Kelvin to color), Expression, Image Expression |
 | Filter | Blur (pixels or Relative %), Directional Blur (+spin/zoom), Bilateral Blur (both with a Fast quality), Denoise (Luminance/Color, wavelets), Sharpen (Amount, Radius, Detail, Masking), Spot Removal (Heal / Clone, on the Result), Filter (Soften, Sharpen, Laplace, Sobel, Prewitt, Kirsch, Shadow), Dilate / Erode, Kuwahara, Pixelate, Posterize, Glare (Fog Glow, Streaks, Simple Star), Sun Beams, Grain (Amount, Size, Roughness, as Lightroom) |
-| Transform | Transform, Flip, Crop (straighten, aspect presets, on-image frame), Lens Correction (distortion, fringing, vignetting), Lens Distortion (with chromatic dispersion), Displace, Map UV, Corner Pin |
-| Matte | Box Mask, Ellipse Mask, Radial Gradient, Linear Gradient, Brush Mask (painted on the Result, with Auto Mask), Range Mask (luminance or colour range), Select Subject and Select Sky (AI masks, models downloaded on first use), Channel Key, Luminance Key, Difference Key, Distance Key, Chroma Key, Color Spill, Double Edge Mask |
+| Transform | Transform, Flip, Crop (straighten, aspect presets, on-image frame), Lens Correction (distortion, fringing, vignetting), Lens Profile (lensfun profiles picked from the photo's EXIF), Lens Distortion (with chromatic dispersion), Perspective (Lightroom's Transform: Guided Upright, Vertical/Horizontal), Displace, Map UV, Corner Pin |
+| Matte | Box Mask, Ellipse Mask, Radial Gradient, Linear Gradient, Brush Mask (painted on the Result, with Auto Mask), Range Mask (luminance or colour range), HSL Mask (hue, saturation and lightness qualifier), Select Subject (Accurate or Light model) and Select Sky (AI masks, models downloaded on first use), Channel Key, Luminance Key, Difference Key, Distance Key, Chroma Key, Color Spill, Double Edge Mask |
 | Texture | Noise, Voronoi, Gradient, Wave, Checker, White Noise |
 | Utility | Reroute, Switch, Split (compare), Image Info, File Output (PNG/JPEG/TIFF/OpenEXR; written on single Export / File > Write File Outputs / --render) |
 | Group | Groups (Ctrl+G) with Group Input / Group Output inside, and Value Input / Value Output for single sockets |
@@ -178,15 +184,20 @@ functions include `sin cos pow sqrt abs floor ceil log exp atan2 min max clamp m
 ## Layout
 
 ```
-src/core    Image/Channel/Value types, conversions, parallelFor
-src/graph   Node model, Graph (links, cycle check, JSON), Evaluator (cached, background thread)
+src/core    Image/Channel/Value types, conversions, colour maths and science, curves, ramps, noise,
+            parallelFor
+src/graph   Node model, Graph (links, frames, JSON), Evaluator (cache levels, regions, background
+            thread), node registry, Add menu layout, recipes (Add Mask)
 src/gpu     GPU device (OpenGL 4.3 compute), per-pixel kernels and their fusion (PointOp), GPU blur,
-            reductions (exact percentiles)
-src/nodes   Node implementations by family (io, color, math, converter, group)
-src/io      Image load/save, source image cache, project files
+            reductions (exact percentiles), the viewer's display transform
+src/nodes   Node implementations, one file per family (io, color, math, converter, filter,
+            transform, matte, texture, utility, group)
+src/io      Image load/save (PNG, JPEG, TIFF, EXR, RAW via LibRaw), ICC, EXIF, export, source image
+            cache, project files, the photo library's sidecars, presets
 src/ml      AI models: downloads (WinHTTP, pinned SHA-256), ONNX Runtime loaded at run time
-src/ui      App window, node editor (imnodes), inspector, image views, file dialogs
-tests       doctest unit tests
+src/ui      App window, node editor (custom canvas), inspector, image views and overlays, library,
+            preferences and themes, file dialogs, scripted UI tests
+tests       doctest unit tests (tests/golden: hashes that keep legacy renders byte-identical)
 ```
 
 Adding a node: write a class with a `NODELAB_NODE({...})` descriptor and `evaluate()`, then

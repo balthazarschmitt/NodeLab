@@ -1,9 +1,19 @@
 #include "io/Library.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <string_view>
+#include <thread>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <shellapi.h>
+#endif
 
 #include "core/ColorManagement.h"
 #include "graph/Evaluator.h"
@@ -97,11 +107,13 @@ Meta Meta::fromJson(const nlohmann::json& j) {
     return m;
 }
 
-std::string sidecarPath(const std::string& photoU8) { return photoU8 + ".nlproj"; }
+std::string sidecarPath(const std::string& photoU8, int copy) {
+    return copy > 0 ? photoU8 + ".copy" + std::to_string(copy) + ".nlproj" : photoU8 + ".nlproj";
+}
 
-bool hasSidecar(const std::string& photoU8) {
+bool hasSidecar(const std::string& photoU8, int copy) {
     std::error_code ec;
-    return fs::is_regular_file(u8ToPath(sidecarPath(photoU8)), ec);
+    return fs::is_regular_file(u8ToPath(sidecarPath(photoU8, copy)), ec);
 }
 
 std::vector<std::string> listFolder(const std::string& dirU8) {
@@ -120,26 +132,112 @@ std::vector<std::string> listFolder(const std::string& dirU8) {
     return out;
 }
 
-bool readMeta(const std::string& photoU8, Meta& out) {
+std::vector<Entry> listEntries(const std::string& dirU8) {
+    const std::vector<std::string> photos = listFolder(dirU8);
+    // Virtual copies' sidecars, by the lower-case file name of their photo.
+    std::map<std::string, std::vector<int>> copies;
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(u8ToPath(dirU8), ec)) {
+        const std::string name = pathToU8(e.path().filename());
+        constexpr std::string_view ext = ".nlproj";
+        if (name.size() <= ext.size() || lower(name.substr(name.size() - ext.size())) != ext) continue;
+        const std::string stem = name.substr(0, name.size() - ext.size());  // photo.ext.copyN
+        const size_t dot = stem.rfind('.');
+        if (dot == std::string::npos || lower(stem.substr(dot + 1, 4)) != "copy") continue;
+        const std::string digits = stem.substr(dot + 5);
+        if (digits.empty() || digits.size() > 6 || !std::all_of(digits.begin(), digits.end(), [](unsigned char c) { return std::isdigit(c); }))
+            continue;
+        if (const int n = std::stoi(digits); n > 0) copies[lower(stem.substr(0, dot))].push_back(n);
+    }
+    std::vector<Entry> out;
+    for (const std::string& p : photos) {
+        out.push_back({p, 0});
+        auto it = copies.find(lower(pathToU8(u8ToPath(p).filename())));
+        if (it == copies.end()) continue;
+        std::sort(it->second.begin(), it->second.end());
+        for (int n : it->second) out.push_back({p, n});
+    }
+    return out;
+}
+
+int createVirtualCopy(const std::string& photoU8, int fromCopy, std::string& err) {
+    int n = 1;
+    while (hasSidecar(photoU8, n)) ++n;
+    nlohmann::json j;
+    if (hasSidecar(photoU8, fromCopy)) {
+        if (!readJson(sidecarPath(photoU8, fromCopy), j)) {
+            err = pathToU8(u8ToPath(sidecarPath(photoU8, fromCopy)).filename()) + " can't be read";
+            return -1;
+        }
+        return writeJson(sidecarPath(photoU8, n), j, err) ? n : -1;
+    }
+    Graph g;
+    defaultGraph(g, photoU8);
+    return saveProject(sidecarPath(photoU8, n), g, {{"library", Meta{}.toJson()}}, err) ? n : -1;
+}
+
+namespace {
+std::atomic<bool> gRecycle{true};
+}
+
+void setUseRecycleBin(bool on) { gRecycle = on; }
+
+bool removeVirtualCopy(const std::string& photoU8, int copy, std::string& err) {
+    if (copy <= 0) {
+        err = "only virtual copies can be removed";
+        return false;
+    }
+    const fs::path side = u8ToPath(sidecarPath(photoU8, copy));
+#ifdef _WIN32
+    // To the Recycle Bin, so a copy removed by mistake can be brought back.
+    if (gRecycle) {
+        std::wstring from = side.wstring();
+        from.push_back(L'\0');  // the list ends with two NULs
+        SHFILEOPSTRUCTW op{};
+        op.wFunc = FO_DELETE;
+        op.pFrom = from.c_str();
+        op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
+        if (SHFileOperationW(&op) == 0 && !op.fAnyOperationsAborted) return true;
+        err = "could not remove " + pathToU8(side.filename());
+        return false;
+    }
+#endif
+    std::error_code ec;
+    if (fs::remove(side, ec)) return true;
+    err = ec ? ec.message() : "no such file";
+    return false;
+}
+
+bool readMeta(const std::string& photoU8, Meta& out, int copy) {
     out = Meta{};
     nlohmann::json j;
-    if (!readJson(sidecarPath(photoU8), j)) return false;
+    if (!readJson(sidecarPath(photoU8, copy), j)) return false;
     const nlohmann::json ui = j.value("ui", nlohmann::json::object());
     if (ui.is_object()) out = Meta::fromJson(ui.value("library", nlohmann::json::object()));
     return true;
 }
 
-bool writeMeta(const std::string& photoU8, const Meta& m, std::string& err) {
-    const std::string side = sidecarPath(photoU8);
-    nlohmann::json j;
-    if (readJson(side, j)) {
-        if (!j["ui"].is_object()) j["ui"] = nlohmann::json::object();
-        j["ui"]["library"] = m.toJson();
-        return writeJson(side, j, err);
+bool writeMeta(const std::string& photoU8, const Meta& m, std::string& err, int copy) {
+    const std::string side = sidecarPath(photoU8, copy);
+    if (!hasSidecar(photoU8, copy)) {
+        Graph g;
+        defaultGraph(g, photoU8);
+        return saveProject(side, g, {{"library", m.toJson()}}, err);
     }
-    Graph g;
-    defaultGraph(g, photoU8);
-    return saveProject(side, g, {{"library", m.toJson()}}, err);
+    // A sidecar that exists but can't be read is never replaced: it holds an edit. A sync client
+    // or a virus scanner may hold it open for a moment, so try again briefly; a damaged one stays
+    // as it is for the user to repair, and the rating isn't saved.
+    nlohmann::json j;
+    for (int attempt = 0; !readJson(side, j); ++attempt) {
+        if (attempt == 3) {
+            err = pathToU8(u8ToPath(side).filename()) + " can't be read, so it was left unchanged";
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (!j["ui"].is_object()) j["ui"] = nlohmann::json::object();
+    j["ui"]["library"] = m.toJson();
+    return writeJson(side, j, err);
 }
 
 namespace {
@@ -172,11 +270,11 @@ void defaultGraph(Graph& g, const std::string& photoU8) {
     }
 }
 
-nlohmann::json graphFor(const std::string& photoU8, std::string& err) {
+nlohmann::json graphFor(const std::string& photoU8, std::string& err, int copy) {
     Graph g;
-    if (hasSidecar(photoU8)) {
+    if (hasSidecar(photoU8, copy)) {
         nlohmann::json ui;
-        if (!loadProject(sidecarPath(photoU8), g, ui, err)) return nullptr;
+        if (!loadProject(sidecarPath(photoU8, copy), g, ui, err)) return nullptr;
     } else {
         defaultGraph(g, photoU8);
     }
@@ -199,7 +297,8 @@ bool retargetEdit(Graph& g, const std::string& sourceU8, const std::string& targ
     return true;
 }
 
-bool pasteEdit(const nlohmann::json& graph, const std::string& sourceU8, const std::string& targetU8, std::string& err) {
+bool pasteEdit(const nlohmann::json& graph, const std::string& sourceU8, const std::string& targetU8, std::string& err,
+               int targetCopy) {
     Graph g;
     try {
         g.fromJson(graph);
@@ -212,14 +311,14 @@ bool pasteEdit(const nlohmann::json& graph, const std::string& sourceU8, const s
         return false;
     }
     Meta m;
-    readMeta(targetU8, m);
+    readMeta(targetU8, m, targetCopy);
     m.edited = true;
     m.thumb.clear();
     nlohmann::json ui = nlohmann::json::object();
     nlohmann::json old;
-    if (readJson(sidecarPath(targetU8), old) && old.contains("ui") && old["ui"].is_object()) ui = old["ui"];
+    if (readJson(sidecarPath(targetU8, targetCopy), old) && old.contains("ui") && old["ui"].is_object()) ui = old["ui"];
     ui["library"] = m.toJson();
-    return saveProject(sidecarPath(targetU8), g, ui, err);
+    return saveProject(sidecarPath(targetU8, targetCopy), g, ui, err);
 }
 
 ImagePtr loadThumbnail(const std::string& photoU8, int edge, std::string& err) {

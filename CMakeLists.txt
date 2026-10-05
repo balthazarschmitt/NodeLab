@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 # The app version. Bump it (and CHANGELOG.md) when a feature set lands; see CLAUDE.md.
-project(NodeLab VERSION 1.1.0 LANGUAGES C CXX)
+project(NodeLab VERSION 1.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -60,6 +60,14 @@ FetchContent_Declare(libraw
     GIT_SHALLOW TRUE
     SOURCE_SUBDIR _none)
 
+# tinyexr (BSD-3) reads OpenEXR files: scanline and tiled, every lossless codec plus PXR24 and
+# B44 (not DWA). Built against zlib-ng below instead of its bundled miniz.
+FetchContent_Declare(tinyexr
+    GIT_REPOSITORY https://github.com/syoyo/tinyexr.git
+    GIT_TAG v1.0.12
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR _none)
+
 # zlib-ng (in zlib-compatible mode) compresses PNG, TIFF and OpenEXR exports: stb's deflate is
 # single-threaded and fixed-Huffman only, and zlib-ng deflates about 2-3x faster than zlib with
 # SIMD chosen at run time. It keeps zlib's API, which the parallel PNG writer needs
@@ -73,7 +81,7 @@ FetchContent_Declare(zlib
     GIT_TAG 2.3.3
     GIT_SHALLOW TRUE)
 
-FetchContent_MakeAvailable(glfw json imgui stb tinyexpr libraw zlib)
+FetchContent_MakeAvailable(glfw json imgui stb tinyexpr tinyexr libraw zlib)
 
 find_package(OpenGL REQUIRED)
 
@@ -189,6 +197,8 @@ endif()
 
 add_library(stb INTERFACE)
 target_include_directories(stb INTERFACE ${stb_SOURCE_DIR})
+add_library(tinyexr INTERFACE)
+target_include_directories(tinyexr INTERFACE ${tinyexr_SOURCE_DIR})
 
 # ---------------------------------------------------------------- version info
 # Regenerated on every build so the commit hash is current; the file only changes when the hash does.
@@ -245,6 +255,8 @@ add_library(nodelab_core STATIC
     src/io/Icc.cpp
     src/io/JpegDecode.cpp
     src/io/PngDecode.cpp
+    src/io/TiffDecode.cpp
+    src/io/ExrDecode.cpp
     src/io/RawDecode.cpp
     src/io/Exif.cpp
     src/io/ImageCache.cpp
@@ -252,6 +264,7 @@ add_library(nodelab_core STATIC
     src/io/Presets.cpp
     src/io/ProjectFile.cpp
     src/io/Export.cpp
+    src/io/LensProfiles.cpp
     src/nodes/io/IONodes.cpp
     src/nodes/color/ColorNodes.cpp
     src/nodes/color/DevelopNodes.cpp
@@ -276,10 +289,11 @@ target_include_directories(nodelab_core PUBLIC src)
 # ONNX Runtime's C API header (MIT): the runtime itself is loaded at run time (src/ml/Onnx.cpp).
 target_include_directories(nodelab_core PRIVATE third_party/onnxruntime)
 add_dependencies(nodelab_core nodelab_version)
-target_link_libraries(nodelab_core PUBLIC nlohmann_json::nlohmann_json stb tinyexpr libraw zlib glfw OpenGL::GL)
+target_link_libraries(nodelab_core PUBLIC nlohmann_json::nlohmann_json stb tinyexpr tinyexr libraw zlib glfw OpenGL::GL)
 if(WIN32)
     target_compile_definitions(nodelab_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
-    target_link_libraries(nodelab_core PUBLIC winhttp)  # AI model downloads (src/ml/Http.cpp)
+    # winhttp: AI model downloads (src/ml/Http.cpp); shell32: the Recycle Bin (src/io/Library.cpp)
+    target_link_libraries(nodelab_core PUBLIC winhttp shell32)
 endif()
 
 # ---------------------------------------------------------------- application
@@ -327,7 +341,7 @@ if(NODELAB_BUILD_TESTS)
 
     enable_testing()
     add_executable(nodelab_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp tests/test_groups.cpp tests/test_nodes2.cpp tests/test_version.cpp tests/test_guide.cpp tests/test_layout.cpp tests/test_export.cpp tests/test_develop.cpp tests/test_ir_tools.cpp tests/test_expression_vm.cpp tests/test_parallel.cpp tests/test_colorpipe.cpp tests/test_develop_linear.cpp tests/test_raw_exif.cpp tests/test_image_write.cpp tests/test_roi.cpp tests/test_icc.cpp tests/test_gpu.cpp tests/test_denoise.cpp tests/test_masks.cpp tests/test_library.cpp tests/test_prefs.cpp tests/test_fuzz.cpp tests/test_jpeg_decode.cpp
-    tests/test_png_decode.cpp tests/test_decode_fuzz.cpp tests/test_node_menu.cpp tests/test_retouch.cpp tests/test_presets.cpp tests/test_automask.cpp tests/test_grain.cpp src/ui/Theme.cpp)
+    tests/test_png_decode.cpp tests/test_decode_fuzz.cpp tests/test_node_menu.cpp tests/test_retouch.cpp tests/test_presets.cpp tests/test_automask.cpp tests/test_grain.cpp tests/test_golden.cpp tests/test_tiff_exr.cpp tests/test_perspective.cpp tests/test_lens_profile.cpp src/ui/Theme.cpp)
     target_include_directories(nodelab_tests PRIVATE ${doctest_SOURCE_DIR})
     # Tests that load the shipped example projects find them here.
     target_compile_definitions(nodelab_tests PRIVATE NODELAB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

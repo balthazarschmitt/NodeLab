@@ -1,8 +1,10 @@
 #pragma once
+#include <atomic>
 #include <functional>
 #include <map>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "graph/Evaluator.h"
@@ -19,6 +21,7 @@
 
 struct GLFWwindow;
 class GroupNode;
+class SpotRemovalNode;
 
 class App {
 public:
@@ -80,6 +83,8 @@ private:
     void copyEdit();
     void pasteEdit();
     void exportSelected();
+    void createVirtualCopy(int entry);
+    void removeVirtualCopy(int entry);
     void drawLibraryWindow();
     // The Library's Grid view (G), over the whole window like Lightroom's.
     void drawLibraryGrid();
@@ -111,8 +116,11 @@ private:
     static bool sameDetails(const std::vector<AsyncEvaluator::Detail>& a, const std::vector<AsyncEvaluator::Detail>& b);
     static constexpr int kMinProxyEdge = 768, kMaxProxyEdge = 2048;
     static constexpr double kDraftAfterMs = 100;  // previews slower than this draft while dragging
+    static constexpr size_t kKeptPhotos = 3;      // library photos whose previews stay decoded
     void openExportWindow();
     void drawExportWindow();
+    void exportPresetRow();
+    void fileNaming(const std::string& exampleSource);
     void startExport(std::vector<ExportItem> items, int inputNode);
     void pollExport();
     void requestAction(Pending action);  // asks about unsaved changes first
@@ -151,6 +159,8 @@ private:
     // Toolbar's Add Mask: a new Basic before the Output, driven by a new mask (one undo step).
     void addMask(int kind);
     void applyAutoTone(int nodeId);  // Basic's Auto button
+    // Spot Removal's automatic source (SpotRemovalNode::findSource) from the image arriving at it.
+    void findSpotSource(SpotRemovalNode& node);
 
     void markChanged(bool eval);
     void resetHistory();
@@ -191,6 +201,7 @@ private:
 
     // Result viewer extras: on-image controls, mask overlay, histogram and clipping warnings.
     NodeOverlay overlay_;
+    LoupeOverlay loupe_;  // View > Loupe Overlay: grid and guides over the Result viewer
     GLTexture maskTex_;
     NodePath overlayPath_;      // node the overlay edits (crop mode / mask target follow it)
     bool maskWanted_ = false;   // a mask node is selected and the overlay is on
@@ -231,7 +242,11 @@ private:
     int exportTab_ = 0;  // tab shown last frame: 0 single, 1 batch (drops go to batch sources)
     char exportPath_[1024] = {};
     char batchDir_[1024] = {};
-    char batchSuffix_[64] = "_edit";
+    char nameTemplate_[256] = "{name}_edit";  // exportSettings_.nameTemplate while it's edited
+    std::vector<ExportPreset> exportPresets_;  // the user's (preferences.json)
+    char presetName_[64] = {};
+    int removeCopyIndex_ = -1;  // the library entry the Remove Virtual Copy dialog asks about
+    std::string namingExampleKey_, namingExample_;
     int batchInput_ = 0;  // Image Input node fed each source
     std::vector<std::string> batchSources_;
     std::vector<std::string> exportLog_;
@@ -264,6 +279,18 @@ private:
     int newView_ = ColorManagement::Standard, newLook_ = ColorManagement::None;  // new projects' view
     std::vector<theme::Theme> customThemes_;  // saved with Save As in Preferences > Themes
     bool showPreferences_ = false;
+    // Lightroom's Snapshots: named states of the edit, kept with the project (ui.snapshots).
+    struct Snapshot {
+        std::string name;
+        nlohmann::json graph;
+    };
+    std::vector<Snapshot> snapshots_;
+    bool showSnapshots_ = false;
+    int renamingSnapshot_ = -1;
+    char snapshotName_[128] = {};
+    void drawSnapshotsWindow();
+    void createSnapshot();
+    void restoreSnapshot(int i);
     int prefsSection_ = 0;
     int mlGeneration_ = 0;    // ml::generation() last seen
     int maskGeneration_ = 0;  // AutoMaskNode::resultGeneration() last seen
@@ -281,8 +308,16 @@ private:
     bool showLibrary_ = true;
     bool libraryLayoutChecked_ = false;  // an older layout without the Library was rebuilt
     int pendingPhoto_ = -1;              // for Pending::OpenPhoto
+    // Photos whose decoded previews stay cached, most recent first, and the next one in the
+    // direction of browsing, decoded in the background once the current one is shown.
+    std::vector<std::string> recentPhotos_;
+    std::string prefetchPhoto_;
+    std::thread prefetch_;
+    std::atomic<bool> prefetchDone_{true};
+    void tickPrefetch();
     nlohmann::json copiedEdit_;          // Copy Edit: the graph, with copiedFrom_ its photo
     std::string copiedFrom_;
+    std::string copiedSidecar_;  // ...and its sidecar (a virtual copy has its own)
     bool editorFocused_ = false;         // the Node Editor has keyboard focus (X deletes there)
 
     // panels / layout

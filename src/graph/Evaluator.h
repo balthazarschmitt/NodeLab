@@ -168,6 +168,8 @@ public:
         // Details, delivered after the images (merged into them if those weren't polled yet).
         std::vector<Tile> tiles;
         bool tilesDone = false;
+        // Why the details failed (out of memory, most likely): the views keep the preview.
+        std::string tilesError;
     };
 
     explicit AsyncEvaluator(ImageCache& cache);

@@ -31,14 +31,14 @@ const std::vector<Menu> kLayout = {
       "filter.pixelate", "filter.posterize", "",                                                  //
       "filter.glare", "filter.sun_beams", "filter.grain"}},
     {"Matte",
-     {"matte.linear_gradient", "matte.radial_gradient", "matte.brush_mask", "matte.range_mask", "",  //
+     {"matte.linear_gradient", "matte.radial_gradient", "matte.brush_mask", "matte.range_mask", "matte.hsl_mask", "",  //
       "matte.select_subject", "matte.select_sky", "",                                                 //
       "matte.box_mask", "matte.ellipse_mask", "matte.double_edge_mask", "",                           //
       "matte.channel_key", "matte.luminance_key", "conv.color_key", "matte.difference_key",
       "matte.distance_key", "matte.chroma_key", "matte.color_spill"}},
     {"Transform",
      {"xform.transform", "xform.flip", "xform.crop", "",              //
-      "xform.lens_distortion", "xform.lens_correction", "",          //
+      "xform.lens_distortion", "xform.lens_correction", "xform.lens_profile", "xform.perspective", "",  //
       "xform.displace", "xform.map_uv", "xform.corner_pin"}},
     {"Texture", {"tex.noise", "tex.voronoi", "tex.gradient", "tex.wave", "tex.checker", "tex.white_noise"}},
     {"Converter",

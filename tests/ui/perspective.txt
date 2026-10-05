@@ -1,0 +1,30 @@
+# build\NodeLab.exe tests\ui\perspective.nlproj --script tests\ui\perspective.txt
+# Perspective's Guided Upright guides, and the Crop tool's guide overlays (O cycles them).
+settle
+# select Perspective: a fine grid over the Result
+click 700 104
+settle
+shot build/smoke/p1_perspective.png
+# draw two guides along lines that should be vertical: the image straightens behind them
+drag 1300 420 1290 600
+settle
+drag 1480 420 1490 600
+settle
+wait 10
+shot build/smoke/p2_guides.png
+# select Crop, then cycle its overlay: Diagonal, Triangle, Golden Ratio, Golden Spiral
+click 700 504
+settle
+move 1380 500
+key o
+key o
+key o
+key o
+wait 3
+shot build/smoke/p3_spiral.png
+shift on
+key o
+shift off
+wait 3
+shot build/smoke/p4_spiral_turned.png
+quit

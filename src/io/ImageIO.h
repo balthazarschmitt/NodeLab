@@ -18,7 +18,8 @@ struct DecodeOptions {
     bool operator==(const DecodeOptions&) const = default;
 };
 
-// Loads PNG/JPG/BMP/TGA (8 or 16 bit) as float RGBA 0..1, or a camera RAW (see raw::load). With
+// Loads PNG/JPG/TIFF/BMP/TGA (8 or 16 bit) as float RGBA 0..1, float TIFF and OpenEXR as stored
+// (scene-linear; see finishLinearData), or a camera RAW (see raw::load). With
 // srgbToLinear, RGB is decoded from the sRGB curve to linear light (alpha is not). preview allows
 // a faster, smaller decode (half-size RAW); fullW/fullH receive the full-resolution size either
 // way. Returns null and sets err on failure.
@@ -31,6 +32,10 @@ inline std::shared_ptr<Image> loadImage(const std::string& pathU8, std::string& 
 // What DecodeOptions::embeddedProfile does with a file, for the Inspector: empty when it has no
 // profile or an sRGB one, otherwise the profile's name, or why it can't be used. Cached per path.
 std::string embeddedProfileInfo(const std::string& pathU8);
+
+// Files of scene-linear float data (OpenEXR, float TIFF): Image Input reads them as Linear
+// Rec.709, as Blender does.
+bool isLinearImageFile(const std::string& pathU8);
 
 // File dialog filter and drop check for every format loadImage reads.
 extern const char* const kImageFileFilter;

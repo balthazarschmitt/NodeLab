@@ -60,6 +60,11 @@ build\nodelab_tests.exe
 ## Testing
 
 - **Unit tests:** `nodelab_tests.exe` (doctest), in `tests/test_*.cpp`.
+  - The full run takes about 40 s. `-tce="*GPU*,damaged*"` skips the GPU comparisons and decode
+    fuzzing, about 3 s, for quick checks while iterating; run everything before finishing.
+  - `test_golden.cpp` hashes every node's output (legacy and scene-linear) and the example
+    projects against `tests/golden/`. A change that alters results on purpose regenerates them
+    with `NODELAB_GOLDEN_WRITE=1 nodelab_tests.exe -tc="golden*"`; legacy hashes must not change.
   - `test_nodes2.cpp` runs every registered node with image and channel inputs on every pin.
   - New nodes are covered automatically, but add behaviour checks for anything non-trivial.
   - `test_fuzz.cpp` runs every node on 1-pixel-wide images, params at their range ends, NaN and

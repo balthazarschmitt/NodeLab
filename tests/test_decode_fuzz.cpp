@@ -1,4 +1,4 @@
-// Damaged image files through the whole load path (our JPEG and PNG decoders, their stb_image
+// Damaged image files through the whole load path (our JPEG, PNG and TIFF decoders, tinyexr, stb_image
 // fallback, the embedded-profile scan): random byte flips, cuts, runs of 0xff and spliced bytes.
 // Nothing may crash or hang, and an image that loads must have a sane size and finite pixels.
 #include <doctest/doctest.h>
@@ -121,6 +121,13 @@ TEST_CASE("damaged JPEG files load or fail cleanly") {
 TEST_CASE("damaged PNG files load or fail cleanly") {
     loadDamaged(encode(pattern(83, 37), FileFormat::PNG, 8), ".png", 2, 300);
     loadDamaged(encode(pattern(41, 29), FileFormat::PNG, 16), ".png", 3, 300);
+}
+
+TEST_CASE("damaged TIFF and OpenEXR files load or fail cleanly") {
+    loadDamaged(encode(pattern(53, 31), FileFormat::TIFF, 8), ".tif", 6, 300);
+    loadDamaged(encode(pattern(29, 43), FileFormat::TIFF, 16), ".tif", 7, 200);
+    loadDamaged(encode(pattern(47, 19), FileFormat::EXR, 16), ".exr", 8, 300);
+    loadDamaged(encode(pattern(23, 37), FileFormat::EXR, 32), ".exr", 9, 200);
 }
 
 TEST_CASE("damaged ICC profiles parse or fail cleanly") {

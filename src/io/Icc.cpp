@@ -8,6 +8,7 @@
 #include <zlib.h>
 
 #include "io/Paths.h"
+#include "io/TiffDecode.h"
 
 namespace icc {
 
@@ -219,6 +220,13 @@ float Curve::eval(float x) const {
 
 std::vector<uint8_t> embeddedProfile(const std::string& pathU8) {
     const Bytes f = readProfileSegments(pathU8);
+    if (f.size() >= 2 && ((f[0] == 'I' && f[1] == 'I') || (f[0] == 'M' && f[1] == 'M'))) {
+        // TIFF: the directory's ICC tag. Float TIFFs are scene-linear data, so theirs isn't used.
+        tiffdec::Info info;
+        std::string err;
+        if (tiffdec::probeFile(pathU8, info, err) && !info.isFloat) return info.icc;
+        return {};
+    }
     if (f.size() > 3 && f[0] == 0xFF && f[1] == 0xD8) return jpegProfile(f);
     if (f.size() > 8 && std::memcmp(f.data(), "\x89PNG\r\n\x1a\n", 8) == 0) return pngProfile(f);
     return {};

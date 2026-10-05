@@ -22,4 +22,17 @@ std::shared_ptr<Image> applyOrientation(const std::shared_ptr<Image>& img, int o
 // - RAW sources: camera, lens, exposure settings and capture time read by LibRaw.
 std::vector<uint8_t> exportBlock(const std::string& sourceU8, int w, int h);
 
+// What the library sorts by and filename templates name exports after.
+struct PhotoInfo {
+    std::string make, model, lens;
+    // "YYYY:MM:DD HH:MM:SS" (EXIF's DateTimeOriginal, else DateTime), or "" when the file has none.
+    std::string captureTime;
+    float exposureTime = 0, fNumber = 0, iso = 0, focalLength = 0;  // seconds, f/, ISO, mm; 0 = unknown
+};
+// Reads the EXIF of a JPEG, TIFF or RAW file (TIFF-based RAWs from the first part of the file,
+// others through LibRaw). False when nothing could be read.
+bool readInfo(const std::string& pathU8, PhotoInfo& out);
+// The same from an EXIF TIFF block (tests).
+bool infoFromTiff(const uint8_t* t, size_t n, PhotoInfo& out);
+
 }  // namespace exif

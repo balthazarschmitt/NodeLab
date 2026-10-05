@@ -1,6 +1,8 @@
 #include "ui/UiScript.h"
 
 #include <cctype>
+#include <chrono>
+#include <cstdio>
 #include <cstdlib>
 
 #include <fstream>
@@ -65,7 +67,8 @@ bool UiScript::load(const std::string& path, std::string& err) {
             push("wait", 2);
             push("up", bt);
             push("wait", 2);
-        } else if (op == "text" || op == "shot" || op == "key" || op == "ctrl" || op == "alt" || op == "shift") {
+        } else if (op == "text" || op == "shot" || op == "key" || op == "ctrl" || op == "alt" || op == "shift" ||
+                   op == "time") {
             std::string rest;
             std::getline(in >> std::ws, rest);
             push(op, 0, 0, rest);
@@ -84,6 +87,7 @@ static ImGuiKey keyFromName(const std::string& n) {
     if (n == "delete") return ImGuiKey_Delete;
     if (n == "backspace") return ImGuiKey_Backspace;
     if (n == "tab") return ImGuiKey_Tab;
+    if (n == "slash") return ImGuiKey_Slash;
     if (n == "up") return ImGuiKey_UpArrow;
     if (n == "down") return ImGuiKey_DownArrow;
     if (n == "left") return ImGuiKey_LeftArrow;
@@ -135,6 +139,10 @@ std::string UiScript::step(bool evalIdle, bool& quit) {
         io.AddKeyEvent(ImGuiKey_LeftCtrl, on);
     } else if (s.op == "shot") {
         shot = s.s;
+    } else if (s.op == "time") {
+        const auto now = std::chrono::steady_clock::now();
+        if (timed_) std::fprintf(stderr, "%s: %.0f ms\n", s.s.c_str(), std::chrono::duration<double, std::milli>(now - *timed_).count());
+        timed_ = now;
     } else if (s.op == "quit") {
         quit = true;
     }

@@ -6,6 +6,7 @@
 // mask), contrast and local contrast as ratios in log space, and colour work in Oklch. Values are
 // unbounded until the view transform, so Highlights can recover what Exposure pushed past white.
 // Legacy projects keep the original display-referred maths (and its 0..1 clamp) unchanged.
+#include <atomic>
 #include <array>
 #include <cmath>
 
@@ -128,6 +129,21 @@ std::vector<float> logLuminance(const Image& img) {
     return ev;
 }
 
+// True when some colour value is negative or NaN (what finishLinear would change).
+bool anyBelowZero(const Image& img) {
+    std::atomic<bool> found{false};
+    parallelFor(img.h, [&](int y) {
+        if (found.load(std::memory_order_relaxed)) return;
+        const float* p = img.pixel(size_t(y) * img.w);
+        for (int x = 0; x < img.w; ++x, p += 4)
+            if (!(p[0] >= 0.0f && p[1] >= 0.0f && p[2] >= 0.0f)) {
+                found = true;
+                return;
+            }
+    });
+    return found;
+}
+
 // Colours come out of the Oklch edits slightly outside the RGB gamut; linear projects keep values
 // above 1, so only negatives need fixing.
 void finishLinear(Image& img) {
@@ -135,6 +151,10 @@ void finishLinear(Image& img) {
         for (int x = 0; x < img.w; ++x) colorsci::compressToGamut(img.pixel(size_t(y) * img.w + x));
     });
 }
+
+// tanh through one exp2: std::tanh is about three times slower, and Contrast calls it per pixel.
+// Within 1e-7 of it, which is far below what a gain in stops can show.
+inline float fastTanh(float x) { return 1.0f - 2.0f / (std::exp2(x * 2.88539008f) + 1.0f); }
 
 // Linear projects blend by Factor in log2(x + kFactorFloor): a mask at 0.5 gives half the
 // adjustment's stops (an Exposure of -2 EV becomes -1 EV), as Lightroom scales the slider amounts
@@ -144,6 +164,10 @@ constexpr float kFactorFloor = 1.0f / 256.0f;
 
 inline float factorBlend(float s, float d, float f, bool logBlend) {
     if (!logBlend || !(s > -kFactorFloor && d > -kFactorFloor)) return s + (d - s) * f;
+    // Fully in or out of the mask (most of a gradient's pixels): the adjusted or the source value
+    // exactly, without a log and an exp per channel.
+    if (f >= 1.0f) return d;
+    if (f <= 0.0f) return s;
     const float a = s + kFactorFloor, b = d + kFactorFloor;
     return a * std::exp2(f * std::log2(b / a)) - kFactorFloor;
 }
@@ -158,8 +182,9 @@ void applyFactor(const Node& node, const Image& src, Image& img, const Value& fa
         for (int x = 0; x < src.w; ++x) {
             size_t i = size_t(y) * src.w + x;
             float f = sf(x, y);
-            const float* s = src.pixel(i);
             float* d = img.pixel(i);
+            if (logBlend && f >= 1.0f) continue;  // the adjusted value, as factorBlend gives
+            const float* s = src.pixel(i);
             for (int k = 0; k < 3; ++k) d[k] = factorBlend(s[k], d[k], f, logBlend);
         }
     });
@@ -175,6 +200,8 @@ const float kFactorFloor = 1.0 / 256.0;
 vec4 applyFactor(vec4 s, vec3 d, float f, bool logBlend) {
     vec3 mixed = s.rgb + (d - s.rgb) * f;
     if (!logBlend) return vec4(mixed, s.a);
+    if (f >= 1.0) return vec4(d, s.a);  // as the CPU's factorBlend
+    if (f <= 0.0) return s;
     vec3 a = s.rgb + kFactorFloor, b = d + kFactorFloor;
     vec3 l = a * exp2(f * log2(max(b, 1e-30) / max(a, 1e-30))) - kFactorFloor;
     vec3 ok = vec3(greaterThan(a, vec3(0.0))) * vec3(greaterThan(b, vec3(0.0)));
@@ -572,6 +599,15 @@ public:
 
 private:
     ImagePtr evaluateLinear(const EvalContext& ctx, const ImagePtr& src, const Value& facIn) const {
+        // Every slider at zero (the library's default graph): only finishLinear would act, and it
+        // changes nothing but negative (or NaN) values. Without any, the source passes through
+        // untouched instead of being copied (a 24 MP image is 384 MB). A RAW can have negatives.
+        bool untouched = true;
+        for (int i = 1; i <= 13; ++i) untouched = untouched && paramF(i) == 0.0f;
+        if (untouched) {
+            ChannelPtr fac = channelOr(facIn, 1.0f);
+            if (fac->constant && fac->value >= 1.0f && !anyBelowZero(*src)) return src;
+        }
         const float temp = paramF(1) / 100, tint = paramF(2) / 100, stops = paramF(3);
         const float contrast = paramF(4) / 100, highlights = paramF(5) / 100, shadows = paramF(6) / 100;
         const float whites = paramF(7) / 100, blacks = paramF(8) / 100;
@@ -615,7 +651,7 @@ private:
                     const size_t i = size_t(y) * w + x;
                     const float e = ev[i];
                     float g = 0.0f;
-                    if (contrast != 0.0f) g += (slope - 1.0f) * 3.0f * std::tanh((e - kMidGreyEv) / 3.0f);
+                    if (contrast != 0.0f) g += (slope - 1.0f) * 3.0f * fastTanh((e - kMidGreyEv) / 3.0f);
                     if (!mask.empty()) {
                         const float em = mask[i];
                         g += hA * smooth(-3.0f, -0.5f, em) + sA * (1.0f - smooth(-6.0f, -2.5f, em));

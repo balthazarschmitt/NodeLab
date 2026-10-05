@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE lensdatabase SYSTEM "lensfun-database.dtd">
+<lensdatabase version="1">
+    <!-- cameras -->
+    <camera>
+        <maker>Canon</maker>
+        <model>Canon EOS 80D</model>
+        <model lang="en">EOS 80D</model>
+        <mount>Canon EF-S</mount>
+        <cropfactor>1.6</cropfactor>
+    </camera>
+    <camera>
+        <maker>Nikon Corporation</maker>
+        <maker lang="en">Nikon</maker>
+        <model>Nikon D750</model>
+        <mount>Nikon F AF</mount>
+        <cropfactor>1.0</cropfactor>
+    </camera>
+    <camera>
+        <maker>Olympus Imaging Corp.</maker>
+        <model>XZ-1</model>
+        <mount>olympusXZ1</mount>
+        <cropfactor>4.7</cropfactor>
+    </camera>
+    <lens>
+        <maker>Canon</maker>
+        <model>Canon EF 24-105mm f/4L IS USM</model>
+        <mount>Canon EF</mount>
+        <mount>Canon EF-S</mount>
+        <cropfactor>1</cropfactor>
+        <calibration>
+            <distortion model="ptlens" focal="24" a="0.01" b="-0.04" c="0"/>
+            <distortion model="ptlens" focal="105" a="0.03" b="-0.02" c="0.01"/>
+            <tca model="poly3" focal="24" br="0.0002" vr="1.0004" bb="-0.0001" vb="0.9996"/>
+            <vignetting model="pa" focal="24" aperture="4" distance="10" k1="-0.6" k2="0.2" k3="-0.1"/>
+            <vignetting model="pa" focal="24" aperture="4" distance="1" k1="-0.9" k2="0" k3="0"/>
+            <vignetting model="pa" focal="24" aperture="8" distance="10" k1="-0.3" k2="0" k3="0"/>
+        </calibration>
+    </lens>
+    <lens>
+        <maker>Canon</maker>
+        <model>Canon EF 24-70mm f/4L IS USM</model>
+        <mount>Canon EF</mount>
+        <cropfactor>1</cropfactor>
+        <calibration>
+            <distortion model="poly3" focal="24" k1="-0.02"/>
+        </calibration>
+    </lens>
+    <lens>
+        <maker>Sigma &amp; Co</maker>
+        <model>18-35mm f/1.8 DC HSM [A]</model>
+        <mount>Canon EF</mount>
+        <cropfactor>1.534</cropfactor>
+        <aspect-ratio>3:2</aspect-ratio>
+        <calibration>
+            <distortion model="poly5" focal="18" k1="-0.05" k2="0.01"/>
+        </calibration>
+    </lens>
+    <lens>
+        <maker>Olympus</maker>
+        <model>fixed lens</model>
+        <mount>olympusXZ1</mount>
+        <cropfactor>4.7</cropfactor>
+        <calibration>
+            <distortion model="poly3" focal="6" k1="0.03"/>
+        </calibration>
+    </lens>
+    <lens>
+        <maker>Nobody</maker>
+        <model>Uncalibrated 50mm f/2</model>
+        <mount>Canon EF</mount>
+    </lens>
+</lensdatabase>

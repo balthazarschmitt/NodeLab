@@ -386,7 +386,7 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
         changed |= c;
         return c;
     };
-    if (!drawNodeInspector(*n, row, changed))
+    if (!drawNodeInspector(*n, row, changed, &g))
         for (int i = 0; i < int(info.params.size()); ++i) row(i);
     ImGui::PopID();
     return changed;

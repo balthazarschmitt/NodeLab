@@ -1,11 +1,15 @@
 #include <doctest/doctest.h>
 
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 
 #include "graph/Graph.h"
+#include "io/Exif.h"
 #include "io/Export.h"
 #include "io/ImageIO.h"
 #include "io/Paths.h"
+#include "io/Tiff.h"
 
 namespace fs = std::filesystem;
 
@@ -32,13 +36,17 @@ TEST_CASE("export settings round-trip and clamp") {
     s.jpegQuality = 80;
     s.sizeMode = ExportSettings::LongEdge;
     s.longEdge = 1000;
-    s.suffix = "_x";
+    s.nameTemplate = "{name}_x";
     ExportSettings t;
     t.fromJson(s.toJson());
     CHECK(t.format == ExportSettings::JPEG);
     CHECK(t.jpegQuality == 80);
     CHECK(t.longEdge == 1000);
-    CHECK(t.suffix == "_x");
+    CHECK(t.nameTemplate == "{name}_x");
+    // Settings saved before templates had a suffix.
+    ExportSettings old;
+    old.fromJson({{"suffix", "_web"}});
+    CHECK(old.nameTemplate == "{name}_web");
     t.fromJson({{"jpegQuality", 500}, {"percent", -3}});
     CHECK(t.jpegQuality == 100);
     CHECK(t.percent == 1);
@@ -87,7 +95,7 @@ TEST_CASE("Output Sharpening is off by default, and stronger for paper and highe
 
 TEST_CASE("batchOutputPath never overwrites the source") {
     ExportSettings s;
-    s.suffix = "";
+    s.nameTemplate = "{name}";
     const fs::path dir = fs::temp_directory_path() / "nodelab_batch_name";
     fs::create_directories(dir);
     const std::string src = writeSource(dir, "a.png", 0.5f);
@@ -148,4 +156,114 @@ TEST_CASE("Exporter can be cancelled") {
     ex.cancel();
     ex.wait();
     CHECK(ex.progress().done < 50);
+}
+
+TEST_CASE("Filename templates expand tokens and make safe names") {
+    const fs::path dir = fs::temp_directory_path() / "nodelab_name_template";
+    fs::remove_all(dir);
+    fs::create_directories(dir / "Trip");
+    const std::string src = writeSource(dir / "Trip", "IMG_7.png", 0.5f);
+    CHECK(expandNameTemplate("{name}_edit", {src}) == "IMG_7_edit");
+    CHECK(expandNameTemplate("{NAME}-{seq}", {src, 12}) == "IMG_7-12");
+    CHECK(expandNameTemplate("{folder}_{seq:3}", {src, 7}) == "Trip_007");
+    CHECK(expandNameTemplate("{name} {copy}", {src, 1, 2}) == "IMG_7 Copy 2");
+    CHECK(expandNameTemplate("{name} {copy}", {src, 1, 0}) == "IMG_7");  // trailing space trimmed
+    // A PNG has no EXIF: the date is the file's, the camera is empty.
+    const std::string date = expandNameTemplate("{date}", {src});
+    REQUIRE(date.size() == 10);
+    CHECK(date[4] == '-');
+    CHECK(expandNameTemplate("{year}", {src}) == date.substr(0, 4));
+    CHECK(expandNameTemplate("{name}{camera}", {src}) == "IMG_7");
+    // Unknown tokens stay as written; characters Windows forbids become _.
+    CHECK(expandNameTemplate("{name}{nope}", {src}) == "IMG_7{nope}");
+    CHECK(expandNameTemplate("a/b:c?{name}", {src}) == "a_b_c_IMG_7");
+    // Nothing left: the source's name.
+    CHECK(expandNameTemplate("{camera}", {src}) == "IMG_7");
+    CHECK(expandNameTemplate("{name}", {""}) == "export");
+
+    // A batch whose template names two files the same numbers the second.
+    ExportSettings s;
+    s.nameTemplate = "photo";
+    const std::string other = writeSource(dir, "b.png", 0.2f);
+    const auto outs = batchOutputPaths({{src}, {other}}, pathToU8(dir / "out"), s);
+    REQUIRE(outs.size() == 2);
+    CHECK(u8ToPath(outs[0]).filename() == "photo.png");
+    CHECK(u8ToPath(outs[1]).filename() == "photo (2).png");
+    s.nameTemplate = "{seq:2}_{name}";
+    const auto seq = batchOutputPaths({{src}, {other}}, pathToU8(dir / "out"), s);
+    CHECK(u8ToPath(seq[1]).filename() == "02_b.png");
+    fs::remove_all(dir);
+}
+
+TEST_CASE("Export presets: built-ins are distinct and recognised") {
+    const auto& presets = builtInExportPresets();
+    REQUIRE(presets.size() >= 4);
+    for (size_t i = 0; i < presets.size(); ++i)
+        for (size_t j = i + 1; j < presets.size(); ++j) {
+            CHECK(presets[i].name != presets[j].name);
+            CHECK_FALSE(presets[i].settings.sameOutput(presets[j].settings));
+        }
+    ExportSettings s = presets[1].settings;
+    s.fileOutputs = !s.fileOutputs;  // not part of a preset
+    CHECK(s.sameOutput(presets[1].settings));
+    s.nameTemplate = "{seq}";
+    CHECK_FALSE(s.sameOutput(presets[1].settings));
+}
+
+TEST_CASE("Photo info comes from EXIF, and names exports") {
+    // An EXIF block as a camera writes it, put into a JPEG's APP1 segment.
+    tiff::Ifd ifd0, ex;
+    ifd0.ascii(0x010F, "Canon");
+    ifd0.ascii(0x0110, "Canon EOS R6");
+    ifd0.ascii(0x0132, "2024:05:06 07:08:09");
+    ex.ascii(0x9003, "2023:01:02 03:04:05");
+    ex.rational(0x829A, 1, 250);
+    ex.rational(0x829D, 28, 10);
+    ex.shorts(0x8827, {800});
+    ex.rational(0x920A, 50, 1);
+    ex.ascii(0xA434, "RF50mm F1.8 STM");
+    std::vector<uint8_t> block = tiff::header();
+    const uint32_t exOff = ex.write(block);
+    ifd0.longs(0x8769, {exOff});
+    tiff::set32(block, 4, ifd0.write(block));
+
+    exif::PhotoInfo info;
+    REQUIRE(exif::infoFromTiff(block.data(), block.size(), info));
+    CHECK(info.model == "Canon EOS R6");
+    CHECK(info.captureTime == "2023:01:02 03:04:05");  // DateTimeOriginal, not DateTime
+    CHECK(info.exposureTime == doctest::Approx(1.0 / 250));
+    CHECK(info.fNumber == doctest::Approx(2.8));
+    CHECK(info.iso == 800);
+    CHECK(info.lens == "RF50mm F1.8 STM");
+    // Damaged blocks read nothing, without reading past the end.
+    for (size_t cut = 0; cut < block.size(); cut += 7) {
+        exif::PhotoInfo part;
+        exif::infoFromTiff(block.data(), cut, part);
+    }
+
+    const fs::path dir = fs::temp_directory_path() / "nodelab_exif_names";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const std::string png = writeSource(dir, "x.png", 0.5f);
+    Image img(8, 8);
+    std::string err;
+    const std::string jpgPath = pathToU8(dir / "shot.jpg");
+    REQUIRE(saveImage(jpgPath, img, err));
+    std::vector<char> bytes;
+    {
+        std::ifstream f(u8ToPath(jpgPath), std::ios::binary);
+        bytes.assign(std::istreambuf_iterator<char>(f), {});
+    }
+    std::vector<char> app1 = {char(0xFF), char(0xE1), 0, 0, 'E', 'x', 'i', 'f', 0, 0};
+    app1.insert(app1.end(), block.begin(), block.end());
+    app1[2] = char((app1.size() - 2) >> 8), app1[3] = char((app1.size() - 2) & 0xFF);
+    bytes.insert(bytes.begin() + 2, app1.begin(), app1.end());
+    std::ofstream(u8ToPath(jpgPath), std::ios::binary).write(bytes.data(), std::streamsize(bytes.size()));
+
+    REQUIRE(exif::readInfo(jpgPath, info));
+    CHECK(info.make == "Canon");
+    CHECK(expandNameTemplate("{date}_{time}_{camera}", {jpgPath}) == "2023-01-02_030405_Canon EOS R6");
+    CHECK(expandNameTemplate("{iso} {focal} {aperture} {shutter}", {jpgPath}) == "800 50mm f2.8 1-250s");
+    CHECK_FALSE(exif::readInfo(png, info));
+    fs::remove_all(dir);
 }

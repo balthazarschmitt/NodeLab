@@ -156,6 +156,20 @@ bool ImageCache::fullSize(const std::string& pathU8, int& w, int& h) {
     return true;
 }
 
+void ImageCache::retain(const std::vector<std::string>& pathsU8) {
+    std::lock_guard lock(mutex_);
+    auto kept = [&](const std::string& key) {
+        // Keys are the path, then '|' and the decode options (paths can't contain '|').
+        const std::string path = key.substr(0, key.find('|'));
+        return std::find(pathsU8.begin(), pathsU8.end(), path) != pathsU8.end();
+    };
+    // Files being decoded keep their entry: the decoding thread fills it in.
+    std::erase_if(entries_, [&](const auto& e) { return !kept(e.first) && !decoding_.count(e.first); });
+    std::erase_if(fullSizes_, [&](const auto& e) { return !kept(e.first); });
+    const std::string current = pathsU8.empty() ? std::string() : pathsU8.front();
+    std::erase_if(levels_, [&](const auto& e) { return e.first.substr(0, e.first.find('|')) != current; });
+}
+
 void ImageCache::clear() {
     std::lock_guard lock(mutex_);
     entries_.clear();

@@ -1,0 +1,6 @@
+# Golden hashes of every node's CPU output (tests/test_golden.cpp). Regenerate with
+# NODELAB_GOLDEN_WRITE=1 build\nodelab_tests.exe -tc="golden*" only for deliberate changes.
+example demo.nlproj c071fa4a0be2d1b7
+example effects.nlproj e3fe19a4f069087e
+example infrared_foliage.nlproj 88678f4947840635
+example m2_showcase.nlproj d08be8bcecbc8d83

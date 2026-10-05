@@ -3,6 +3,59 @@
 NodeLab uses [semantic versioning](https://semver.org): minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
+## 1.2.0 (2026-10-05)
+
+### New
+- **TIFF and OpenEXR import.** Image Input opens TIFF (8/16-bit and float, LZW, Deflate,
+  PackBits, tiled) and OpenEXR (through tinyexr; Blender's multilayer files too), so NodeLab's
+  own 16-bit and float exports can be opened again. Float files start as Linear Rec.709.
+- **Export presets** (Lightroom's): Full-Size JPEG, Web JPEG, Email, PNG, 16-bit TIFF and
+  OpenEXR built in, and your own with Save... (kept in the preferences).
+- **Filename templates** (Lightroom's File Naming) for batches and Export Selected: `{name}`,
+  `{seq:3}`, `{date}`, `{camera}`, `{lens}`, `{iso}` and more, with an example name. Names a
+  batch would give twice get " (2)", and an export never overwrites its source. Projects with
+  the old Name suffix keep their names.
+- **Snapshots** (View > Snapshots): named states of the whole edit, saved with the project.
+- **Virtual copies** in the Library (Ctrl+' or right-click): more edits of one photo, each with
+  its own sidecar (`photo.ext.copyN.nlproj`), rating and flag.
+- **Library sort:** by file name, capture time, file type, rating, pick, edit time, camera,
+  lens, ISO or focal length, ascending or descending.
+- **HSL Mask** (Matte): selects colours by hue, saturation and lightness, with softness for each.
+- **Perspective** (Transform), Lightroom's Transform panel: Upright Guided with up to four guides
+  drawn on the Result, Vertical, Horizontal, Rotate, Aspect, Scale, offsets and Constrain Crop.
+- **Lens Profile** (Transform), Lightroom's Profile Corrections: distortion, chromatic
+  aberration and vignetting from lensfun's database, matched to the photo's EXIF (or chosen by
+  hand). The database (lensfun 0.3.4, CC BY-SA 3.0) is downloaded from the Inspector on request.
+- **Crop guide overlays** (O / Shift+O on the Result): Grid, Thirds, Diagonal, Triangle, Golden
+  Ratio, Golden Spiral and Aspect Ratios; **Loupe Overlay** (View menu): a grid and draggable
+  guides over the Result.
+- **Spot Removal:** a new spot gets an automatic source, from nearby texture that matches its
+  surroundings, as in Lightroom. `/` or Find New Source picks another.
+- **Select Subject: Light model** (U²-Net small, a 4.6 MB download that runs in about a second),
+  for computers where the Accurate model's minute and 4 GB are too much.
+
+### Faster
+- Sharpen runs on the GPU (it was the only common photo node without a GPU path).
+- Noise, Grain and other Perlin textures are about 4x faster per sample on the CPU (a gradient
+  table, bit-identical).
+- A masked Basic skips the log blend where the mask is fully in or out; Contrast's tanh costs a
+  third; an all-zero Basic passes the image through instead of copying it.
+- The Library keeps the photos around the current one, so stepping back and forth doesn't decode
+  them again.
+- `--render` releases intermediates (about 540 MB less at 20 MP).
+
+### Fixed
+- Rating or flagging a photo whose sidecar couldn't be read (damaged, or briefly locked by a
+  sync client or virus scanner) replaced its edit with the default graph. Such sidecars are now
+  retried and then left alone.
+- AI mask runs kept going (with up to 4 GB) after another photo or project was opened.
+- A zoomed region that failed to evaluate was dropped silently; the status bar now says why.
+- `--benchmark --full` printed a RAW's half-size dimensions.
+- The Result toolbar was clipped in narrow panels.
+- Pixel sizes (blur radius, offsets) in a RAW's preview were twice what the export used: the half-size decode was taken for the full size.
+- File names with non-ASCII characters on the command line.
+- The README's benchmark and dependency notes were out of date.
+
 ## 1.1.0 (2026-10-04)
 
 - **Select Subject** and **Select Sky** (Matte), Lightroom's AI masks. An AI model finds the

@@ -24,6 +24,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <shellapi.h>
 #endif
 
 // --device gpu for the command-line modes: GLFW started only for the GPU device (its context lives
@@ -93,6 +94,9 @@ static int renderHeadless(const std::string& project, const std::string& outPath
     dev.apply(ctx);
     try {
         Evaluator ev;
+        // As File > Export: each node's result is freed once the nodes reading it are done, which
+        // lowers the peak by several full-resolution buffers.
+        ev.releaseIntermediates = true;
         ImagePtr img = ev.evaluateDisplay(g, outId, ctx);
         if (ev.gpuFallbacks) std::fprintf(stderr, "%d nodes ran on the CPU instead: %s\n", ev.gpuFallbacks, ev.lastGpuError.c_str());
         if (!img) {
@@ -174,8 +178,8 @@ static int benchmarkHeadless(const std::string& project, bool full, int runs, bo
     std::vector<std::pair<double, int>> rows;
     for (const auto& [id, v] : per) rows.push_back({median(v), id});
     std::sort(rows.rbegin(), rows.rend());
-    std::printf("%s  %dx%d  %s  %s\n", project.c_str(), ctx.defaultW, ctx.defaultH, full ? "full" : "proxy",
-                dev.name().c_str());
+    std::printf("%s  %dx%d (scale %.4g)  %s  %s\n", project.c_str(), ctx.defaultW, ctx.defaultH, ctx.scale,
+                full ? "full" : "proxy", dev.name().c_str());
     for (const auto& [ms, id] : rows) {
         const Node* n = g.find(id);
         std::string name = n->label.empty() ? n->info().displayName : n->label;
@@ -188,7 +192,8 @@ static int benchmarkHeadless(const std::string& project, bool full, int runs, bo
 
 // NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr] [--depth N] in1 in2 ... : runs
 // each source image through the project (fed into its first Image Input) and writes
-// outDir/<name>_edit.<ext>. Unset options come from the project's Export settings.
+// outDir/<name>_edit.<ext>, or as the project's filename template names it. Unset options come
+// from the project's Export settings.
 static int batchHeadless(const std::string& project, const std::string& outDir, std::vector<std::string> args) {
     Graph g;
     nlohmann::json ui;
@@ -210,7 +215,10 @@ static int batchHeadless(const std::string& project, const std::string& outDir, 
         else if (a == "--depth" && i + 1 < args.size()) s.depth = std::atoi(args[++i].c_str());
         else if (a.rfind("--", 0) != 0) sources.push_back(a);
     }
-    for (const std::string& a : sources) items.push_back({a, batchOutputPath(a, outDir, s)});
+    std::vector<NameSource> names;
+    for (const std::string& a : sources) names.push_back({a});
+    const std::vector<std::string> outputs = batchOutputPaths(names, outDir, s);
+    for (size_t i = 0; i < sources.size(); ++i) items.push_back({sources[i], outputs[i]});
     const int input = g.firstOfType(ImageInputNode::staticInfo().type);
     if (!input || items.empty()) {
         std::fprintf(stderr, input ? "no source images given\n" : "project has no Image Input node\n");
@@ -258,6 +266,26 @@ static void attachParentConsole() {
 }
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+    // argv is in the ANSI code page, which can't hold every file name (a photo named in another
+    // script, opened from Explorer, arrived mangled). Rebuild it as UTF-8, which every path
+    // in NodeLab is, from the wide command line.
+    std::vector<std::string> utf8Args;
+    std::vector<char*> utf8Argv;
+    int wideCount = 0;
+    if (LPWSTR* wide = CommandLineToArgvW(GetCommandLineW(), &wideCount)) {
+        for (int i = 0; i < wideCount; ++i) {
+            const int len = WideCharToMultiByte(CP_UTF8, 0, wide[i], -1, nullptr, 0, nullptr, nullptr);
+            std::string s(size_t(std::max(len - 1, 0)), '\0');
+            if (len > 1) WideCharToMultiByte(CP_UTF8, 0, wide[i], -1, s.data(), len, nullptr, nullptr);
+            utf8Args.push_back(std::move(s));
+        }
+        LocalFree(wide);
+        for (std::string& s : utf8Args) utf8Argv.push_back(s.data());
+        utf8Argv.push_back(nullptr);
+        argc = wideCount, argv = utf8Argv.data();
+    }
+#endif
     if (argc >= 2 && (std::string(argv[1]) == "--version" || std::string(argv[1]) == "-v")) {
         attachParentConsole();
         std::printf("NodeLab %s\n", versionString().c_str());
@@ -269,7 +297,7 @@ int main(int argc, char** argv) {
         listNodes();
         return 0;
     }
-    // NodeLab.exe --install-model subject|sky : downloads an AI model (and the runtime) as the
+    // NodeLab.exe --install-model subject|subject-light|sky : downloads an AI model (and the runtime) as the
     // Inspector's Download button does.
     if (argc >= 3 && std::string(argv[1]) == "--install-model") {
         attachParentConsole();
@@ -287,7 +315,6 @@ int main(int argc, char** argv) {
         std::printf("\n%s\n", err.empty() ? "Done" : err.c_str());
         return err.empty() ? 0 : 1;
     }
-    // Note: argv is in the ANSI code page on Windows; fine for ASCII paths in headless mode.
     if (argc >= 4 && std::string(argv[1]) == "--render") {
         attachParentConsole();
         int depth = 8;

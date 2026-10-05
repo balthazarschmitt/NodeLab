@@ -69,7 +69,7 @@ TEST_CASE("SHA-256 matches the FIPS 180-4 test vectors") {
 }
 
 TEST_CASE("The model catalogue is pinned") {
-    for (const char* id : {ml::kRuntime, "subject", "sky"}) {
+    for (const char* id : {ml::kRuntime, "subject", "subject-light", "sky"}) {
         const ml::ModelSpec* m = ml::findModel(id);
         REQUIRE(m);
         CHECK(!m->files.empty());

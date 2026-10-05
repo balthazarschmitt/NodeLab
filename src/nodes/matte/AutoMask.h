@@ -8,7 +8,7 @@
 
 class AutoMaskNode : public Node {
 public:
-    enum { RefineEdges, Invert };
+    enum { RefineEdges, Invert, ModelChoice };
 
     // The model and the input it was trained on.
     struct Model {
@@ -16,6 +16,7 @@ public:
         int width, height;       // input size (the model's fixed one; tests check it)
         float mean[3], std[3];   // input normalisation, of 0..1 sRGB values
         bool sigmoid;            // the output is logits
+        bool stretch = false;    // rescale the output to 0..1 (rembg does for U²-Net)
     };
     virtual const Model& model() const = 0;
 
@@ -55,6 +56,9 @@ public:
     static int resultGeneration();
     // Waits for the background runs (tests).
     static void waitForRuns();
+    // Drops the waiting background runs and stops the running one, when another project or photo
+    // opens: a run takes up to a minute and gigabytes, and its picture is no longer on screen.
+    static void cancelRuns();
 };
 
 class SelectSubjectNode : public AutoMaskNode {
@@ -62,7 +66,10 @@ public:
     NODELAB_NODE({"matte.select_subject", "Select Subject", "Matte",
                   {{"Image", PinType::Image}, {"Mask", PinType::Channel}},
                   {{"Mask", PinType::Channel}},
-                  {ParamDesc::Bool("Refine Edges", true), ParamDesc::Bool("Invert", false)}})
+                  {ParamDesc::Bool("Refine Edges", true), ParamDesc::Bool("Invert", false),
+                   ParamDesc::Enum("Model", 0, {"Accurate", "Light"})}})
+    // Accurate is BiRefNet (a minute, 4 GB on a CPU); Light is U²-Net small (a second, 4.6 MB).
+    // Projects from before the choice load as Accurate.
     const Model& model() const override;
 };
 

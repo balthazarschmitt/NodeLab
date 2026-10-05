@@ -2,12 +2,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <tuple>
 
 #include <imgui.h>
 
 #include "graph/Graph.h"
 #include "io/Paths.h"
 #include "io/ProjectFile.h"
+#include "core/Parallel.h"
 
 namespace {
 
@@ -16,7 +19,29 @@ const char* const kFilters[] = {"All Photos", "Picked", "Hide Rejected", "Reject
                                 "1 Star or More", "2 Stars or More", "3 Stars or More",
                                 "4 Stars or More", "5 Stars", "Edited"};
 
+const char* const kSorts[] = {"File Name", "Capture Time", "File Type", "Rating", "Pick", "Edit Time",
+                              "Camera", "Lens", "ISO", "Focal Length"};
+
 const ImU32 kAccent = IM_COL32(90, 150, 255, 255);
+
+// "IMG_1.jpg" or "IMG_1.jpg (Copy 2)".
+std::string entryName(const std::string& path, int copy) {
+    std::string n = pathToU8(u8ToPath(path).filename());
+    if (copy > 0) n += " (Copy " + std::to_string(copy) + ")";
+    return n;
+}
+
+std::string lowerAscii(std::string s) {
+    for (char& c : s) c = char(std::tolower((unsigned char)c));
+    return s;
+}
+
+// A file's modification time as seconds, or 0.
+long long fileTime(const std::string& pathU8) {
+    std::error_code ec;
+    const auto t = std::filesystem::last_write_time(u8ToPath(pathU8), ec);
+    return ec ? 0 : std::chrono::duration_cast<std::chrono::seconds>(t.time_since_epoch()).count();
+}
 
 // A five-pointed star, as Lightroom's grid shows ratings.
 void drawStar(ImDrawList* dl, ImVec2 c, float r, ImU32 col, bool filled) {
@@ -42,8 +67,8 @@ LibraryPanel::~LibraryPanel() {
 }
 
 bool LibraryPanel::open(const std::string& dirU8) {
-    std::vector<std::string> photos = library::listFolder(dirU8);
-    if (photos.empty()) return false;
+    std::vector<library::Entry> entries = library::listEntries(dirU8);
+    if (entries.empty()) return false;
     {
         std::lock_guard lock(mutex_);
         ++gen_;
@@ -52,21 +77,121 @@ bool LibraryPanel::open(const std::string& dirU8) {
     }
     dir_ = dirU8;
     items_.clear();
-    for (std::string& p : photos) {
+    for (library::Entry& e : entries) {
         auto it = std::make_unique<Item>();
-        it->path = std::move(p);
-        library::readMeta(it->path, it->meta);
+        it->path = std::move(e.photo);
+        it->copy = e.copy;
+        library::readMeta(it->path, it->meta, it->copy);
         items_.push_back(std::move(it));
     }
     current_ = anchor_ = -1;
+    if (sortBy != ByName || sortDescending) sort();
     if (!thread_.joinable()) thread_ = std::thread([this] { work(); });
     return true;
+}
+
+void LibraryPanel::sort() {
+    const bool needsInfo = sortBy == ByCaptureTime || sortBy == ByCamera || sortBy == ByLens || sortBy == ByIso ||
+                           sortBy == ByFocalLength;
+    if (needsInfo) {
+        // Once per folder, on all cores: JPEGs and TIFF-based RAWs read a little of the file.
+        std::vector<Item*> todo;
+        for (auto& it : items_)
+            if (!it->infoRead) todo.push_back(it.get());
+        parallelFor(int(todo.size()), [&](int k) {
+            exif::readInfo(todo[size_t(k)]->path, todo[size_t(k)]->info);
+            todo[size_t(k)]->infoRead = true;
+        });
+    }
+    // Sort keys computed once per entry (edit and file times read the disk).
+    struct Key {
+        std::string text;
+        double number = 0;
+    };
+    std::vector<std::pair<Key, Item*>> keyed;
+    for (auto& up : items_) {
+        Item& it = *up;
+        Key k;
+        switch (sortBy) {
+            case ByCaptureTime:
+                // EXIF's "YYYY:MM:DD HH:MM:SS" sorts as text; without one, the file's time.
+                k.text = it.info.captureTime;
+                if (k.text.empty()) k.number = double(fileTime(it.path));
+                break;
+            case ByFileType: k.text = lowerAscii(pathToU8(u8ToPath(it.path).extension())); break;
+            case ByRating: k.number = it.meta.rating; break;
+            case ByPick: k.number = it.meta.flag; break;
+            case ByEditTime: k.number = library::hasSidecar(it.path, it.copy) ? double(fileTime(library::sidecarPath(it.path, it.copy))) : 0; break;
+            case ByCamera: k.text = lowerAscii(it.info.make + " " + it.info.model); break;
+            case ByLens: k.text = lowerAscii(it.info.lens); break;
+            case ByIso: k.number = it.info.iso; break;
+            case ByFocalLength: k.number = it.info.focalLength; break;
+            default: break;
+        }
+        keyed.push_back({std::move(k), &it});
+    }
+    const Item* cur = current_ >= 0 ? items_[size_t(current_)].get() : nullptr;
+    const Item* anchor = anchor_ >= 0 && anchor_ < size() ? items_[size_t(anchor_)].get() : nullptr;
+    const Item* focus = focus_ >= 0 && focus_ < size() ? items_[size_t(focus_)].get() : nullptr;
+    const bool desc = sortDescending;
+    std::stable_sort(keyed.begin(), keyed.end(), [&](const auto& a, const auto& b) {
+        // Entries without the value (no EXIF date) go last whichever the direction, so dated photos read in order.
+        const bool aMissing = sortBy == ByCaptureTime && a.first.text.empty(), bMissing = sortBy == ByCaptureTime && b.first.text.empty();
+        if (aMissing != bMissing) return bMissing;
+        const auto ka = std::tie(a.first.text, a.first.number), kb = std::tie(b.first.text, b.first.number);
+        if (ka != kb) return desc ? kb < ka : ka < kb;
+        // Ties by name, then copy number, so a photo's virtual copies stay together.
+        const std::string na = lowerAscii(pathToU8(u8ToPath(a.second->path).filename()));
+        const std::string nb = lowerAscii(pathToU8(u8ToPath(b.second->path).filename()));
+        if (na != nb) return sortBy == ByName && desc ? nb < na : na < nb;
+        return a.second->copy < b.second->copy;
+    });
+    std::vector<std::unique_ptr<Item>> sorted;
+    for (auto& [k, it] : keyed)
+        for (auto& up : items_)
+            if (up.get() == it) sorted.push_back(std::move(up));
+    items_ = std::move(sorted);
+    auto indexOf = [&](const Item* p) {
+        for (int i = 0; i < size(); ++i)
+            if (items_[size_t(i)].get() == p) return i;
+        return -1;
+    };
+    current_ = indexOf(cur);
+    anchor_ = indexOf(anchor);
+    focus_ = indexOf(focus);
+    scrollToCurrent_ = scrollToFocus_ = true;
+}
+
+int LibraryPanel::insertCopy(int i, int copy) {
+    if (i < 0 || i >= size()) return -1;
+    const std::string path = photo(i);
+    // After the photo's last entry, so copies stay in number order.
+    int at = i + 1;
+    while (at < size() && items_[size_t(at)]->path == path) ++at;
+    auto it = std::make_unique<Item>();
+    it->path = path;
+    it->copy = copy;
+    it->info = items_[size_t(i)]->info;
+    it->infoRead = items_[size_t(i)]->infoRead;
+    library::readMeta(path, it->meta, copy);
+    items_.insert(items_.begin() + at, std::move(it));
+    for (int* idx : {&current_, &anchor_, &focus_})
+        if (*idx >= at) ++*idx;
+    return at;
+}
+
+void LibraryPanel::removeEntry(int i) {
+    if (i < 0 || i >= size()) return;
+    items_.erase(items_.begin() + i);
+    for (int* idx : {&current_, &anchor_, &focus_})
+        if (*idx == i) *idx = -1;
+        else if (*idx > i) --*idx;
 }
 
 void LibraryPanel::setCurrentProject(const std::string& projectU8) {
     int found = -1;
     for (int i = 0; i < size(); ++i)
-        if (library::sidecarPath(photo(i)) == projectU8) found = i;
+        if (sidecar(i) == projectU8) found = i;
     if (found == current_) return;
     current_ = found;
     if (found < 0) return;
@@ -89,7 +214,7 @@ void LibraryPanel::refresh(int i, bool rerender) {
     if (i < 0 || i >= size()) return;
     Item& it = *items_[size_t(i)];
     library::Meta m;
-    if (library::readMeta(it.path, m)) {
+    if (library::readMeta(it.path, m, it.copy)) {
         if (rerender) m.thumb.clear();
         it.meta = m;
     }
@@ -116,7 +241,7 @@ bool LibraryPanel::passes(const Item& it) const {
 
 void LibraryPanel::writeMeta(int i) {
     std::string err;
-    if (!library::writeMeta(photo(i), meta(i), err)) status = "Could not save the rating: " + err;
+    if (!library::writeMeta(photo(i), meta(i), err, copyOf(i))) status = "Could not save the rating: " + err;
 }
 
 void LibraryPanel::setRating(int rating) {
@@ -142,7 +267,7 @@ void LibraryPanel::request(int i, bool render) {
     it.requested = true;
     std::lock_guard lock(mutex_);
     // Newest requests first: what scrolled into view, or the edit just saved.
-    jobs_.push_front(Job{i, gen_, it.path, it.meta, render});
+    jobs_.push_front(Job{i, gen_, it.path, it.copy, it.meta, render});
     wake_.notify_one();
 }
 
@@ -156,13 +281,13 @@ void LibraryPanel::work() {
             job = std::move(jobs_.front());
             jobs_.pop_front();
         }
-        Result r{job.index, job.gen, nullptr, {}};
+        Result r{job.index, job.gen, job.path, job.copy, nullptr, {}};
         std::string err;
         // An edited photo shows its edit: stored in the sidecar, or rendered (and then stored).
-        if (job.render || (job.meta.edited && job.meta.thumb.empty() && library::hasSidecar(job.path))) {
+        if (job.render || (job.meta.edited && job.meta.thumb.empty() && library::hasSidecar(job.path, job.copy))) {
             Graph g;
             nlohmann::json ui;
-            if (loadProject(library::sidecarPath(job.path), g, ui, err))
+            if (loadProject(library::sidecarPath(job.path, job.copy), g, ui, err))
                 if ((r.image = library::renderThumbnail(g, library::kThumbEdge, err))) r.store = library::encodeThumb(*r.image);
         } else if (!job.meta.thumb.empty()) {
             r.image = library::decodeThumb(job.meta.thumb);
@@ -180,7 +305,15 @@ void LibraryPanel::poll() {
         done.swap(results_);
     }
     for (Result& r : done) {
-        if (r.index < 0 || r.index >= size() || !r.image) continue;
+        if (!r.image) continue;
+        // The list may have been sorted, or an entry added, since the job was queued.
+        auto matches = [&](int i) { return i >= 0 && i < size() && items_[size_t(i)]->path == r.path && items_[size_t(i)]->copy == r.copy; };
+        if (!matches(r.index)) {
+            r.index = -1;
+            for (int i = 0; i < size() && r.index < 0; ++i)
+                if (matches(i)) r.index = i;
+            if (r.index < 0) continue;
+        }
         Item& it = *items_[size_t(r.index)];
         it.tex.upload(*r.image);
         if (!r.store.empty()) {
@@ -188,6 +321,20 @@ void LibraryPanel::poll() {
             writeMeta(r.index);
         }
     }
+}
+
+void LibraryPanel::contextMenu(int i, Actions& a) {
+    if (!ImGui::BeginPopupContextItem("##entryMenu")) return;
+    // As in Lightroom, a right-click acts on the selection when the photo is part of it.
+    if (ImGui::IsWindowAppearing() && !items_[size_t(i)]->selected) select(i, false, false);
+    if (ImGui::MenuItem("Create Virtual Copy", "Ctrl+'")) a.createCopy = i;
+    if (copyOf(i) > 0 && ImGui::MenuItem("Remove Virtual Copy...")) a.removeCopy = i;
+    ImGui::Separator();
+    // Copy Edit copies the photo being edited.
+    if (ImGui::MenuItem("Copy Edit", "Ctrl+Shift+C", false, i == current_)) a.copy = true;
+    if (ImGui::MenuItem("Paste Edit", "Ctrl+Shift+V", false, canPaste)) a.paste = true;
+    if (ImGui::MenuItem("Export Selected...")) a.exportSelected = true;
+    ImGui::EndPopup();
 }
 
 void LibraryPanel::cullKeys() {
@@ -244,7 +391,7 @@ void LibraryPanel::toolbar(Actions& a) {
     ImGui::TextDisabled("%s", name.empty() ? dir_.c_str() : name.c_str());
     ImGui::SameLine();
     if (current_ >= 0)
-        ImGui::TextDisabled("%d / %d   %s", current_ + 1, size(), pathToU8(u8ToPath(photo(current_)).filename()).c_str());
+        ImGui::TextDisabled("%d / %d   %s", current_ + 1, size(), entryName(photo(current_), copyOf(current_)).c_str());
     else
         ImGui::TextDisabled("%d photos", size());
     if (shown != size()) {
@@ -255,6 +402,16 @@ void LibraryPanel::toolbar(Actions& a) {
     ImGui::SetNextItemWidth(150);
     if (ImGui::Combo("##filter", &filter_, kFilters, IM_ARRAYSIZE(kFilters))) scrollToCurrent_ = true;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Library Filter: which photos the filmstrip shows");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(120);
+    if (ImGui::Combo("##sort", &sortBy, kSorts, IM_ARRAYSIZE(kSorts))) sort();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Sort by");
+    ImGui::SameLine(0, 2);
+    if (ImGui::SmallButton(sortDescending ? "Z-A##sortDir" : "A-Z##sortDir")) {
+        sortDescending = !sortDescending;
+        sort();
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip(sortDescending ? "Descending (click for ascending)" : "Ascending (click for descending)");
     ImGui::SameLine();
     if (ImGui::SmallButton("Copy Edit")) a.copy = true;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy this photo's edit (Ctrl+Shift+C)");
@@ -292,6 +449,7 @@ LibraryPanel::Actions LibraryPanel::drawStrip(Actions a) {
             select(i, io.KeyCtrl, io.KeyShift);
             if (!io.KeyCtrl && !io.KeyShift && i != current_) a.open = i;
         }
+        contextMenu(i, a);
         if (i == current_ && scrollToCurrent_) {
             ImGui::SetScrollHereX(0.5f);
             scrollToCurrent_ = false;
@@ -311,9 +469,9 @@ LibraryPanel::Actions LibraryPanel::drawStrip(Actions a) {
             else dl->AddCircle(c, 2.6f, IM_COL32(120, 120, 128, 255));
         }
         if (hovered) {
-            ImGui::SetTooltip("%s%s%s", pathToU8(u8ToPath(it.path).filename()).c_str(),
-                              library::hasSidecar(it.path) ? "\nEdit in " : "",
-                              library::hasSidecar(it.path) ? pathToU8(u8ToPath(library::sidecarPath(it.path)).filename()).c_str() : "");
+            const bool side = library::hasSidecar(it.path, it.copy);
+            ImGui::SetTooltip("%s%s%s", entryName(it.path, it.copy).c_str(), side ? "\nEdit in " : "",
+                              side ? pathToU8(u8ToPath(library::sidecarPath(it.path, it.copy)).filename()).c_str() : "");
         }
         ImGui::PopID();
     }
@@ -340,6 +498,12 @@ void LibraryPanel::drawThumb(ImDrawList* dl, const Item& it, ImVec2 b0, ImVec2 b
         const ImU32 red = IM_COL32(235, 70, 60, 255);
         dl->AddLine(ImVec2(b0.x + 6, b0.y + 6), ImVec2(b0.x + 16, b0.y + 16), red, 2.5f);
         dl->AddLine(ImVec2(b0.x + 16, b0.y + 6), ImVec2(b0.x + 6, b0.y + 16), red, 2.5f);
+    }
+    if (it.copy > 0) {
+        // Lightroom marks virtual copies with a turned-up page corner at the bottom left.
+        const ImVec2 c(b0.x, b1.y);
+        dl->AddTriangleFilled(ImVec2(c.x, c.y - 16), ImVec2(c.x + 16, c.y), c, IM_COL32(0, 0, 0, 160));
+        dl->AddTriangleFilled(ImVec2(c.x, c.y - 13), ImVec2(c.x + 13, c.y), ImVec2(c.x + 13, c.y - 13), IM_COL32(235, 235, 235, 255));
     }
     if (it.meta.edited) {
         // Outlined, so it shows on a blue sky too.
@@ -429,6 +593,7 @@ LibraryPanel::Actions LibraryPanel::drawGrid(bool keys) {
                 const ImVec2 p0 = ImGui::GetCursorScreenPos();
                 ImGui::InvisibleButton("##card", ImVec2(cellW, cellH));
                 const bool hovered = ImGui::IsItemHovered();
+                contextMenu(i, a);
                 if (ImGui::IsItemVisible() && !it.requested) request(i, false);
 
                 // The card, lighter when selected (Lightroom's grid).
@@ -443,7 +608,7 @@ LibraryPanel::Actions LibraryPanel::drawGrid(bool keys) {
                 char num[16];
                 std::snprintf(num, sizeof num, "%d", i + 1);
                 dl->AddText(ImVec2(c0.x + 6, c0.y + 3), IM_COL32(150, 150, 158, 255), num);
-                const std::string fname = pathToU8(u8ToPath(it.path).filename());
+                const std::string fname = entryName(it.path, it.copy);
                 const float numW = ImGui::CalcTextSize(num).x + 14;
                 dl->PushClipRect(ImVec2(c0.x + numW, c0.y), ImVec2(c1.x - 4, c0.y + headH), true);
                 dl->AddText(ImVec2(c0.x + numW, c0.y + 3), IM_COL32(200, 200, 206, 255), fname.c_str());
@@ -482,8 +647,10 @@ LibraryPanel::Actions LibraryPanel::drawGrid(bool keys) {
                     grid = false;
                 }
                 if (hovered && starHit < 0)
-                    ImGui::SetTooltip("%s%s%s", fname.c_str(), library::hasSidecar(it.path) ? "\nEdit in " : "",
-                                      library::hasSidecar(it.path) ? pathToU8(u8ToPath(library::sidecarPath(it.path)).filename()).c_str() : "");
+                    ImGui::SetTooltip("%s%s%s", fname.c_str(), library::hasSidecar(it.path, it.copy) ? "\nEdit in " : "",
+                                      library::hasSidecar(it.path, it.copy)
+                                          ? pathToU8(u8ToPath(library::sidecarPath(it.path, it.copy)).filename()).c_str()
+                                          : "");
                 ImGui::PopID();
             }
         }

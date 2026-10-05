@@ -6,6 +6,8 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 
@@ -27,6 +29,7 @@
 #include "io/ProjectFile.h"
 #include "nodes/group/GroupNodes.h"
 #include "nodes/io/IONodes.h"
+#include "core/Parallel.h"
 #include "nodes/matte/AutoMask.h"
 #include "nodes/matte/MatteNodes.h"
 #include "nodes/transform/TransformNodes.h"
@@ -94,7 +97,9 @@ static fs::path settingsDir() {
 }
 
 App::App() = default;
-App::~App() = default;
+App::~App() {
+    if (prefetch_.joinable()) prefetch_.join();  // it decodes into cache_
+}
 
 void App::loadPreferences() {
     try {
@@ -116,6 +121,20 @@ void App::loadPreferences() {
         if (const auto c = j.find("customThemes"); c != j.end() && c->is_array())
             for (const auto& e : *c) customThemes_.push_back(theme::Theme::fromJson(e));
         if (const auto th = j.find("theme"); th != j.end()) theme::current() = theme::Theme::fromJson(*th);
+        if (const auto ep = j.find("exportPresets"); ep != j.end() && ep->is_array())
+            for (const auto& e : *ep)
+                if (e.is_object() && e.value("name", std::string()).size()) {
+                    ExportPreset p{e.value("name", std::string()), {}};
+                    p.settings.fromJson(e.value("settings", nlohmann::json::object()));
+                    exportPresets_.push_back(std::move(p));
+                }
+        library_.sortBy = std::clamp(j.value("librarySort", 0), 0, LibraryPanel::kSortCount - 1);
+        library_.sortDescending = j.value("librarySortDescending", false);
+        overlay_.cropGuide = std::clamp(j.value("cropGuide", int(NodeOverlay::Thirds)), 0, NodeOverlay::kCropGuideCount - 1);
+        overlay_.cropGuideTurn = std::clamp(j.value("cropGuideTurn", 0), 0, 3);
+        loupe_.grid = j.value("loupeGrid", false);
+        loupe_.guides = j.value("loupeGuides", false);
+        loupe_.gridSize = std::clamp(j.value("loupeGridSize", 50.0f), 8.0f, 400.0f);
     } catch (const std::exception&) {
         // A damaged file keeps the defaults; it is rewritten on the next change.
     }
@@ -127,6 +146,8 @@ void App::savePreferences() const {
     if (automated_) return;  // test runs never touch the user's preferences
     nlohmann::json custom = nlohmann::json::array();
     for (const theme::Theme& t : customThemes_) custom.push_back(t.toJson());
+    nlohmann::json presets = nlohmann::json::array();
+    for (const ExportPreset& p : exportPresets_) presets.push_back({{"name", p.name}, {"settings", p.settings.toJson()}});
     // A temporary file renamed over the old one, so a crash mid-write keeps the old preferences.
     const std::filesystem::path path = settingsDir() / "preferences.json", tmp = settingsDir() / "preferences.json.tmp";
     std::ofstream f(tmp, std::ios::trunc);
@@ -141,7 +162,15 @@ void App::savePreferences() const {
                         {"newProjectView", newView_ == ColorManagement::AgX ? "AgX" : "Standard"},
                         {"newProjectLook", newLook_},
                         {"theme", theme::current().toJson()},
-                        {"customThemes", custom}}
+                        {"customThemes", custom},
+                        {"exportPresets", presets},
+                        {"librarySort", library_.sortBy},
+                        {"librarySortDescending", library_.sortDescending},
+                        {"cropGuide", overlay_.cropGuide},
+                        {"cropGuideTurn", overlay_.cropGuideTurn},
+                        {"loupeGrid", loupe_.grid},
+                        {"loupeGuides", loupe_.guides},
+                        {"loupeGridSize", loupe_.gridSize}}
              .dump(2);
     f.close();
     std::error_code ec;
@@ -390,6 +419,7 @@ void App::drawFrame() {
     if (showResult_) drawViewerWindow(*viewers_[0], true);
     for (size_t i = 1; i < viewers_.size(); ++i) drawViewerWindow(*viewers_[i], false);
     if (library_.active() && showLibrary_) drawLibraryWindow();
+    if (showSnapshots_) drawSnapshotsWindow();
     if (library_.active() && library_.grid) drawLibraryGrid();
     gridShown_ = library_.active() && library_.grid;
     library_.poll();
@@ -506,6 +536,7 @@ void App::drawFrame() {
     applyRawLook();
     updateTextures();
     updateTitle();
+    tickPrefetch();
 
     // Snapshot for undo once the current gesture (drag, slider, text entry) has finished, so one
     // drag becomes one undo step.
@@ -866,11 +897,17 @@ void App::drawViewerWindow(Viewer& v, bool isMain) {
             split.dragging = &splitDrag_;
             split.full = beforeFull_;
         }
+        ImageOverlay* controls = ov ? &overlay_ : nullptr;
+        if (isMain && loupe_.any()) {
+            loupe_.inner = controls;
+            controls = &loupe_;
+        }
         drawImageView(isMain ? "##result" : "##viewer", v.tex, isMain || v.sync ? view_ : v.view, emptyMsg,
-                      eyedropper().active() ? &pick : nullptr, ov ? &overlay_ : nullptr,
+                      eyedropper().active() ? &pick : nullptr, controls,
                       v.detailTex.valid() ? &v.detail : nullptr, &v.info, split.before ? &split : nullptr);
         finishPick(pick);
         if (ov && overlay_.takeChanged()) markChanged(true);
+        if (auto* sr = dynamic_cast<SpotRemovalNode*>(ov); sr && sr->findSource >= 0) findSpotSource(*sr);
         if (isMain && showHistogram_ && histogram_.valid) {
             // Top-right corner of the view, like Lightroom's histogram panel.
             const ImVec2 viewMax = ImGui::GetItemRectMax();
@@ -892,6 +929,17 @@ Node* App::overlayNode() {
     return n && NodeOverlay::supports(*n) ? n : nullptr;
 }
 
+// SameLine when an item `w` wide still fits the window's width, otherwise a new row, so a toolbar
+// wraps in a narrow panel instead of hiding its last controls past the edge.
+static void sameLineIfFits(float w) {
+    const float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+    if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + w <= right) ImGui::SameLine();
+}
+
+static float checkboxWidth(const char* label) {
+    return ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(label, nullptr, true).x;
+}
+
 void App::drawResultToolbar(Node* ov) {
     Viewer& v = *viewers_[0];
     // Hotkeys while the pointer is over the Result viewer (J and O as in Lightroom).
@@ -899,7 +947,16 @@ void App::drawResultToolbar(Node* ov) {
                        !ImGui::GetIO().KeyCtrl;
     bool clipToggled = false;
     if (hover && ImGui::IsKeyPressed(ImGuiKey_J, false)) clipping_ = !clipping_, clipToggled = true;
-    if (hover && ImGui::IsKeyPressed(ImGuiKey_O, false)) maskOverlay_ = !maskOverlay_;
+    // O: with Crop selected it cycles the crop guide overlay (Shift+O turns it), as in
+    // Lightroom's crop tool; otherwise it shows or hides the mask overlay.
+    if (hover && ImGui::IsKeyPressed(ImGuiKey_O, false)) {
+        if (ov && ov->info().type == crop::kType) {
+            overlay_.cycleCropGuide(ImGui::GetIO().KeyShift);
+            status_ = std::string("Crop overlay: ") + NodeOverlay::cropGuideName(overlay_.cropGuide);
+        } else {
+            maskOverlay_ = !maskOverlay_;
+        }
+    }
     if (hover && ImGui::IsKeyPressed(ImGuiKey_H, false)) showHistogram_ = !showHistogram_;
     // Lightroom: Y splits Before / After, \ shows the before image alone while toggled.
     if (hover && ImGui::IsKeyPressed(ImGuiKey_Y, false)) splitView_ = !splitView_, beforeFull_ = false;
@@ -931,13 +988,13 @@ void App::drawResultToolbar(Node* ov) {
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
-    ImGui::SameLine();
+    sameLineIfFits(checkboxWidth("Histogram"));
     ImGui::Checkbox("Histogram", &showHistogram_);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show the histogram (H)");
-    ImGui::SameLine();
+    sameLineIfFits(checkboxWidth("Clipping"));
     clipToggled |= ImGui::Checkbox("Clipping", &clipping_);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show clipped highlights in red and crushed shadows in blue (J)");
-    ImGui::SameLine();
+    sameLineIfFits(checkboxWidth("Before / After"));
     if (ImGui::Checkbox("Before / After", &splitView_)) beforeFull_ = false;
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Split the view: the original image left of the divider, the result right of it (Y).\n"
@@ -947,18 +1004,24 @@ void App::drawResultToolbar(Node* ov) {
         refreshDetail(v, true);
     }
     if (ov && NodeOverlay::isMask(*ov)) {
-        ImGui::SameLine();
+        sameLineIfFits(checkboxWidth("Mask Overlay"));
         ImGui::Checkbox("Mask Overlay", &maskOverlay_);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tint the selected mask over the image (O)");
     }
     if (ov) {
-        ImGui::SameLine();
         const char* hint = ov->info().type == crop::kType
-                               ? "Drag the frame or its handles; drag outside to straighten"
+                               ? "Drag the frame or its handles; drag outside to straighten; O cycles the overlay"
+                           : ov->info().type == perspective::kType
+                               ? (ov->paramI(perspective::Upright) == perspective::UprightGuided
+                                      ? "Drag along a line that should be straight to add a guide (up to 4); Alt+click removes one"
+                                      : "Set Upright to Guided to draw guides")
                            : dynamic_cast<BrushMaskNode*>(ov) ? "Paint to add, Alt+paint to erase, [ ] brush size"
                            : dynamic_cast<SpotRemovalNode*>(ov) ? "Click to add a spot, drag to move, Alt+click removes, [ ] size"
                                                               : "Drag the handles to shape the mask";
+        sameLineIfFits(ImGui::CalcTextSize(hint).x);
+        ImGui::PushTextWrapPos(0.0f);
         ImGui::TextDisabled("%s", hint);
+        ImGui::PopTextWrapPos();
     }
 }
 
@@ -998,6 +1061,32 @@ void App::applyAutoTone(int nodeId) {
     for (int i = 0; i < 6; ++i) basic->params[autotone::kBasicParams[i]] = v[i];
     status_ = "Auto tone set on " + basic->title();
     markChanged(true);
+}
+
+void App::findSpotSource(SpotRemovalNode& node) {
+    const int index = std::exchange(node.findSource, -1);
+    const Link* in = currentGraph().inputLink(node.id, 0);
+    if (!in || index >= int(node.spots.size())) return;
+    // As Auto tone does: the image arriving at the node, small (the search compares rings of a
+    // few dozen samples), on the UI thread.
+    ImagePtr img;
+    try {
+        Evaluator ev;
+        EvalContext ctx;
+        ctx.cache = &cache_;
+        ctx.proxyEdge = 768;
+        ctx.interactive = true;
+        initContextSize(graph_, ctx);
+        NodePath path = groupPath_;
+        path.push_back(in->fromNode);
+        img = ev.evaluateDisplayPath(graph_, path, ctx, in->fromPin);
+    } catch (const std::exception& e) {
+        status_ = std::string("Finding a source failed: ") + e.what();
+        return;
+    }
+    if (!img || img->empty()) return;
+    if (::findSpotSource(*img, node.spots, index, node.findAvoidCurrent)) markChanged(true);
+    else status_ = "No room for a source around this spot";
 }
 
 void App::addMask(int kind) {
@@ -1064,7 +1153,7 @@ void App::drawStatusRight() {
     std::string ai;
     float fraction = 0;
     if (pr.running) {
-        const char* what = pr.model == "subject" ? "Selecting subject" : pr.model == "sky" ? "Selecting sky" : "AI mask";
+        const char* what = pr.model.rfind("subject", 0) == 0 ? "Selecting subject" : pr.model == "sky" ? "Selecting sky" : "AI mask";
         char s[96];
         if (pr.loading)
             std::snprintf(s, sizeof s, "%s: loading the model, %.0f s", what, pr.seconds);
@@ -1209,6 +1298,24 @@ void App::drawMainMenu() {
         ImGui::MenuItem("Inspector", nullptr, &showInspector_);
         ImGui::MenuItem("Library", nullptr, &showLibrary_, library_.active());
         ImGui::MenuItem("Library Grid", "G", &library_.grid, library_.active());
+        ImGui::MenuItem("Snapshots", nullptr, &showSnapshots_);
+        // Lightroom's View > Loupe Overlay.
+        if (ImGui::BeginMenu("Loupe Overlay")) {
+            ImGui::MenuItem("Grid", nullptr, &loupe_.grid);
+            ImGui::MenuItem("Guides", nullptr, &loupe_.guides);
+            ImGui::SetNextItemWidth(160);
+            ImGui::SliderFloat("Grid Size", &loupe_.gridSize, 8.0f, 400.0f, "%.0f px", ImGuiSliderFlags_Logarithmic);
+            if (ImGui::MenuItem("Center Guides", nullptr, false, loupe_.guides)) loupe_.guideX = loupe_.guideY = 0.5f;
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Crop Guide Overlay")) {
+            for (int g = 0; g < NodeOverlay::kCropGuideCount; ++g)
+                if (ImGui::MenuItem(NodeOverlay::cropGuideName(g), g == overlay_.cropGuide ? "O" : nullptr, g == overlay_.cropGuide))
+                    overlay_.cropGuide = g;
+            ImGui::Separator();
+            if (ImGui::MenuItem("Cycle Orientation", "Shift+O")) overlay_.cycleCropGuide(true);
+            ImGui::EndMenu();
+        }
         if (ImGui::MenuItem("New Viewer")) {
             NodePath pin;
             if (selected_) {
@@ -1283,6 +1390,9 @@ void App::handleShortcuts() {
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_O)) requestAction(Pending::OpenFolder);
     if (library_.active() && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_C)) copyEdit();
     if (library_.active() && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_V)) pasteEdit();
+    // Lightroom's Create Virtual Copy (Ctrl+').
+    if (library_.active() && libraryPhotoOpen() && !io.WantTextInput && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Apostrophe))
+        createVirtualCopy(library_.current());
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) saveProject(false);
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S)) saveProject(true);
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_I))
@@ -1568,6 +1678,7 @@ void App::drawConvertModal() {
 // ---------------------------------------------------------------- project lifecycle
 
 void App::newProject() {
+    AutoMaskNode::cancelRuns();
     graph_.clear();
     graph_.colorManagement = newProjectColor();
     Node* in = graph_.addNode(ImageInputNode::staticInfo().type, 40, 80);
@@ -1581,6 +1692,7 @@ void App::newProject() {
     resetHistory();
     projectPath_.clear();
     previewPath_.clear();
+    snapshots_.clear();
     selected_ = 0;
     view_.reset();
     modified_ = false;
@@ -1590,6 +1702,7 @@ void App::newProject() {
 }
 
 bool App::openProject(const std::string& path) {
+    AutoMaskNode::cancelRuns();  // the last project's AI masks are no use now
     Graph g;
     nlohmann::json ui;
     std::string err;
@@ -1649,7 +1762,7 @@ void App::openFolder(const std::string& dirU8) {
 
 bool App::libraryPhotoOpen() const {
     const int i = library_.current();
-    return i >= 0 && projectPath_ == library::sidecarPath(library_.photo(i));
+    return i >= 0 && projectPath_ == library_.sidecar(i);
 }
 
 void App::openLibraryPhoto(int index) {
@@ -1661,19 +1774,65 @@ void App::openLibraryPhoto(int index) {
 void App::loadLibraryPhoto(int index) {
     if (index < 0 || index >= library_.size()) return;
     const std::string photo = library_.photo(index);
+    AutoMaskNode::cancelRuns();  // an AI mask of the last photo is no use now
     // Decoded images are kept per file; a browsing session would otherwise keep every photo's.
-    cache_.clear();
-    if (library::hasSidecar(photo)) {
-        if (!openProject(library::sidecarPath(photo))) return;
+    // The last few photos' previews stay (about 18 MB each), so stepping back is instant, and
+    // the next one in the direction of browsing is decoded ahead (tickPrefetch).
+    const int from = library_.current();
+    std::erase(recentPhotos_, photo);
+    recentPhotos_.insert(recentPhotos_.begin(), photo);
+    if (recentPhotos_.size() > kKeptPhotos) recentPhotos_.resize(kKeptPhotos);
+    const int next = index + (from >= 0 && from > index ? -1 : 1);
+    prefetchPhoto_ = next >= 0 && next < library_.size() ? library_.photo(next) : std::string();
+    std::vector<std::string> keep = recentPhotos_;
+    if (!prefetchPhoto_.empty()) keep.push_back(prefetchPhoto_);
+    cache_.retain(keep);
+    const int copy = library_.copyOf(index);
+    if (library::hasSidecar(photo, copy)) {
+        if (!openProject(library::sidecarPath(photo, copy))) return;
     } else {
         newProject();
         library::defaultGraph(graph_, photo);
         editor_.onGraphReplaced(true);
         resetHistory();
-        projectPath_ = library::sidecarPath(photo);
+        projectPath_ = library::sidecarPath(photo, copy);
         library_.setCurrentProject(projectPath_);
     }
-    status_ = pathToU8(u8ToPath(photo).filename());
+    status_ = pathToU8(u8ToPath(photo).filename()) + (copy ? " (Copy " + std::to_string(copy) + ")" : "");
+}
+
+// Decodes the next photo's preview while the user looks at this one, once the evaluator is idle
+// (so it never slows the current photo down), with the decode options its edit will ask for.
+void App::tickPrefetch() {
+    if (prefetch_.joinable() && prefetchDone_) prefetch_.join();
+    if (prefetchPhoto_.empty() || prefetch_.joinable() || eval_->busy() || evalDirty_) return;
+    std::string err;
+    const nlohmann::json gj = library::graphFor(prefetchPhoto_, err);
+    const std::string photo = std::move(prefetchPhoto_);
+    prefetchPhoto_.clear();
+    if (gj.is_null()) return;
+    Graph g;
+    try {
+        g.fromJson(gj);
+    } catch (const std::exception&) {
+        return;
+    }
+    const int inId = g.firstOfType(ImageInputNode::staticInfo().type);
+    if (!inId) return;
+    const auto& input = static_cast<const ImageInputNode&>(*g.find(inId));
+    if (input.paramS(0) != photo) return;  // an edit of another file: nothing to guess
+    const ImageCache::Decode decode = input.decode(g.colorManagement.linear);
+    const int edge = proxyEdge_;
+    prefetchDone_ = false;
+    prefetch_ = std::thread([this, photo, decode, edge] {
+        parallel::lowerThreadPriority();
+        try {
+            cache_.get(photo, true, nullptr, decode, edge);
+        } catch (const std::exception&) {
+            // Only a head start: the evaluation reports any error when the photo opens.
+        }
+        prefetchDone_ = true;
+    });
 }
 
 bool App::saveLibraryPhoto(bool force) {
@@ -1695,6 +1854,7 @@ void App::copyEdit() {
     if (!libraryPhotoOpen()) return;
     copiedEdit_ = graph_.toJson();
     copiedFrom_ = library_.photo(library_.current());
+    copiedSidecar_ = library_.sidecar(library_.current());
     status_ = "Copied the edit of " + pathToU8(u8ToPath(copiedFrom_).filename());
 }
 
@@ -1705,7 +1865,7 @@ void App::pasteEdit() {
     std::string err;
     for (int i : library_.selection()) {
         const std::string& photo = library_.photo(i);
-        if (photo == copiedFrom_) continue;
+        if (library_.sidecar(i) == copiedSidecar_) continue;  // its own edit
         if (i == library_.current() && libraryPhotoOpen()) {
             // The photo being edited takes it in memory, so Ctrl+Z undoes the paste.
             Graph g;
@@ -1723,7 +1883,7 @@ void App::pasteEdit() {
             selected_ = 0;
             markChanged(true);
             ++pasted;
-        } else if (library::pasteEdit(copiedEdit_, copiedFrom_, photo, err)) {
+        } else if (library::pasteEdit(copiedEdit_, copiedFrom_, photo, err, library_.copyOf(i))) {
             library_.refresh(i, true);
             ++pasted;
         } else {
@@ -1743,14 +1903,18 @@ void App::exportSelected() {
         std::snprintf(batchDir_, sizeof(batchDir_), "%s", d->c_str());
     }
     saveLibraryPhoto();
-    exportSettings_.suffix = batchSuffix_;
+    exportSettings_.nameTemplate = nameTemplate_;
+    std::vector<NameSource> names;
+    for (int i : sel) names.push_back({library_.photo(i), 0, library_.copyOf(i)});
+    const std::vector<std::string> outputs = batchOutputPaths(names, batchDir_, exportSettings_);
     std::vector<ExportItem> items;
     std::string err;
-    for (int i : sel) {
+    for (size_t k = 0; k < sel.size(); ++k) {
+        const int i = sel[k];
         ExportItem it;
         it.source = library_.photo(i);
-        it.output = batchOutputPath(it.source, batchDir_, exportSettings_);
-        it.graph = i == library_.current() && libraryPhotoOpen() ? graph_.toJson() : library::graphFor(it.source, err);
+        it.output = outputs[k];
+        it.graph = i == library_.current() && libraryPhotoOpen() ? graph_.toJson() : library::graphFor(it.source, err, library_.copyOf(i));
         if (it.graph.is_null()) {
             status_ = "Can't export " + it.source + ": " + err;
             continue;
@@ -1780,7 +1944,61 @@ void App::drawLibraryWindow() {
     ImGui::End();
 }
 
+void App::createVirtualCopy(int i) {
+    if (i < 0 || i >= library_.size()) return;
+    // The copy starts from the edit as it is now, unsaved changes included.
+    if (i == library_.current()) saveLibraryPhoto();
+    std::string err;
+    const int n = library::createVirtualCopy(library_.photo(i), library_.copyOf(i), err);
+    if (n < 0) {
+        status_ = "Could not create a virtual copy: " + err;
+        return;
+    }
+    const int at = library_.insertCopy(i, n);
+    library_.refresh(at, false);
+    openLibraryPhoto(at);
+    status_ = "Created Copy " + std::to_string(n) + " of " + pathToU8(u8ToPath(library_.photo(i)).filename());
+}
+
+void App::removeVirtualCopy(int i) {
+    if (i < 0 || i >= library_.size() || library_.copyOf(i) <= 0) return;
+    const std::string photo = library_.photo(i);
+    const int copy = library_.copyOf(i);
+    const bool open = i == library_.current() && libraryPhotoOpen();
+    std::string err;
+    if (!library::removeVirtualCopy(photo, copy, err)) {
+        status_ = "Could not remove the virtual copy: " + err;
+        return;
+    }
+    library_.removeEntry(i);
+    if (open) {
+        // Its edit is gone: show the photo itself, without asking to save the removed copy.
+        modified_ = false;
+        for (int k = 0; k < library_.size(); ++k)
+            if (library_.photo(k) == photo && library_.copyOf(k) == 0) loadLibraryPhoto(k);
+    }
+    status_ = "Removed Copy " + std::to_string(copy) + " of " + pathToU8(u8ToPath(photo).filename()) + " (to the Recycle Bin)";
+}
+
 void App::handleLibraryActions(const LibraryPanel::Actions& a) {
+    if (a.createCopy >= 0) createVirtualCopy(a.createCopy);
+    if (a.removeCopy >= 0) {
+        removeCopyIndex_ = a.removeCopy;
+        ImGui::OpenPopup("Remove Virtual Copy?");
+    }
+    if (ImGui::BeginPopupModal("Remove Virtual Copy?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        const bool valid = removeCopyIndex_ >= 0 && removeCopyIndex_ < library_.size() && library_.copyOf(removeCopyIndex_) > 0;
+        if (valid)
+            ImGui::Text("Remove Copy %d of %s?\nIts edit goes to the Recycle Bin; the photo stays.", library_.copyOf(removeCopyIndex_),
+                        pathToU8(u8ToPath(library_.photo(removeCopyIndex_)).filename()).c_str());
+        if (ImGui::Button("Remove", ImVec2(120, 0)) && valid) {
+            removeVirtualCopy(removeCopyIndex_);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0)) || !valid) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
     if (a.copy) copyEdit();
     if (a.paste) pasteEdit();
     if (a.exportSelected) exportSelected();
@@ -1862,7 +2080,7 @@ void App::openExportWindow() {
 
 void App::startExport(std::vector<ExportItem> items, int inputNode) {
     if (exporter_.busy() || items.empty()) return;
-    exportSettings_.suffix = batchSuffix_;
+    exportSettings_.nameTemplate = nameTemplate_;
     exportLog_.clear();
     // The root graph, whatever group is open: exports always render the whole project.
     exporter_.start(graph_.toJson(), std::move(items), inputNode, exportSettings_, gpuDevice_ && gpu::available());
@@ -2147,6 +2365,112 @@ void App::drawPreferencesWindow() {
     }
 }
 
+// Lightroom's Preset list in the Export dialog: built-in presets, then the user's.
+void App::exportPresetRow() {
+    ExportSettings& es = exportSettings_;
+    es.nameTemplate = nameTemplate_;
+    std::string current = "Custom";
+    for (const ExportPreset& p : builtInExportPresets())
+        if (es.sameOutput(p.settings)) current = p.name;
+    int userIndex = -1;
+    for (int i = 0; i < int(exportPresets_.size()); ++i)
+        if (es.sameOutput(exportPresets_[size_t(i)].settings)) current = exportPresets_[size_t(i)].name, userIndex = i;
+    auto apply = [&](const ExportPreset& p) {
+        const bool fileOutputs = es.fileOutputs;
+        es = p.settings;
+        es.fileOutputs = fileOutputs;
+        std::snprintf(nameTemplate_, sizeof(nameTemplate_), "%s", es.nameTemplate.c_str());
+        // The single export's file follows the preset's format.
+        if (exportPath_[0]) {
+            auto path = u8ToPath(exportPath_);
+            path.replace_extension(es.extension());
+            std::snprintf(exportPath_, sizeof(exportPath_), "%s", pathToU8(path).c_str());
+        }
+    };
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Preset");
+    ImGui::SameLine();
+    const float buttons = ImGui::CalcTextSize("Save...Delete").x + ImGui::GetStyle().FramePadding.x * 4 + ImGui::GetStyle().ItemSpacing.x * 2;
+    ImGui::SetNextItemWidth(-buttons);
+    if (ImGui::BeginCombo("##exportPreset", current.c_str())) {
+        for (const ExportPreset& p : builtInExportPresets())
+            if (ImGui::Selectable(p.name.c_str(), current == p.name && userIndex < 0)) apply(p);
+        if (!exportPresets_.empty()) ImGui::SeparatorText("User Presets");
+        for (int i = 0; i < int(exportPresets_.size()); ++i) {
+            ImGui::PushID(i);
+            if (ImGui::Selectable(exportPresets_[size_t(i)].name.c_str(), userIndex == i)) apply(exportPresets_[size_t(i)]);
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Save...")) {
+        std::snprintf(presetName_, sizeof(presetName_), "%s", userIndex >= 0 ? exportPresets_[size_t(userIndex)].name.c_str() : "");
+        ImGui::OpenPopup("Save Export Preset");
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Save these settings as a preset (a preset of the same name is replaced)");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(userIndex < 0);
+    if (ImGui::Button("Delete")) {
+        exportPresets_.erase(exportPresets_.begin() + userIndex);
+        savePreferences();
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Delete the selected user preset");
+    if (ImGui::BeginPopup("Save Export Preset")) {
+        ImGui::TextUnformatted("Preset name");
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        const bool enter = ImGui::InputText("##presetName", presetName_, sizeof(presetName_), ImGuiInputTextFlags_EnterReturnsTrue);
+        std::string name = presetName_;
+        while (!name.empty() && name.back() == ' ') name.pop_back();
+        ImGui::BeginDisabled(name.empty());
+        if ((ImGui::Button("Save") || enter) && !name.empty()) {
+            ExportPreset p{name, es};
+            auto same = std::find_if(exportPresets_.begin(), exportPresets_.end(), [&](const ExportPreset& q) { return q.name == name; });
+            if (same != exportPresets_.end()) *same = std::move(p);
+            else exportPresets_.push_back(std::move(p));
+            savePreferences();
+            status_ = "Saved the export preset " + name;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+}
+
+// Lightroom's File Naming: a template with tokens, a menu to insert them and an example name.
+void App::fileNaming(const std::string& exampleSource) {
+    ImGui::TextUnformatted("File naming");
+    const float insertW = ImGui::CalcTextSize("Insert").x + ImGui::GetStyle().FramePadding.x * 2 + ImGui::GetFrameHeight();
+    ImGui::SetNextItemWidth(-insertW - ImGui::GetStyle().ItemSpacing.x);
+    ImGui::InputText("##nameTemplate", nameTemplate_, sizeof(nameTemplate_));
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("A filename template: text, and tokens such as {name}, {seq:3} or {date}");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::BeginCombo("##insertToken", "Insert", ImGuiComboFlags_HeightLarge)) {
+        for (int i = 0; i < kNameTokenCount; ++i)
+            if (ImGui::Selectable(kNameTokens[i].token)) {
+                const size_t len = std::strlen(nameTemplate_), add = std::strlen(kNameTokens[i].token);
+                if (len + add < sizeof(nameTemplate_)) std::memcpy(nameTemplate_ + len, kNameTokens[i].token, add + 1);
+            } else if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", kNameTokens[i].help);
+            }
+        ImGui::EndCombo();
+    }
+    exportSettings_.nameTemplate = nameTemplate_;
+    if (!exampleSource.empty()) {
+        // Reading EXIF for every frame would be wasteful: keep the example until the inputs change.
+        const std::string key = exampleSource + '\n' + nameTemplate_ + exportSettings_.extension();
+        if (key != namingExampleKey_) {
+            namingExampleKey_ = key;
+            namingExample_ = pathToU8(u8ToPath(batchOutputPath(exampleSource, batchDir_, exportSettings_)).filename());
+        }
+        ImGui::TextDisabled("e.g. %s", namingExample_.c_str());
+    }
+}
+
 void App::drawExportWindow() {
     if (!showExport_) return;
     ImGui::SetNextWindowSize(ImVec2(520, 660), ImGuiCond_FirstUseEver);
@@ -2178,6 +2502,7 @@ void App::drawExportWindow() {
     };
 
     ImGui::BeginDisabled(busy);
+    exportPresetRow();
     int tab = -1;
     if (ImGui::BeginTabBar("##exportTabs")) {
         if (ImGui::BeginTabItem("Single")) {
@@ -2250,13 +2575,7 @@ void App::drawExportWindow() {
             ImGui::TextUnformatted("Output folder");
             if (pathField("##batchDir", batchDir_, sizeof(batchDir_)))
                 if (auto d = folderDialog("Output folder")) std::snprintf(batchDir_, sizeof(batchDir_), "%s", d->c_str());
-            ImGui::SetNextItemWidth(160);
-            ImGui::InputText("Name suffix", batchSuffix_, sizeof(batchSuffix_));
-            if (!batchSources_.empty()) {
-                ExportSettings tmp = es;
-                tmp.suffix = batchSuffix_;
-                ImGui::TextDisabled("e.g. %s", pathToU8(u8ToPath(batchOutputPath(batchSources_[0], batchDir_, tmp)).filename()).c_str());
-            }
+            fileNaming(batchSources_.empty() ? std::string() : batchSources_[0]);
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
@@ -2328,13 +2647,17 @@ void App::drawExportWindow() {
         } else if (tab == 1) {
             input = batchInput_;
             ExportSettings tmp = es;
-            tmp.suffix = batchSuffix_;
+            tmp.nameTemplate = nameTemplate_;
             if (!graph_.find(input)) why = "The tree needs an Image Input node";
             else if (batchSources_.empty()) why = "Add source images";
             else if (!batchDir_[0]) why = "Choose an output folder";
             else if (!graph_.firstOfType(OutputNode::staticInfo().type)) why = "Add an Output node";
-            else
-                for (const std::string& src : batchSources_) items.push_back({src, batchOutputPath(src, batchDir_, tmp)});
+            else {
+                std::vector<NameSource> names;
+                for (const std::string& src : batchSources_) names.push_back({src});
+                const std::vector<std::string> outs = batchOutputPaths(names, batchDir_, tmp);
+                for (size_t k = 0; k < batchSources_.size(); ++k) items.push_back({batchSources_[k], outs[k]});
+            }
         }
         ImGui::BeginDisabled(!why.empty());
         const std::string label = tab == 1 ? "Export " + std::to_string(items.size()) + " Images" : std::string("Export");
@@ -2355,6 +2678,98 @@ void App::drawExportWindow() {
         if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) ImGui::SetScrollHereY(1.0f);
     }
     ImGui::EndChild();
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------- snapshots
+
+void App::createSnapshot() {
+    // Named after the time, as Lightroom does; rename it from its menu.
+    const std::time_t t = std::time(nullptr);
+    std::tm tm{};
+    char name[32] = "Snapshot";
+    if (localtime_s(&tm, &t) == 0) std::strftime(name, sizeof name, "%Y-%m-%d %H:%M:%S", &tm);
+    snapshots_.push_back({name, graph_.toJson()});
+    renamingSnapshot_ = int(snapshots_.size()) - 1;
+    std::snprintf(snapshotName_, sizeof(snapshotName_), "%s", name);
+    modified_ = true;  // kept in the project
+    status_ = std::string("Created the snapshot ") + name;
+}
+
+void App::restoreSnapshot(int i) {
+    if (i < 0 || i >= int(snapshots_.size())) return;
+    Graph g;
+    try {
+        g.fromJson(snapshots_[size_t(i)].graph);
+    } catch (const std::exception& e) {
+        status_ = std::string("Snapshot can't be restored: ") + e.what();
+        return;
+    }
+    // The whole edit is replaced, as an ordinary change: Ctrl+Z brings the previous one back.
+    graph_ = std::move(g);
+    groupPath_.clear();
+    eyedropper().cancel();
+    editor_.onGraphReplaced(false);
+    selected_ = 0;
+    if (!pathValid(previewPath_)) previewPath_.clear();
+    markChanged(true);
+    status_ = "Restored the snapshot " + snapshots_[size_t(i)].name;
+}
+
+void App::drawSnapshotsWindow() {
+    ImGui::SetNextWindowSize(ImVec2(300, 320), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Snapshots", &showSnapshots_)) {
+        ImGui::End();
+        return;
+    }
+    if (ImGui::Button("Create Snapshot")) createSnapshot();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Keep the edit as it is now under a name, to come back to it later");
+    ImGui::Separator();
+    if (snapshots_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("No snapshots. A snapshot keeps the whole edit, saved with the project.");
+        ImGui::PopStyleColor();
+    }
+    int remove = -1;
+    for (int i = 0; i < int(snapshots_.size()); ++i) {
+        ImGui::PushID(i);
+        if (renamingSnapshot_ == i) {
+            if (ImGui::IsWindowAppearing() || !ImGui::IsAnyItemActive()) ImGui::SetKeyboardFocusHere();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            const bool done = ImGui::InputText("##name", snapshotName_, sizeof(snapshotName_),
+                                               ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+            if (done || ImGui::IsItemDeactivated()) {
+                if (snapshotName_[0] && snapshots_[size_t(i)].name != snapshotName_) {
+                    snapshots_[size_t(i)].name = snapshotName_;
+                    modified_ = true;
+                }
+                renamingSnapshot_ = -1;
+            }
+        } else {
+            if (ImGui::Selectable(snapshots_[size_t(i)].name.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick)) restoreSnapshot(i);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Click to restore this snapshot (Ctrl+Z undoes it)");
+            if (ImGui::BeginPopupContextItem("##snapMenu")) {
+                if (ImGui::MenuItem("Restore")) restoreSnapshot(i);
+                if (ImGui::MenuItem("Rename")) {
+                    renamingSnapshot_ = i;
+                    std::snprintf(snapshotName_, sizeof(snapshotName_), "%s", snapshots_[size_t(i)].name.c_str());
+                }
+                if (ImGui::MenuItem("Update with Current Settings")) {
+                    snapshots_[size_t(i)].graph = graph_.toJson();
+                    modified_ = true;
+                    status_ = "Updated the snapshot " + snapshots_[size_t(i)].name;
+                }
+                if (ImGui::MenuItem("Delete")) remove = i;
+                ImGui::EndPopup();
+            }
+        }
+        ImGui::PopID();
+    }
+    if (remove >= 0) {
+        snapshots_.erase(snapshots_.begin() + remove);
+        renamingSnapshot_ = -1;
+        modified_ = true;
+    }
     ImGui::End();
 }
 
@@ -2583,6 +2998,7 @@ void App::updateTextures() {
         }
     }
     if (res && res->tilesDone) {
+        if (!res->tilesError.empty()) status_ = "The zoomed-in detail failed (" + res->tilesError + "); showing the preview";
         for (const AsyncEvaluator::Tile& t : res->tiles) {
             Viewer* v = nullptr;
             for (Viewer* c : detailViews())
@@ -2623,9 +3039,14 @@ nlohmann::json App::uiState() const {
             {"clipping", clipping_},
             {"maskOverlay", maskOverlay_},
             {"library", libraryPhotoOpen() ? library_.meta(library_.current()).toJson() : nlohmann::json()},
+            {"snapshots", [&] {
+                 nlohmann::json a = nlohmann::json::array();
+                 for (const Snapshot& sn : snapshots_) a.push_back({{"name", sn.name}, {"graph", sn.graph}});
+                 return a;
+             }()},
             {"export", [&] {
                  nlohmann::json e = exportSettings_.toJson();
-                 e["suffix"] = std::string(batchSuffix_);
+                 e["nameTemplate"] = std::string(nameTemplate_);
                  e["path"] = std::string(exportPath_);
                  e["batchDir"] = std::string(batchDir_);
                  return e;
@@ -2636,7 +3057,13 @@ void App::applyUiState(const nlohmann::json& j) {
     view_.reset();
     viewers_.resize(1);
     previewPath_.clear();
+    snapshots_.clear();
+    renamingSnapshot_ = -1;
     try {
+        if (auto sn = j.find("snapshots"); sn != j.end() && sn->is_array())
+            for (const auto& e : *sn)
+                if (e.is_object() && e.contains("graph") && e["graph"].is_object())
+                    snapshots_.push_back({e.value("name", std::string("Snapshot")), e["graph"]});
         if (auto v = j.find("view"); v != j.end() && v->size() == 3) {
             view_.zoom = (*v)[0].get<float>();
             view_.panX = (*v)[1].get<float>();
@@ -2654,7 +3081,7 @@ void App::applyUiState(const nlohmann::json& j) {
         if (!pathValid(previewPath_)) previewPath_.clear();
         if (auto e = j.find("export"); e != j.end() && e->is_object()) {
             exportSettings_.fromJson(*e);
-            std::snprintf(batchSuffix_, sizeof(batchSuffix_), "%s", exportSettings_.suffix.c_str());
+            std::snprintf(nameTemplate_, sizeof(nameTemplate_), "%s", exportSettings_.nameTemplate.c_str());
             std::snprintf(exportPath_, sizeof(exportPath_), "%s", e->value("path", std::string()).c_str());
             std::snprintf(batchDir_, sizeof(batchDir_), "%s", e->value("batchDir", std::string()).c_str());
         }

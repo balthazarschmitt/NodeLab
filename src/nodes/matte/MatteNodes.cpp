@@ -3,6 +3,7 @@
 #include "nodes/matte/MatteNodes.h"
 #include "nodes/matte/AutoMask.h"
 
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <mutex>
@@ -626,6 +627,144 @@ public:
     }
 };
 
+// An HSL qualifier (DaVinci Resolve's, Nuke's HueKeyer): keeps pixels within a hue, saturation
+// and lightness range, each feathered by its softness and switched on separately. Measured in
+// Oklch like Range Mask, so ranges are even across colours, but hue is in the familiar degrees:
+// Oklch hue is bent so that sRGB's primaries and secondaries sit at 0, 60, 120... (red, yellow,
+// green, cyan, blue, magenta). Saturation is Oklch chroma over the most saturated sRGB colour's,
+// lightness Oklab L (Range Mask's).
+class HslMaskNode : public Node {
+public:
+    enum { UseHue, Hue, HueWidth, HueSoftness, UseSat, SatLow, SatHigh, SatSoftness, UseLight, LightLow, LightHigh,
+           LightSoftness, Invert };
+    NODELAB_NODE({"matte.hsl_mask", "HSL Mask", "Matte",
+                  {{"Image", PinType::Image}, {"Mask", PinType::Channel}},
+                  {{"Mask", PinType::Channel}},
+                  {ParamDesc::Bool("Use Hue", true), ParamDesc::Float("Hue", 0.0f, 0.0f, 360.0f).when(UseHue),
+                   ParamDesc::Float("Hue Width", 60.0f, 0.0f, 360.0f).when(UseHue),
+                   ParamDesc::Float("Hue Softness", 20.0f, 0.0f, 180.0f).when(UseHue),
+                   ParamDesc::Bool("Use Saturation", true), ParamDesc::Float("Saturation Low", 0.15f, 0.0f, 1.0f).when(UseSat),
+                   ParamDesc::Float("Saturation High", 1.0f, 0.0f, 1.0f).when(UseSat),
+                   ParamDesc::Float("Saturation Softness", 0.1f, 0.0f, 1.0f).when(UseSat),
+                   ParamDesc::Bool("Use Lightness", false), ParamDesc::Float("Lightness Low", 0.0f, 0.0f, 1.0f).when(UseLight),
+                   ParamDesc::Float("Lightness High", 1.0f, 0.0f, 1.0f).when(UseLight),
+                   ParamDesc::Float("Lightness Softness", 0.1f, 0.0f, 1.0f).when(UseLight), ParamDesc::Bool("Invert", false)}})
+
+    int roiPadding(const EvalContext&) const override { return 0; }  // per pixel
+
+    // Oklch chroma of sRGB blue, the most saturated sRGB colour: saturation 1.
+    static constexpr float kMaxChroma = 0.3132f;
+    // Oklch hue (degrees) of red, yellow, green, cyan, blue and magenta, in that order.
+    static const std::array<float, 6>& anchors() {
+        static const std::array<float, 6> a = [] {
+            const float rgb[6][3] = {{1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0, 1, 1}, {0, 0, 1}, {1, 0, 1}};
+            std::array<float, 6> h{};
+            for (int i = 0; i < 6; ++i) {
+                float lab[3];
+                colorsci::rgbToOklab(rgb[i], lab);
+                h[size_t(i)] = std::fmod(std::atan2(lab[2], lab[1]) * 57.2957795f + 360.0f, 360.0f);
+            }
+            return h;
+        }();
+        return a;
+    }
+    // Oklch hue -> HSL-style degrees, linear between the anchors (which increase around the circle
+    // from red's).
+    static float hueDegrees(float oklch, const std::array<float, 6>& a) {
+        const float rel = std::fmod(oklch - a[0] + 720.0f, 360.0f);
+        for (int i = 0; i < 6; ++i) {
+            const float lo = std::fmod(a[size_t(i)] - a[0] + 360.0f, 360.0f);
+            const float hi = i == 5 ? 360.0f : std::fmod(a[size_t(i) + 1] - a[0] + 360.0f, 360.0f);
+            if (rel < hi || i == 5) return float(i) * 60.0f + (rel - lo) / std::max(hi - lo, 1e-3f) * 60.0f;
+        }
+        return 0.0f;
+    }
+
+    // The qualifier's constants: hue centre, half width and softness; saturation and lightness
+    // edges (fade-in start/end, fade-out start/end); which parts are on.
+    std::vector<float> setup() const {
+        const auto& a = anchors();
+        std::vector<float> P = {paramB(UseHue) ? 1.0f : 0.0f, paramF(Hue), paramF(HueWidth) * 0.5f,
+                                paramF(HueSoftness) + 1e-3f, paramB(UseSat) ? 1.0f : 0.0f};
+        // A range's edges: fade in from e0 to e1, out from e2 to e3. A range reaching 0 or 1 doesn't
+        // fade at that end (saturation 0 is inside "0 to 0.3", and colours outside sRGB can pass 1).
+        auto edges = [&](int lo, int hi, int soft) {
+            const float l = paramF(lo), u = std::max(paramF(hi), l), f = paramF(soft) * 0.5f + 1e-4f;
+            P.push_back(l <= 0.0f ? -1.0f : l - f), P.push_back(l <= 0.0f ? -1.0f : l + f);
+            P.push_back(u >= 1.0f ? 1e9f : u - f), P.push_back(u >= 1.0f ? 1e9f : u + f);
+        };
+        edges(SatLow, SatHigh, SatSoftness);
+        P.push_back(paramB(UseLight) ? 1.0f : 0.0f);
+        edges(LightLow, LightHigh, LightSoftness);
+        P.insert(P.end(), a.begin(), a.end());
+        return P;
+    }
+    static float band(float v, const float* e) { return smoothstep(e[0], e[1], v) * (1.0f - smoothstep(e[2], e[3], v)); }
+
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        ImagePtr src = toImage(in[0], 0, 0);
+        if (!src) return;
+        const int w = src->w, h = src->h;
+        ChannelPtr base = toChannel(in[1]);
+        ChannelSampler sb{base.get(), w, h};
+        const std::vector<float> P = setup();
+        const std::array<float, 6> a = {P[14], P[15], P[16], P[17], P[18], P[19]};
+        const bool encoded = !ctx.linear(), inv = paramB(Invert);
+        out[0] = Value(ChannelPtr(makeChannel(w, h, [&](int x, int y) {
+            const float* s = src->pixel(size_t(y) * w + x);
+            float c[3], lab[3];
+            for (int k = 0; k < 3; ++k) c[k] = encoded ? srgbToLinear(std::max(s[k], 0.0f)) : std::max(s[k], 0.0f);
+            colorsci::rgbToOklab(c, lab);
+            const float chroma = std::sqrt(lab[1] * lab[1] + lab[2] * lab[2]);
+            float m = 1.0f;
+            if (P[0] > 0.5f) {
+                const float hue = hueDegrees(std::atan2(lab[2], lab[1]) * 57.2957795f, a);
+                const float d = std::fabs(std::fmod(hue - P[1] + 540.0f, 360.0f) - 180.0f);
+                // Neutral pixels have no hue, so a hue range leaves them out.
+                m *= (1.0f - smoothstep(P[2], P[2] + P[3], d)) * smoothstep(0.004f, 0.02f, chroma);
+            }
+            if (P[4] > 0.5f) m *= band(chroma / kMaxChroma, &P[5]);
+            if (P[9] > 0.5f) m *= band(lab[0], &P[10]);
+            if (inv) m = 1.0f - m;
+            return base ? clamp01(sb(x, y)) * m : m;
+        })));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        gpu::PointOp g;
+        g.functions = std::string(kGlslMatte) + "const bool ENCODED = " + (ctx.linear() ? "false" : "true") +
+                      ";\nconst bool INV = " + (paramB(Invert) ? "true" : "false") + ";\n" + R"(
+float band(float v, float e0, float e1, float e2, float e3) { return smoothstepC(e0, e1, v) * (1.0 - smoothstepC(e2, e3, v)); }
+float hueDegrees(float h) {
+    float rel = mod(h - P[14] + 720.0, 360.0);
+    for (int i = 0; i < 6; ++i) {
+        float lo = mod(P[14 + i] - P[14] + 360.0, 360.0);
+        float hi = i == 5 ? 360.0 : mod(P[15 + i] - P[14] + 360.0, 360.0);
+        if (rel < hi || i == 5) return float(i) * 60.0 + (rel - lo) / max(hi - lo, 1e-3) * 60.0;
+    }
+    return 0.0;
+}
+)";
+        g.body = R"(
+    vec3 c = max(img0(p).rgb, vec3(0.0));
+    vec3 lab = rgbToOklab(ENCODED ? srgbToLinear(c) : c);
+    float chroma = length(lab.yz);
+    float m = 1.0;
+    if (P[0] > 0.5) {
+        float d = abs(mod(hueDegrees(atan2C(lab.z, lab.y) * 57.2957795) - P[1] + 540.0, 360.0) - 180.0);
+        m *= (1.0 - smoothstepC(P[2], P[2] + P[3], d)) * smoothstepC(0.004, 0.02, chroma);
+    }
+    if (P[4] > 0.5) m *= band(chroma / 0.3132, P[5], P[6], P[7], P[8]);
+    if (P[9] > 0.5) m *= band(lab.x, P[10], P[11], P[12], P[13]);
+    if (INV) m = 1.0 - m;
+    out0 = has1 ? clamp01(ch1(p)) * m : m;
+)";
+        g.params = setup();
+        gpu::runOver(ctx, *this, g, in, out);
+    }
+};
+
 }  // namespace
 
 // ---------------------------------------------------------------- brush
@@ -955,6 +1094,7 @@ void registerMatteNodes(NodeRegistry& r) {
     r.add<LinearGradientNode>();
     r.add<BrushMaskNode>();
     r.add<RangeMaskNode>();
+    r.add<HslMaskNode>();
     r.add<SelectSubjectNode>();
     r.add<SelectSkyNode>();
     r.add<ChannelKeyNode>();

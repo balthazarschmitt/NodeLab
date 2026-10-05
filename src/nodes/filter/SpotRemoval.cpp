@@ -126,6 +126,118 @@ void removeSpots(Image& img, const std::vector<Spot>& spots, bool linear, int x0
     for (const Spot& s : spots) applySpot(img, s, linear, x0, y0, fullW, fullH);
 }
 
+bool findSpotSource(const Image& img, std::vector<Spot>& spots, int index, bool avoidCurrent) {
+    if (img.empty() || index < 0 || index >= int(spots.size())) return false;
+    Spot& s = spots[size_t(index)];
+    const float W = float(img.w), H = float(img.h);
+    const float r = std::max(s.radius * std::max(W, H), 1.0f);
+    const float tx = s.x * W, ty = s.y * H;
+    // Ring samples just outside the spot (what the patch has to blend with), and inside it (a
+    // candidate's own contents, which mustn't hold another blemish).
+    constexpr int kAngles = 24, kRings = 2, kInner = 9;
+    const float ringR[kRings] = {1.2f, 1.5f};
+    struct Off {
+        float x, y;
+    };
+    std::vector<Off> ring, inner;
+    for (int k = 0; k < kRings; ++k)
+        for (int i = 0; i < kAngles; ++i) {
+            const float a = 2 * kPi * (i + 0.5f * k) / kAngles;
+            ring.push_back({ringR[k] * r * std::cos(a), ringR[k] * r * std::sin(a)});
+        }
+    inner.push_back({0, 0});
+    for (int i = 0; i < kInner - 1; ++i) {
+        const float a = 2 * kPi * i / (kInner - 1);
+        inner.push_back({0.55f * r * std::cos(a), 0.55f * r * std::sin(a)});
+    }
+    const size_t n = ring.size();
+    // Ring samples off the image would compare its clamped edge, so only samples inside the image
+    // around both the target and the candidate count (spots near an edge still find a source).
+    auto inside = [&](float x, float y) { return x >= 0 && y >= 0 && x < W && y < H; };
+    // The target's ring, and how much it varies (the texture the source should have).
+    std::vector<float> target(n * 3);
+    std::vector<char> tIn(n);
+    float tMean[3] = {0, 0, 0};
+    int tCount = 0;
+    for (size_t i = 0; i < n; ++i) {
+        sampleRgb(img, tx + ring[i].x, ty + ring[i].y, &target[i * 3]);
+        tIn[i] = inside(tx + ring[i].x, ty + ring[i].y);
+        if (!tIn[i]) continue;
+        ++tCount;
+        for (int c = 0; c < 3; ++c) tMean[c] += target[i * 3 + c];
+    }
+    if (tCount == 0) return false;
+    for (float& m : tMean) m /= float(tCount);
+    float tVar = 0;
+    for (size_t i = 0; i < n; ++i)
+        if (tIn[i])
+            for (int c = 0; c < 3; ++c) tVar += (target[i * 3 + c] - tMean[c]) * (target[i * 3 + c] - tMean[c]) / float(tCount);
+    // Scores are relative to the target's own texture plus a floor, so flat skin and busy
+    // foliage both find their match.
+    const float scale = 1.0f / (tVar + 1e-4f);
+
+    const float margin = r;  // the source itself stays inside the image
+    if (W < 2 * margin || H < 2 * margin) return false;
+    const float step = std::max(1.0f, r * 0.5f), reach = r * 12.0f;
+    const float x0 = std::max(margin, tx - reach), x1 = std::min(W - margin, tx + reach);
+    const float y0 = std::max(margin, ty - reach), y1 = std::min(H - margin, ty + reach);
+    float bestScore = INFINITY, bx = 0, by = 0;
+    const float curX = s.sx * W, curY = s.sy * H;
+    std::vector<float> cand(n * 3);
+    std::vector<char> used(n);
+    for (float cy = y0; cy <= y1; cy += step)
+        for (float cx = x0; cx <= x1; cx += step) {
+            const float d = std::hypot(cx - tx, cy - ty);
+            if (d < 2.2f * r) continue;  // the source mustn't overlap the spot
+            if (avoidCurrent && std::hypot(cx - curX, cy - curY) < 2.0f * r) continue;
+            // Nor take another spot's blemish.
+            bool clear = true;
+            for (int j = 0; j < int(spots.size()) && clear; ++j) {
+                if (j == index) continue;
+                const Spot& o = spots[size_t(j)];
+                const float ro = o.radius * std::max(W, H);
+                clear = std::hypot(cx - o.x * W, cy - o.y * H) >= r + ro;
+            }
+            if (!clear) continue;
+            float cMean[3] = {0, 0, 0}, pMean[3] = {0, 0, 0};
+            int count = 0;
+            for (size_t i = 0; i < n; ++i) {
+                used[i] = tIn[i] && inside(cx + ring[i].x, cy + ring[i].y);
+                if (!used[i]) continue;
+                ++count;
+                sampleRgb(img, cx + ring[i].x, cy + ring[i].y, &cand[i * 3]);
+                for (int c = 0; c < 3; ++c) cMean[c] += cand[i * 3 + c], pMean[c] += target[i * 3 + c];
+            }
+            if (count * 2 < tCount) continue;  // too little of the ring to judge by
+            for (int c = 0; c < 3; ++c) cMean[c] /= float(count), pMean[c] /= float(count);
+            // Heal fixes the colour and brightness itself: compare texture (around the means).
+            // Clone copies as it is: compare the values.
+            float err = 0;
+            for (size_t i = 0; i < n; ++i)
+                if (used[i])
+                    for (int c = 0; c < 3; ++c) {
+                        const float e = s.heal ? (cand[i * 3 + c] - cMean[c]) - (target[i * 3 + c] - pMean[c])
+                                               : cand[i * 3 + c] - target[i * 3 + c];
+                        err += e * e;
+                    }
+            err /= float(count);
+            // A candidate whose inside differs from its ring holds an edge or a blemish.
+            float in = 0;
+            for (const Off& o : inner) {
+                float v[3];
+                sampleRgb(img, cx + o.x, cy + o.y, v);
+                for (int c = 0; c < 3; ++c) in += (v[c] - cMean[c]) * (v[c] - cMean[c]);
+            }
+            in /= float(inner.size());
+            // Nearer is better among equals (the light and grain match best close by).
+            const float score = (err + std::max(0.0f, in - tVar)) * scale + 0.02f * d / r;
+            if (score < bestScore) bestScore = score, bx = cx, by = cy;
+        }
+    if (!std::isfinite(bestScore)) return false;
+    s.sx = bx / W, s.sy = by / H;
+    return true;
+}
+
 void SpotRemovalNode::evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) {
     ImagePtr src = toImage(in[0], 0, 0);
     if (!src) return;

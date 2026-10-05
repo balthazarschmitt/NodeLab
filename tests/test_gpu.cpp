@@ -19,6 +19,7 @@
 #include "gpu/Display.h"
 #include "nodes/ImageOps.h"
 #include "gpu/PointOp.h"
+#include "nodes/transform/TransformNodes.h"
 
 namespace {
 
@@ -388,6 +389,37 @@ TEST_CASE("GPU develop nodes match the CPU with sliders moved") {
     }
 }
 
+TEST_CASE("GPU Lens Profile matches the CPU") {
+    if (!gpuReady()) return;
+    // Each distortion and TCA model, with vignetting, and Constrain Crop's zoom.
+    for (int model = 1; model <= 3; ++model)
+        for (bool constrain : {false, true})
+            for (bool linear : {false, true}) {
+                CAPTURE(model);
+                CAPTURE(constrain);
+                CAPTURE(linear);
+                Graph g;
+                Node* src = cpuSource(g);
+                auto* n = static_cast<LensProfileNode*>(g.addNode("xform.lens_profile"));
+                lensdb::Profile& p = n->profile;
+                p.distModel = model;
+                p.dist[0] = model == 3 ? 0.02f : 0.04f, p.dist[1] = -0.03f, p.dist[2] = 0.01f;
+                p.tcaModel = model == 1 ? lensdb::Profile::TcaLinear : lensdb::Profile::TcaPoly3;
+                p.tcaR[0] = model == 1 ? 1.004f : 0.001f, p.tcaR[1] = 0.0005f, p.tcaR[2] = 1.002f;
+                p.tcaB[0] = model == 1 ? 0.996f : -0.001f, p.tcaB[1] = 0.0f, p.tcaB[2] = 0.998f;
+                p.vig = true, p.vigK[0] = -0.5f, p.vigK[1] = 0.1f, p.vigK[2] = -0.05f;
+                p.distScale = 1.8f, p.vigScale = 1.0f;
+                n->params[LensProfileNode::Distortion] = 140.0f;
+                n->params[LensProfileNode::Vignetting] = 70.0f;
+                n->params[LensProfileNode::Constrain] = constrain;
+                g.connect(src->id, 0, n->id, 0);
+                const Run cpu = evaluate(g, n->id, 0, false, linear), gpu = evaluate(g, n->id, 0, true, linear);
+                CHECK(gpu.onGpu);
+                CHECK(gpu.fallbacks == 0);
+                CHECK(difference(cpu.v, gpu.v) < 2e-4f);
+            }
+}
+
 TEST_CASE("GPU Basic matches the CPU with its local filters") {
     if (!gpuReady()) return;
     // Highlights/Shadows (the tone equalizer's guided mask in linear projects), Clarity (guided),
@@ -440,6 +472,8 @@ TEST_CASE("GPU filters and transforms match the CPU with params moved") {
         {"xform.lens_correction", {{0, 40}, {2, 60}, {3, -50}, {4, -60}, {5, 30}}, {}},
         {"xform.lens_correction", {{0, -50}, {1, 0}, {4, 70}}, {}},
         {"xform.corner_pin", {{0, 0.1f}, {1, 0.05f}, {2, 0.95f}, {5, 0.8f}, {6, 0.2f}}, {}},
+        {"xform.perspective", {{1, -45}, {2, 20}, {3, 4}, {4, 30}, {6, 10}, {7, -15}}, {}},
+        {"xform.perspective", {{1, 60}, {5, 80}, {8, 1}}, {}},
         {"xform.displace", {{0, 15}, {1, -10}}, {{1, 0}, {2, 2}}},
         {"xform.map_uv", {}, {{1, -1}}},
         {"filter.directional_blur", {{0, 8}, {1, 30}, {2, 10}, {3, 0.2f}}, {}},
@@ -449,6 +483,8 @@ TEST_CASE("GPU filters and transforms match the CPU with params moved") {
         {"filter.denoise", {{2, 100}, {3, 0}}, {}},
         {"matte.range_mask", {{1, 0.3f}, {2, 0.7f}, {3, 0.2f}}, {{1, 0}}},
         {"matte.range_mask", {{0, 1}, {5, 0.8f}, {6, 1}}, {}},
+        {"matte.hsl_mask", {{1, 200}, {2, 90}, {3, 40}, {8, 1}, {10, 0.3f}, {11, 0.8f}}, {{1, 0}}},
+        {"matte.hsl_mask", {{0, 0}, {5, 0}, {6, 0.5f}, {12, 1}}, {}},
         {"filter.bilateral_blur", {{0, 5}, {1, 0.3f}}, {}},
         {"filter.bilateral_blur", {{0, 3}, {1, 0.05f}}, {{1, -1}}},
         {"filter.bilateral_blur", {{0, 5}, {1, 0.3f}, {2, 1}}, {}},
@@ -458,6 +494,8 @@ TEST_CASE("GPU filters and transforms match the CPU with params moved") {
         {"filter.dilate_erode", {{1, -4.5f}}, {}},
         {"filter.dilate_erode", {{0, 1}, {1, 6.5f}}, {}},
         {"filter.dilate_erode", {{0, 1}, {1, -2.5f}}, {}},
+        {"filter.sharpen", {{0, 120}, {1, 8}, {2, 60}, {3, 40}}, {}},
+        {"filter.sharpen", {{0, 80}, {1, 12}, {2, 0}}, {}},
         {"filter.kuwahara", {{0, 3}}, {}},
         {"filter.kuwahara", {{0, 9}}, {}},
         {"filter.pixelate", {{0, 5}}, {}},

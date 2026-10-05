@@ -40,7 +40,18 @@ public:
     void loadActive();
     // Copies the params into the active spot; true if it changed.
     bool storeActive();
+
+    // A spot waiting for an automatic source (Lightroom picks one when you click, and "/" finds
+    // another): the App evaluates the image arriving here and calls findSpotSource. Not saved.
+    int findSource = -1;
+    bool findAvoidCurrent = false;  // look away from the current source ("/")
 };
+
+// Lightroom's automatic source: the place whose surroundings best match the ring around spot
+// `index` (its texture for Heal, its colours too for Clone), clear of the spot itself, other spots
+// and anything that looks like another blemish. `img` is the whole image arriving at the node, at
+// any size. Moves the spot's source and returns true when it found one.
+bool findSpotSource(const Image& img, std::vector<Spot>& spots, int index, bool avoidCurrent);
 
 // Applies spots to img, which is the part at (x0, y0) of a fullW x fullH image. `linear`: heal
 // matches brightness by ratio (scene-linear values) instead of difference. Exposed for tests.

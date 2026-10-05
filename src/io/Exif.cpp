@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <ctime>
 
 #include "core/Parallel.h"
@@ -141,7 +142,103 @@ std::vector<uint8_t> fromRaw(const raw::Metadata& m, int w, int h) {
     return out;
 }
 
+// An entry's value as text (ASCII) or a number (SHORT, LONG, RATIONAL; the first value).
+std::string asciiAt(const TiffView& v, size_t e) {
+    if (v.u16(e + 2) != tiff::Ascii) return {};
+    const uint32_t count = v.u32(e + 4);
+    const size_t off = count <= 4 ? e + 8 : v.u32(e + 8);
+    if (count == 0 || count > 4096 || off + count > v.n) return {};
+    std::string s(reinterpret_cast<const char*>(v.t + off), count);
+    s.resize(std::strlen(s.c_str()));
+    while (!s.empty() && s.back() == ' ') s.pop_back();
+    return s;
+}
+
+double numberAt(const TiffView& v, size_t e) {
+    switch (v.u16(e + 2)) {
+        case tiff::Short: return v.u16(e + 8);
+        case tiff::Long: return v.u32(e + 8);
+        case tiff::Rational: {
+            const size_t off = v.u32(e + 8);
+            if (off + 8 > v.n) return 0;
+            const uint32_t den = v.u32(off + 4);
+            return den ? double(v.u32(off)) / den : 0.0;
+        }
+        default: return 0;
+    }
+}
+
+std::string captureOf(long long timestamp) {
+    if (timestamp <= 0) return {};
+    std::time_t t = std::time_t(timestamp);
+    std::tm tm{};
+    if (localtime_s(&tm, &t) != 0) return {};
+    char buf[20];
+    std::strftime(buf, sizeof buf, "%Y:%m:%d %H:%M:%S", &tm);
+    return buf;
+}
+
+// The first `limit` bytes of a file.
+std::vector<uint8_t> fileHead(const std::string& pathU8, size_t limit) {
+    std::ifstream f(u8ToPath(pathU8), std::ios::binary);
+    if (!f) return {};
+    std::vector<uint8_t> b(limit);
+    f.read(reinterpret_cast<char*>(b.data()), std::streamsize(limit));
+    b.resize(size_t(f.gcount()));
+    return b;
+}
+
 }  // namespace
+
+bool infoFromTiff(const uint8_t* t, size_t n, PhotoInfo& out) {
+    TiffView v{const_cast<uint8_t*>(t), n};
+    if (!v.valid()) return false;
+    size_t exifIfd = 0;
+    std::string dateTime;
+    bool any = false;
+    v.eachEntry(v.u32(4), [&](size_t e, unsigned tag) {
+        if (tag == 0x010F) out.make = asciiAt(v, e);
+        else if (tag == 0x0110) out.model = asciiAt(v, e);
+        else if (tag == 0x0132) dateTime = asciiAt(v, e);
+        else if (tag == 0x8769) exifIfd = v.u32(e + 8);
+        else return;
+        any = true;
+    });
+    v.eachEntry(exifIfd, [&](size_t e, unsigned tag) {
+        switch (tag) {
+            case 0x829A: out.exposureTime = float(numberAt(v, e)); break;
+            case 0x829D: out.fNumber = float(numberAt(v, e)); break;
+            case 0x8827: out.iso = float(numberAt(v, e)); break;
+            case 0x9003: out.captureTime = asciiAt(v, e); break;
+            case 0x920A: out.focalLength = float(numberAt(v, e)); break;
+            case 0xA434: out.lens = asciiAt(v, e); break;
+            default: return;
+        }
+        any = true;
+    });
+    // "0000:00:00 00:00:00" and other placeholders aren't dates.
+    auto validDate = [](const std::string& d) { return d.size() >= 10 && d.compare(0, 4, "0000") != 0 && std::isdigit((unsigned char)d[0]); };
+    if (!validDate(out.captureTime)) out.captureTime = validDate(dateTime) ? dateTime : std::string();
+    return any;
+}
+
+bool readInfo(const std::string& pathU8, PhotoInfo& out) {
+    out = PhotoInfo{};
+    if (isJpegPath(pathU8)) {
+        const std::vector<uint8_t> t = jpegExif(pathU8);
+        return infoFromTiff(t.data(), t.size(), out);
+    }
+    // TIFFs and the TIFF-based RAWs (CR2, NEF, ARW, DNG...) keep their EXIF near the start.
+    const std::vector<uint8_t> head = fileHead(pathU8, size_t(1) << 20);
+    const bool tiffBased = infoFromTiff(head.data(), head.size(), out) && !out.captureTime.empty();
+    if (tiffBased || !raw::isRawPath(pathU8)) return tiffBased || !out.make.empty();
+    raw::Metadata m;
+    if (!raw::readMetadata(pathU8, m)) return false;
+    out.make = m.make, out.model = m.model, out.lens = m.lens;
+    out.exposureTime = m.exposureTime, out.fNumber = m.fNumber, out.iso = m.iso, out.focalLength = m.focalLength;
+    out.captureTime = captureOf(m.timestamp);
+    return true;
+}
 
 int jpegOrientation(const std::string& pathU8) {
     const std::vector<uint8_t> t = jpegExif(pathU8);

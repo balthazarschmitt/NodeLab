@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include <imgui.h>
 
@@ -52,11 +53,126 @@ void label(ImDrawList* dl, const ImVec2& p, const char* text) {
     dl->AddText(p, IM_COL32(235, 235, 240, 255), text);
 }
 
+// Lines across the rectangle p0..p1: `n` cells along its long side, square cells.
+void gridLines(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, int n, ImU32 col) {
+    const float w = p1.x - p0.x, h = p1.y - p0.y, cell = std::max(w, h) / n;
+    if (cell < 2.0f) return;
+    // Centred, so the middle lines meet at the centre of the frame.
+    const float cx = (p0.x + p1.x) * 0.5f, cy = (p0.y + p1.y) * 0.5f;
+    for (float x = cx - std::floor((cx - p0.x) / cell) * cell; x < p1.x; x += cell) dl->AddLine(ImVec2(x, p0.y), ImVec2(x, p1.y), col);
+    for (float y = cy - std::floor((cy - p0.y) / cell) * cell; y < p1.y; y += cell) dl->AddLine(ImVec2(p0.x, y), ImVec2(p1.x, y), col);
+}
+
+// Lightroom's crop guide overlays inside the frame p0..p1. `turn` mirrors the asymmetric ones
+// (bit 0 left-right, bit 1 top-bottom).
+void drawCropGuide(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, int guide, int turn) {
+    const ImU32 col = IM_COL32(255, 255, 255, 110);
+    const float W = p1.x - p0.x, H = p1.y - p0.y;
+    const bool fx = turn & 1, fy = turn & 2;
+    // Frame-relative (0..1) to screen, mirrored by `turn`.
+    const auto at = [&](float u, float v) { return ImVec2(p0.x + (fx ? 1 - u : u) * W, p0.y + (fy ? 1 - v : v) * H); };
+    const auto line = [&](float u0, float v0, float u1, float v1) { dl->AddLine(at(u0, v0), at(u1, v1), col); };
+    switch (guide) {
+    case NodeOverlay::Grid: gridLines(dl, p0, p1, 12, col); break;
+    case NodeOverlay::Thirds:
+        for (int i = 1; i < 3; ++i) line(i / 3.0f, 0, i / 3.0f, 1), line(0, i / 3.0f, 1, i / 3.0f);
+        break;
+    case NodeOverlay::Diagonal: {
+        // 45-degree lines in from each corner, as far as the frame allows.
+        const float d = std::min(W, H);
+        dl->AddLine(p0, ImVec2(p0.x + d, p0.y + d), col);
+        dl->AddLine(ImVec2(p1.x, p0.y), ImVec2(p1.x - d, p0.y + d), col);
+        dl->AddLine(ImVec2(p0.x, p1.y), ImVec2(p0.x + d, p1.y - d), col);
+        dl->AddLine(p1, ImVec2(p1.x - d, p1.y - d), col);
+        break;
+    }
+    case NodeOverlay::Triangle: {
+        // A diagonal, and lines from the other two corners meeting it at right angles.
+        const ImVec2 a = at(0, 0), b = at(1, 1);
+        dl->AddLine(a, b, col);
+        const float dx = b.x - a.x, dy = b.y - a.y, len2 = std::max(dx * dx + dy * dy, 1e-6f);
+        for (const ImVec2& c : {at(1, 0), at(0, 1)}) {
+            const float t = ((c.x - a.x) * dx + (c.y - a.y) * dy) / len2;
+            dl->AddLine(c, ImVec2(a.x + dx * t, a.y + dy * t), col);
+        }
+        break;
+    }
+    case NodeOverlay::GoldenRatio: {
+        constexpr float g = 0.381966f;  // 1 - 1/phi
+        for (float f : {g, 1 - g}) line(f, 0, f, 1), line(0, f, 1, f);
+        break;
+    }
+    case NodeOverlay::GoldenSpiral: {
+        // Golden rectangles: cut a square off each remaining rectangle in turn (left, top,
+        // right, bottom) and draw a quarter arc across it; the arcs join into the spiral.
+        constexpr float k = 0.618034f;
+        float x = 0, y = 0, w = 1, h = 1;
+        ImVec2 pts[17];
+        for (int i = 0; i < 10; ++i) {
+            float cu, cv, su, sv, eu, ev;  // arc centre, start and end
+            switch (i % 4) {
+            case 0: {
+                const float s = w * k;
+                cu = x + s, cv = y + h, su = x, sv = y + h, eu = x + s, ev = y;
+                line(x + s, y, x + s, y + h);
+                x += s, w -= s;
+                break;
+            }
+            case 1: {
+                const float s = h * k;
+                cu = x, cv = y + s, su = x, sv = y, eu = x + w, ev = y + s;
+                line(x, y + s, x + w, y + s);
+                y += s, h -= s;
+                break;
+            }
+            case 2: {
+                const float s = w * k;
+                cu = x + w - s, cv = y, su = x + w, sv = y, eu = x + w - s, ev = y + h;
+                line(x + w - s, y, x + w - s, y + h);
+                w -= s;
+                break;
+            }
+            default: {
+                const float s = h * k;
+                cu = x + w, cv = y + h - s, su = x + w, sv = y + h, eu = x, ev = y + h - s;
+                line(x, y + h - s, x + w, y + h - s);
+                h -= s;
+                break;
+            }
+            }
+            for (int j = 0; j <= 16; ++j) {
+                const float t = j / 16.0f * kPi * 0.5f, c = std::cos(t), sn = std::sin(t);
+                pts[j] = at(cu + (su - cu) * c + (eu - cu) * sn, cv + (sv - cv) * c + (ev - cv) * sn);
+            }
+            dl->AddPolyline(pts, 17, IM_COL32(255, 255, 255, 170), ImDrawFlags_None, 1.5f);
+        }
+        break;
+    }
+    case NodeOverlay::AspectRatios: {
+        // Common print and screen ratios, centred and as large as the frame allows.
+        for (float r : {1.0f, 5.0f / 4, 4.0f / 3, 3.0f / 2, 16.0f / 9}) {
+            const float ratio = W >= H ? r : 1 / r;
+            float w = W, h = W / ratio;
+            if (h > H) h = H, w = H * ratio;
+            const ImVec2 c((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
+            dl->AddRect(ImVec2(c.x - w * 0.5f, c.y - h * 0.5f), ImVec2(c.x + w * 0.5f, c.y + h * 0.5f), col);
+        }
+        break;
+    }
+    default: break;
+    }
+}
+
 }  // namespace
+
+const char* NodeOverlay::cropGuideName(int g) {
+    static const char* names[kCropGuideCount] = {"Grid", "Thirds", "Diagonal", "Triangle", "Golden Ratio", "Golden Spiral", "Aspect Ratios"};
+    return g >= 0 && g < kCropGuideCount ? names[g] : "";
+}
 
 bool NodeOverlay::supports(const Node& n) {
     const std::string& t = n.info().type;
-    return t == crop::kType || isMask(n) || dynamic_cast<const SpotRemovalNode*>(&n);
+    return t == crop::kType || t == perspective::kType || isMask(n) || dynamic_cast<const SpotRemovalNode*>(&n);
 }
 
 bool NodeOverlay::isMask(const Node& n) {
@@ -79,6 +195,7 @@ bool NodeOverlay::update(ImDrawList* dl, const ImVec2& a, const ImVec2& b, bool 
     if (mask_ && mask_->valid() && isMask(*node_)) dl->AddImage((ImTextureID)(intptr_t)mask_->id(), a, b);
     const std::string& t = node_->info().type;
     if (t == crop::kType) return updateCrop(dl, a, b, hovered, active);
+    if (t == perspective::kType) return updatePerspective(dl, a, b, hovered, active);
     if (t == kLinear) return updateLinear(dl, a, b, hovered, active);
     if (t == kRadial || t == kBox || t == kEllipse) return updateShape(dl, a, b, hovered, active);
     if (dynamic_cast<BrushMaskNode*>(node_)) return updateBrush(dl, a, b, hovered, active);
@@ -97,18 +214,15 @@ bool NodeOverlay::updateCrop(ImDrawList* dl, const ImVec2& a, const ImVec2& b, b
     const float ar = crop::aspectRatio(node_->paramI(crop::Aspect), iw, ih);
     const ImVec2 p0(a.x + rc.l * W, a.y + rc.t * H), p1(a.x + rc.r * W, a.y + rc.b * H);
 
-    // Dim what will be cut off, then the frame and rule-of-thirds grid.
+    // Dim what will be cut off, then the frame and its guide overlay.
     const ImU32 dim = IM_COL32(0, 0, 0, 150);
     dl->AddRectFilled(a, ImVec2(b.x, p0.y), dim);
     dl->AddRectFilled(ImVec2(a.x, p1.y), b, dim);
     dl->AddRectFilled(ImVec2(a.x, p0.y), ImVec2(p0.x, p1.y), dim);
     dl->AddRectFilled(ImVec2(p1.x, p0.y), ImVec2(b.x, p1.y), dim);
-    const int lines = drag_ == 9 ? 9 : 3;  // a finer grid while straightening, to line up horizons
-    for (int i = 1; i < lines; ++i) {
-        const float fx = p0.x + (p1.x - p0.x) * i / lines, fy = p0.y + (p1.y - p0.y) * i / lines;
-        dl->AddLine(ImVec2(fx, p0.y), ImVec2(fx, p1.y), IM_COL32(255, 255, 255, 90));
-        dl->AddLine(ImVec2(p0.x, fy), ImVec2(p1.x, fy), IM_COL32(255, 255, 255, 90));
-    }
+    // A fine grid while straightening, to line up horizons (as Lightroom does).
+    if (drag_ == 9) gridLines(dl, p0, p1, 16, IM_COL32(255, 255, 255, 90));
+    else drawCropGuide(dl, p0, p1, cropGuide, cropGuideTurn);
     dl->AddRect(p0, p1, IM_COL32(0, 0, 0, 150), 0, 0, 3.5f);
     dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 235), 0, 0, 1.5f);
 
@@ -359,6 +473,12 @@ bool NodeOverlay::updateSpots(ImDrawList* dl, const ImVec2& a, const ImVec2& b, 
 
     // The Inspector edits the active spot through the params.
     if (node->storeActive()) changed_ = true;
+    // A spot added with a plain click gets an automatic source, as in Lightroom (the App finds
+    // it); dragging right away set it by hand.
+    if (drag_ < 0 && spotClick_) {
+        spotClick_ = false;
+        if (node->active >= 0) node->findSource = node->active, node->findAvoidCurrent = false;
+    }
 
     // What is under the mouse: the active spot's parts first, then any spot's target.
     enum Part { None, Target, Source, Edge };
@@ -381,6 +501,8 @@ bool NodeOverlay::updateSpots(ImDrawList* dl, const ImVec2& a, const ImVec2& b, 
     if (hovered) {
         if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket)) setParam(1, node->paramF(1) / 1.25f);
         if (ImGui::IsKeyPressed(ImGuiKey_RightBracket)) setParam(1, node->paramF(1) * 1.25f);
+        // "/" looks for another source, as in Lightroom.
+        if (node->active >= 0 && ImGui::IsKeyPressed(ImGuiKey_Slash)) node->findSource = node->active, node->findAvoidCurrent = true;
         if (node->active >= 0 && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace))) {
             spots.erase(spots.begin() + node->active);
             node->active = -1;
@@ -406,6 +528,7 @@ bool NodeOverlay::updateSpots(ImDrawList* dl, const ImVec2& a, const ImVec2& b, 
             } else if (!io.KeyAlt && m.x >= a.x && m.x <= b.x && m.y >= a.y && m.y <= b.y) {
                 node->addSpot((m.x - a.x) / W, (m.y - a.y) / H, W / H);
                 changed_ = true;
+                spotClick_ = true;
                 // Dragging right after adding moves the source, as Photoshop's healing brush
                 // sets it; a plain click keeps the one picked beside it.
                 const Spot& s = spots.back();
@@ -423,7 +546,7 @@ bool NodeOverlay::updateSpots(ImDrawList* dl, const ImVec2& a, const ImVec2& b, 
         if (drag_ == 0) s.x = grab_[0] + du, s.y = grab_[1] + dv;
         else if (drag_ == 1) s.sx = grab_[2] + du, s.sy = grab_[3] + dv;
         else if (drag_ == 2) setParam(1, dist(m, screen(s.x, s.y)) / L);
-        else if (drag_ == 3 && dist(m, ImVec2(grabX_, grabY_)) > 4.0f) s.sx = (m.x - a.x) / W, s.sy = (m.y - a.y) / H;
+        else if (drag_ == 3 && dist(m, ImVec2(grabX_, grabY_)) > 4.0f) s.sx = (m.x - a.x) / W, s.sy = (m.y - a.y) / H, spotClick_ = false;
         if (drag_ == 2 && node->storeActive()) changed_ = true;
         if (s.x != before.x || s.y != before.y || s.sx != before.sx || s.sy != before.sy) changed_ = true;
     }
@@ -468,4 +591,158 @@ bool NodeOverlay::updateSpots(ImDrawList* dl, const ImVec2& a, const ImVec2& b, 
     if (hovered && (hitPart == Target || hitPart == Source) && drag_ < 0) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
     if (hovered && hitPart == Edge && drag_ < 0) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE);
     return hovered || drag_ >= 0;
+}
+
+// ---------------------------------------------------------------- perspective
+
+bool NodeOverlay::updatePerspective(ImDrawList* dl, const ImVec2& a, const ImVec2& b, bool hovered, bool active) {
+    auto* pn = static_cast<PerspectiveNode*>(node_);
+    const float W = b.x - a.x, H = b.y - a.y;
+    gridLines(dl, a, b, 16, IM_COL32(255, 255, 255, 60));
+    // A guide just drawn and released without length is dropped.
+    if (drag_ < 0 && creating_) {
+        creating_ = false;
+        if (!pn->guides.empty()) {
+            const perspective::Guide& g = pn->guides.back();
+            if (std::hypot((g.x1 - g.x0) * W, (g.y1 - g.y0) * H) < 4.0f) {
+                pn->guides.pop_back();
+                changed_ = true;
+            }
+        }
+    }
+    if (pn->paramI(perspective::Upright) != perspective::UprightGuided) return false;
+
+    // Guides are stored in the node's input; the viewer shows its output. Only the shape of
+    // the image matters to the transform, so any size with the view's aspect does.
+    if (drag_ < 0) {
+        const int iw = std::max(1, int(std::lround(W * 8))), ih = std::max(1, int(std::lround(H * 8)));
+        toInput_ = pn->matrix(iw, ih);
+        toShown_ = perspective::inverse(toInput_);
+    }
+    const ImVec2 m = ImGui::GetIO().MousePos;
+    const auto shown = [&](float u, float v, ImVec2& out) {
+        double su, sv;
+        if (!perspective::apply(toShown_, u, v, su, sv)) return false;
+        out = ImVec2(a.x + float(su) * W, a.y + float(sv) * H);
+        return true;
+    };
+    const auto input = [&](const ImVec2& p, float& u, float& v) {
+        double iu, iv;
+        if (!perspective::apply(toInput_, (p.x - a.x) / W, (p.y - a.y) / H, iu, iv)) return false;
+        u = std::clamp(float(iu), 0.0f, 1.0f), v = std::clamp(float(iv), 0.0f, 1.0f);
+        return true;
+    };
+
+    // Handles: guide g's ends are 2g and 2g+1. A guide's line is hot for Alt+click removal.
+    const int n = int(pn->guides.size());
+    const float aspect = W / std::max(H, 1.0f);
+    int hot = drag_, hotLine = -1;
+    std::vector<ImVec2> ends(size_t(n) * 2);
+    std::vector<bool> visible(size_t(n), false);
+    for (int g = 0; g < n; ++g) {
+        const perspective::Guide& gd = pn->guides[size_t(g)];
+        visible[size_t(g)] = shown(gd.x0, gd.y0, ends[size_t(g) * 2]) && shown(gd.x1, gd.y1, ends[size_t(g) * 2 + 1]);
+    }
+    if (hot < 0 && hovered)
+        for (int g = 0; g < n && hot < 0; ++g) {
+            if (!visible[size_t(g)]) continue;
+            for (int e = 0; e < 2 && hot < 0; ++e)
+                if (dist(ends[size_t(g) * 2 + e], m) < kHit) hot = g * 2 + e;
+            // Distance to the segment.
+            const ImVec2 p = ends[size_t(g) * 2], q = ends[size_t(g) * 2 + 1];
+            const float dx = q.x - p.x, dy = q.y - p.y, len2 = std::max(dx * dx + dy * dy, 1e-6f);
+            const float t = std::clamp(((m.x - p.x) * dx + (m.y - p.y) * dy) / len2, 0.0f, 1.0f);
+            if (hotLine < 0 && dist(ImVec2(p.x + dx * t, p.y + dy * t), m) < 5.0f) hotLine = g;
+        }
+    for (int g = 0; g < n; ++g) {
+        if (!visible[size_t(g)]) continue;
+        const bool vert = pn->guides[size_t(g)].vertical(aspect);
+        const bool hotG = hot / 2 == g || hotLine == g;
+        // Steep guides (they'll become vertical) and flat ones (horizontal) in different colours.
+        const ImU32 col = hotG ? IM_COL32(255, 200, 80, 255) : vert ? IM_COL32(120, 210, 255, 240) : IM_COL32(255, 140, 200, 240);
+        outlinedLine(dl, ends[size_t(g) * 2], ends[size_t(g) * 2 + 1], col);
+        drawHandle(dl, ends[size_t(g) * 2], hot == g * 2);
+        drawHandle(dl, ends[size_t(g) * 2 + 1], hot == g * 2 + 1);
+    }
+    const bool alt = ImGui::GetIO().KeyAlt;
+    const bool inside = m.x >= a.x && m.x <= b.x && m.y >= a.y && m.y <= b.y;
+    if (hovered && drag_ < 0) {
+        if (hot >= 0 || hotLine >= 0) ImGui::SetMouseCursor(alt ? ImGuiMouseCursor_NotAllowed : ImGuiMouseCursor_ResizeAll);
+        else if (inside && n < perspective::kMaxGuides) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        const int g = hot >= 0 ? hot / 2 : hotLine;
+        if (alt && g >= 0) {
+            // Alt+click removes a guide, as in Lightroom.
+            pn->guides.erase(pn->guides.begin() + g);
+            changed_ = true;
+            return true;
+        }
+        if (hot >= 0) {
+            drag_ = hot;
+        } else if (inside && !alt && n < perspective::kMaxGuides) {
+            float u, v;
+            if (input(m, u, v)) {
+                pn->guides.push_back({u, v, u, v});
+                drag_ = n * 2 + 1;
+                creating_ = true;
+                changed_ = true;
+            }
+        }
+    }
+    if (drag_ < 0 || !active || drag_ / 2 >= int(pn->guides.size())) return hovered && (hot >= 0 || hotLine >= 0 || inside);
+    float u, v;
+    if (input(m, u, v)) {
+        perspective::Guide& gd = pn->guides[size_t(drag_ / 2)];
+        float& gu = drag_ % 2 ? gd.x1 : gd.x0;
+        float& gv = drag_ % 2 ? gd.y1 : gd.y0;
+        if (gu != u || gv != v) gu = u, gv = v, changed_ = true;
+    }
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "Guide %d of %d", drag_ / 2 + 1, perspective::kMaxGuides);
+    label(dl, ImVec2(m.x + 16, m.y + 12), buf);
+    return true;
+}
+
+// ---------------------------------------------------------------- loupe overlay
+
+bool LoupeOverlay::update(ImDrawList* dl, const ImVec2& a, const ImVec2& b, bool hovered, bool active) {
+    if (b.x - a.x < 2 || b.y - a.y < 2) return inner && inner->update(dl, a, b, hovered, active);
+    dl->PushClipRect(a, b, true);
+    if (grid) {
+        // Anchored to the image, so it moves with it when panning.
+        const float s = std::max(gridSize, 4.0f);
+        const ImVec2 lo = dl->GetClipRectMin(), hi = dl->GetClipRectMax();
+        const ImU32 col = IM_COL32(255, 255, 255, 70);
+        for (float x = a.x + std::max(0.0f, std::floor((lo.x - a.x) / s)) * s; x <= std::min(b.x, hi.x); x += s)
+            dl->AddLine(ImVec2(x, std::max(a.y, lo.y)), ImVec2(x, std::min(b.y, hi.y)), col);
+        for (float y = a.y + std::max(0.0f, std::floor((lo.y - a.y) / s)) * s; y <= std::min(b.y, hi.y); y += s)
+            dl->AddLine(ImVec2(std::max(a.x, lo.x), y), ImVec2(std::min(b.x, hi.x), y), col);
+    }
+    const ImVec2 g(a.x + guideX * (b.x - a.x), a.y + guideY * (b.y - a.y));
+    if (guides) {
+        const bool hotV = drag_ == 0 || drag_ == 2, hotH = drag_ == 1 || drag_ == 2;
+        outlinedLine(dl, ImVec2(g.x, a.y), ImVec2(g.x, b.y), hotV ? IM_COL32(255, 200, 80, 255) : IM_COL32(255, 255, 255, 200), 1.0f);
+        outlinedLine(dl, ImVec2(a.x, g.y), ImVec2(b.x, g.y), hotH ? IM_COL32(255, 200, 80, 255) : IM_COL32(255, 255, 255, 200), 1.0f);
+    }
+    dl->PopClipRect();
+
+    // The node's controls come first (and only draw while a guide is dragged).
+    const bool innerOwns = inner && inner->update(dl, a, b, hovered && drag_ < 0, active && drag_ < 0);
+    if (drag_ < 0 && innerOwns) return true;
+    if (!guides) return innerOwns;
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) drag_ = -1;
+    const ImVec2 m = ImGui::GetIO().MousePos;
+    int hot = drag_;
+    if (hot < 0 && hovered) {
+        const bool nearV = std::fabs(m.x - g.x) < 5.0f && m.y >= a.y && m.y <= b.y;
+        const bool nearH = std::fabs(m.y - g.y) < 5.0f && m.x >= a.x && m.x <= b.x;
+        hot = nearV && nearH ? 2 : nearV ? 0 : nearH ? 1 : -1;
+    }
+    if (hot >= 0) ImGui::SetMouseCursor(hot == 2 ? ImGuiMouseCursor_ResizeAll : hot == 0 ? ImGuiMouseCursor_ResizeEW : ImGuiMouseCursor_ResizeNS);
+    if (hovered && hot >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) drag_ = hot;
+    if (drag_ < 0 || !active) return hot >= 0;
+    if (drag_ != 1) guideX = std::clamp((m.x - a.x) / (b.x - a.x), 0.0f, 1.0f);
+    if (drag_ != 0) guideY = std::clamp((m.y - a.y) / (b.y - a.y), 0.0f, 1.0f);
+    return true;
 }

@@ -9,12 +9,17 @@
 #include <imgui.h>
 
 #include "core/ColorMath.h"
+#include "graph/Graph.h"
+#include "io/Exif.h"
 #include "io/ImageIO.h"
+#include "io/LensProfiles.h"
+#include "nodes/io/IONodes.h"
 #include "ml/Models.h"
 #include "ml/Onnx.h"
 #include "nodes/filter/SpotRemoval.h"
 #include "nodes/matte/AutoMask.h"
 #include "nodes/matte/MatteNodes.h"
+#include "nodes/transform/TransformNodes.h"
 #include "ui/ViewerOverlay.h"
 
 int autoToneRequest = 0;
@@ -342,10 +347,144 @@ static void autoMask(AutoMaskNode& n, const ParamRow& row) {
     ImGui::PopTextWrapPos();
 }
 
-bool drawNodeInspector(Node& n, const ParamRow& row, bool& changed) {
+// ---------------------------------------------------------------- Lens Profile
+
+// The photo feeding a node: the nearest Image Input upstream.
+static std::string upstreamPhoto(const Graph& g, int nodeId) {
+    std::vector<int> todo{nodeId};
+    std::vector<int> seen;
+    while (!todo.empty()) {
+        const int id = todo.back();
+        todo.pop_back();
+        if (std::find(seen.begin(), seen.end(), id) != seen.end()) continue;
+        seen.push_back(id);
+        const Node* n = g.find(id);
+        if (!n) continue;
+        if (n->info().type == ImageInputNode::staticInfo().type && !n->paramS(0).empty()) return n->paramS(0);
+        for (int p = int(n->info().inputs.size()) - 1; p >= 0; --p)
+            if (const Link* l = g.inputLink(id, p)) todo.push_back(l->fromNode);
+    }
+    return {};
+}
+
+// Looks the photo's lens up, as Lightroom's Setup: Auto does. Returns why it found nothing.
+static std::string detectLens(LensProfileNode& n, const lensdb::Database& db, const exif::PhotoInfo& info) {
+    const lensdb::Camera* cam = db.findCamera(info.make, info.model);
+    const auto matches = db.findLenses(info.lens, cam);
+    if (matches.empty())
+        return info.lens.empty() && !cam ? "The photo doesn't say which camera or lens took it."
+                                         : "No profile for " + (info.lens.empty() ? info.model : info.lens) + ".";
+    n.profile = lensdb::resolve(*matches[0].lens, cam, info.focalLength, info.fNumber);
+    return {};
+}
+
+static std::string lowerCase(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    return s;
+}
+
+static void lensProfile(LensProfileNode& n, const ParamRow& row, bool& changed, const Graph* g) {
+    for (int i = 0; i < int(n.params.size()); ++i) row(i);
+    ImGui::Spacing();
+    ImGui::PushTextWrapPos(0.0f);
+    if (n.profile.valid()) {
+        const lensdb::Profile& p = n.profile;
+        ImGui::Text("Profile: %s", p.lens.c_str());
+        std::string what = p.camera.empty() ? std::string() : p.camera + ", ";
+        char buf[64];
+        std::snprintf(buf, sizeof buf, "%.0f mm", p.focal);
+        what += buf;
+        if (p.aperture > 0) std::snprintf(buf, sizeof buf, ", f/%.1f", p.aperture), what += buf;
+        const char* parts[3] = {p.distModel ? "distortion" : nullptr, p.tcaModel ? "chromatic aberration" : nullptr,
+                                p.vig ? "vignetting" : nullptr};
+        std::string has;
+        for (const char* part : parts)
+            if (part) has += (has.empty() ? "" : ", ") + std::string(part);
+        ImGui::TextDisabled("%s. Corrects %s.", what.c_str(), has.c_str());
+    } else {
+        ImGui::TextUnformatted("Profile: none");
+    }
+
+    static std::string message;  // the last detection's result, for the node it was for
+    static int messageNode = -1;
+    const lensdb::DownloadState st = lensdb::downloadState();
+    if (st.running) {
+        ImGui::TextDisabled("Downloading the lens database...");
+        char text[32];
+        std::snprintf(text, sizeof text, "%d / %d files", st.done, st.total);
+        ImGui::ProgressBar(st.total ? float(st.done) / float(st.total) : 0.0f, ImVec2(-1, 0), text);
+        if (ImGui::Button("Cancel")) lensdb::cancelDownload();
+    } else if (!lensdb::installed()) {
+        ImGui::TextUnformatted("Finding a profile needs lensfun's lens database, which isn't part of NodeLab.exe.");
+        ImGui::TextDisabled("lensfun.github.io (CC BY-SA 3.0), about 3 MB.");
+        if (!st.error.empty()) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", st.error.c_str());
+        if (ImGui::Button("Download Lens Database")) lensdb::startDownload();
+    } else {
+        const auto db = lensdb::shared();
+        const std::string photo = g ? upstreamPhoto(*g, n.id) : std::string();
+        exif::PhotoInfo info;
+        const bool haveInfo = !photo.empty() && exif::readInfo(photo, info);
+        // Setup: Auto, once for a node without a profile.
+        if (!n.detectTried && !n.profile.valid() && haveInfo) {
+            message = detectLens(n, *db, info), messageNode = n.id;
+            if (n.profile.valid()) changed = true;
+        }
+        n.detectTried = true;
+        ImGui::BeginDisabled(!haveInfo);
+        if (ImGui::Button("Detect from Photo")) {
+            message = detectLens(n, *db, info), messageNode = n.id;
+            changed = true;
+        }
+        ImGui::EndDisabled();
+        if (!haveInfo && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Needs an Image Input upstream, with a photo that has EXIF");
+        ImGui::SameLine();
+        // Choose a lens by hand (manual lenses write no EXIF), at the photo's focal length.
+        static char filter[64] = "";
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::BeginCombo("##lens", "Choose Lens...", ImGuiComboFlags_HeightLarge)) {
+            if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+            ImGui::SetNextItemWidth(-1);
+            ImGui::InputTextWithHint("##filter", "Filter", filter, sizeof filter);
+            const std::string f = lowerCase(filter);
+            int shown = 0;
+            for (const lensdb::Lens& l : db->lenses()) {
+                const std::string name = l.model.rfind(l.maker, 0) == 0 ? l.model : l.maker + " " + l.model;
+                if (!f.empty() && lowerCase(name).find(f) == std::string::npos) continue;
+                if (++shown > 300) {
+                    ImGui::TextDisabled("More lenses: type to filter");
+                    break;
+                }
+                ImGui::PushID(&l);
+                if (ImGui::Selectable(name.c_str())) {
+                    const lensdb::Camera* cam = haveInfo ? db->findCamera(info.make, info.model) : nullptr;
+                    n.profile = lensdb::resolve(l, cam, haveInfo ? info.focalLength : 0.0f, haveInfo ? info.fNumber : 0.0f);
+                    message.clear();
+                    changed = true;
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
+        }
+        if (messageNode == n.id && !message.empty()) ImGui::TextDisabled("%s", message.c_str());
+        ImGui::TextDisabled("%d lenses in lensfun's database (CC BY-SA 3.0).", int(db->lenses().size()));
+    }
+    if (n.profile.valid() && ImGui::Button("Remove Profile")) {
+        n.profile = {};
+        changed = true;
+    }
+    ImGui::PopTextWrapPos();
+}
+
+bool drawNodeInspector(Node& n, const ParamRow& row, bool& changed, const Graph* g) {
     if (NodeOverlay::supports(n)) {
         const char* hint = n.info().type == "xform.crop"
-                               ? "Edit the crop on the Result viewer: drag the frame, its corners or edges; drag outside it to straighten."
+                               ? "Edit the crop on the Result viewer: drag the frame, its corners or edges; drag outside it to "
+                                 "straighten. O cycles the guide overlay (Thirds, Golden Spiral...), Shift+O turns it."
+                           : n.info().type == perspective::kType
+                               ? "Guided Upright: on the Result viewer, drag along up to four lines that should be straight. "
+                                 "Steep guides become vertical, flat ones horizontal. Drag their ends to adjust them; "
+                                 "Alt+click removes one. The sliders below apply on top."
                            : dynamic_cast<BrushMaskNode*>(&n)
                                ? "Paint on the Result viewer. Alt+paint erases, [ and ] change the brush size, O toggles the overlay."
                            : dynamic_cast<SpotRemovalNode*>(&n)
@@ -356,6 +495,16 @@ bool drawNodeInspector(Node& n, const ParamRow& row, bool& changed) {
         ImGui::PushTextWrapPos(0.0f);
         ImGui::TextDisabled("%s", hint);
         ImGui::PopTextWrapPos();
+        if (auto* pn = dynamic_cast<PerspectiveNode*>(&n)) {
+            ImGui::Text("Guides: %d of %d", int(pn->guides.size()), perspective::kMaxGuides);
+            ImGui::SameLine();
+            ImGui::BeginDisabled(pn->guides.empty());
+            if (ImGui::SmallButton("Clear Guides")) {
+                pn->guides.clear();
+                changed = true;
+            }
+            ImGui::EndDisabled();
+        }
         ImGui::Spacing();
     }
     const std::string& t = n.info().type;
@@ -374,6 +523,11 @@ bool drawNodeInspector(Node& n, const ParamRow& row, bool& changed) {
         ImGui::Spacing();
         ImGui::TextDisabled("%d %s%s", int(spots->spots.size()), spots->spots.size() == 1 ? "spot" : "spots",
                             spots->active >= 0 ? " (one selected)" : "");
+        ImGui::BeginDisabled(spots->active < 0);
+        ImGui::SameLine();
+        if (ImGui::Button("Find New Source")) spots->findSource = spots->active, spots->findAvoidCurrent = true;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Pick another automatic source for the selected spot (/)");
+        ImGui::EndDisabled();
         ImGui::BeginDisabled(spots->spots.empty());
         ImGui::SameLine();
         if (ImGui::Button("Remove All")) {
@@ -382,6 +536,8 @@ bool drawNodeInspector(Node& n, const ParamRow& row, bool& changed) {
             changed = true;
         }
         ImGui::EndDisabled();
+    } else if (auto* lp = dynamic_cast<LensProfileNode*>(&n)) {
+        lensProfile(*lp, row, changed, g);
     } else if (auto* am = dynamic_cast<AutoMaskNode*>(&n)) {
         autoMask(*am, row);
     } else if (t == "io.image_input") {

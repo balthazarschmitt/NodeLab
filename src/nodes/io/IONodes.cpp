@@ -28,6 +28,10 @@ void ImageInputNode::evaluate(EvalContext& ctx, const std::vector<Value>&, std::
 
 bool ImageInputNode::chooseFile(const std::string& pathU8) {
     const bool wasRaw = raw::isRawPath(paramS(0));
+    // Like Blender, float files (OpenEXR, float TIFF) read as Linear Rec.709 and other images as
+    // sRGB, whenever the choice moves between the two kinds. Non-Color is kept.
+    const bool wasLinear = !paramS(0).empty() && isLinearImageFile(paramS(0)), linear = isLinearImageFile(pathU8);
+    if (paramI(1) != 2 && (paramS(0).empty() || wasLinear != linear)) params[1] = linear ? 1 : 0;
     params[0] = pathU8;
     if (wasRaw || !raw::isRawPath(pathU8)) return false;
     params[3] = kRawBaselineEV;

@@ -18,7 +18,7 @@ struct FileSpec {
 };
 
 struct ModelSpec {
-    const char* id;       // "runtime", "subject", "sky"
+    const char* id;       // "runtime", "subject", "subject-light", "sky"
     const char* title;    // shown in the UI
     const char* source;   // model and authors
     const char* license;

@@ -29,17 +29,36 @@ struct Meta {
     static Meta fromJson(const nlohmann::json& j);
 };
 
-std::string sidecarPath(const std::string& photoU8);
-bool hasSidecar(const std::string& photoU8);
+// Lightroom's virtual copies: more edits of one photo, each in its own sidecar. Copy 0 is the
+// photo's own edit (photo.ext.nlproj); copy N > 0 lives in photo.ext.copyN.nlproj.
+std::string sidecarPath(const std::string& photoU8, int copy = 0);
+bool hasSidecar(const std::string& photoU8, int copy = 0);
 
 // The folder's images (not sidecars or other files), sorted by name ignoring case.
 std::vector<std::string> listFolder(const std::string& dirU8);
 
+// A library entry: a photo, or one of its virtual copies.
+struct Entry {
+    std::string photo;
+    int copy = 0;
+};
+// The folder's photos, each followed by its virtual copies (in number order).
+std::vector<Entry> listEntries(const std::string& dirU8);
+
+// Lightroom's Create Virtual Copy: a new copy of the photo whose edit starts as `fromCopy`'s.
+// Returns its number, or -1 (with err).
+int createVirtualCopy(const std::string& photoU8, int fromCopy, std::string& err);
+// Removes a virtual copy's sidecar (to the Recycle Bin on Windows). Copy 0, the photo's own
+// edit, is never removed.
+bool removeVirtualCopy(const std::string& photoU8, int copy, std::string& err);
+void setUseRecycleBin(bool on);  // tests delete outright
+
 // Meta from the photo's sidecar; defaults (and false) when it has none or it can't be read.
-bool readMeta(const std::string& photoU8, Meta& out);
+bool readMeta(const std::string& photoU8, Meta& out, int copy = 0);
 // Stores meta in the sidecar, keeping its graph; a photo without one gets one with the default
-// graph (rating a photo is enough to create it).
-bool writeMeta(const std::string& photoU8, const Meta& m, std::string& err);
+// graph (rating a photo is enough to create it). A sidecar that exists but can't be read (damaged,
+// or locked) is left alone and the call fails.
+bool writeMeta(const std::string& photoU8, const Meta& m, std::string& err, int copy = 0);
 
 // The graph a photo starts with: Image Input -> Denoise -> Basic -> Output, scene-linear. RAWs
 // get the colour noise reduction Lightroom applies by default (Color 25) and the AgX view, which
@@ -51,7 +70,7 @@ void setDefaultView(int view, int look);
 
 // The photo's edit as graph JSON with absolute paths (for exports): its sidecar's graph, or the
 // default one.
-nlohmann::json graphFor(const std::string& photoU8, std::string& err);
+nlohmann::json graphFor(const std::string& photoU8, std::string& err, int copy = 0);
 
 // Points an edit at another photo: its Image Input for `source` (or the first one) gets `target`.
 // False when the graph has no Image Input.
@@ -60,7 +79,8 @@ bool retargetEdit(Graph& g, const std::string& sourceU8, const std::string& targ
 // Copy / paste edit: writes `target`'s sidecar with `graph` (JSON, absolute paths), its Image
 // Input for `source` (or the first one) pointed at `target`. The target keeps its own rating and
 // flag; its thumbnail is dropped, since it showed the old edit.
-bool pasteEdit(const nlohmann::json& graph, const std::string& sourceU8, const std::string& targetU8, std::string& err);
+bool pasteEdit(const nlohmann::json& graph, const std::string& sourceU8, const std::string& targetU8, std::string& err,
+               int targetCopy = 0);
 
 // The photo itself for a thumbnail: a RAW's embedded preview, or the decoded image, upright and
 // display-encoded, at most `edge` pixels long.

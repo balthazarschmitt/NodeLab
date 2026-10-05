@@ -11,6 +11,7 @@
 #include <thread>
 #include <vector>
 
+#include "io/Exif.h"
 #include "io/Library.h"
 #include "ui/ImageView.h"
 
@@ -27,6 +28,11 @@ public:
     const std::string& folder() const { return dir_; }
     int size() const { return int(items_.size()); }
     const std::string& photo(int i) const { return items_[size_t(i)]->path; }
+    int copyOf(int i) const { return items_[size_t(i)]->copy; }  // virtual copy number (0: the photo)
+    std::string sidecar(int i) const { return library::sidecarPath(photo(i), copyOf(i)); }
+    // A new virtual copy listed after entry i (its photo's last copy); returns its index.
+    int insertCopy(int i, int copy);
+    void removeEntry(int i);
     library::Meta& meta(int i) { return items_[size_t(i)]->meta; }
     const library::Meta& meta(int i) const { return items_[size_t(i)]->meta; }
     int current() const { return current_; }
@@ -45,6 +51,7 @@ public:
     struct Actions {
         int open = -1;            // a photo was clicked (or stepped to with the arrow keys)
         bool copy = false, paste = false, exportSelected = false;
+        int createCopy = -1, removeCopy = -1;  // Create / Remove Virtual Copy, on this entry
     };
     // Draws the panel's contents inside the current window. keys: the culling shortcuts apply
     // (the pointer isn't over the Node Editor and nothing takes text).
@@ -54,13 +61,22 @@ public:
     // or Enter / E opens the photo and leaves the grid, as does Escape without opening one.
     bool grid = false;
     Actions drawGrid(bool keys);
+    // Lightroom's Sort order (the toolbar's Sort menu), kept in the preferences.
+    enum Sort { ByName, ByCaptureTime, ByFileType, ByRating, ByPick, ByEditTime, ByCamera, ByLens, ByIso, ByFocalLength, kSortCount };
+    int sortBy = ByName;
+    bool sortDescending = false;
+    // Sorts the entries by sortBy, keeping the current photo and the selection.
+    void sort();
     std::string status;     // set when something worth telling happened (for the status bar)
     bool canPaste = false;  // an edit has been copied
 
 private:
     struct Item {
         std::string path;
+        int copy = 0;
         library::Meta meta;
+        exif::PhotoInfo info;  // read when a sort needs it
+        bool infoRead = false;
         GLTexture tex;
         bool requested = false;
         bool selected = false;
@@ -69,12 +85,15 @@ private:
         int index;
         uint64_t gen;
         std::string path;
+        int copy;
         library::Meta meta;
         bool render;
     };
     struct Result {
         int index;
         uint64_t gen;
+        std::string path;  // with copy: finds the entry again if the list was sorted meanwhile
+        int copy;
         ImagePtr image;
         std::string store;  // a rendered edit's thumbnail, for the sidecar
     };
@@ -85,6 +104,7 @@ private:
     // A photo's thumbnail fitted into b0..b1, with its flag and edited badges.
     void drawThumb(ImDrawList* dl, const Item& it, ImVec2 b0, ImVec2 b1) const;
     void cullKeys();  // 0-5, P, X, U on the selection
+    void contextMenu(int i, Actions& a);  // right-click on an entry
     void select(int i, bool ctrl, bool shift);
     void setRating(int rating);
     void setFlag(int flag);

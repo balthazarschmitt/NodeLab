@@ -201,3 +201,63 @@ TEST_CASE("Spot Removal node keeps its spots in the project and its cache key") 
     REQUIRE(back.spots.size() == 2);
     CHECK(back.spots[0].radius <= 0.3f);
 }
+
+TEST_CASE("Spot Removal: the automatic source matches the spot's surroundings") {
+    // Left: horizontal stripes 6 px apart; right: flat. A blemish on the stripes, and another
+    // just beside it (where the default source would land).
+    const int w = 200, h = 120;
+    Image img(w, h);
+    const auto blemish = [](int x, int y, float cx, float cy) { return std::hypot(x - cx, y - cy) < 4.0f; };
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            float v = x < 100 ? ((y / 3) % 2 ? 0.6f : 0.4f) : 0.5f;
+            if (blemish(x, y, 50, 60) || blemish(x, y, 65, 60)) v = 0.05f;
+            float* p = img.pixel(size_t(y) * w + x);
+            p[0] = p[1] = p[2] = v, p[3] = 1;
+        }
+    std::vector<Spot> spots(1);
+    Spot& s = spots[0];
+    s.x = 50.0f / w, s.y = 60.0f / h, s.radius = 0.03f;  // 6 px
+    REQUIRE(findSpotSource(img, spots, 0, false));
+    const float sx = s.sx * w, sy = s.sy * h;
+    CAPTURE(sx);
+    CAPTURE(sy);
+    CHECK(sx + 1.2f * 6 < 100);                     // on the stripes
+    CHECK(std::hypot(sx - 50, sy - 60) >= 2.2f * 6);  // clear of the spot
+    CHECK(std::hypot(sx - 65, sy - 60) >= 6 + 4);    // and of the other blemish
+    const float phase = std::fmod(std::fabs(sy - 60), 6.0f);
+    CHECK((phase < 0.5f || phase > 5.5f));  // stripes in step
+
+    // "/": somewhere else.
+    const float oldX = sx, oldY = sy;
+    REQUIRE(findSpotSource(img, spots, 0, true));
+    CHECK(std::hypot(s.sx * w - oldX, s.sy * h - oldY) >= 2 * 6);
+
+    // Another spot's target is never a source.
+    spots.push_back(spots[0]);
+    spots[1].x = spots[0].sx, spots[1].y = spots[0].sy;
+    REQUIRE(findSpotSource(img, spots, 0, false));
+    CHECK(std::hypot((spots[0].sx - spots[1].x) * w, (spots[0].sy - spots[1].y) * h) >= 12);
+}
+
+TEST_CASE("Spot Removal: Clone's automatic source matches colours too") {
+    // A left-to-right ramp: Clone needs a source at the same brightness (straight above or below).
+    const int w = 160, h = 160;
+    Image img(w, h);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            float* p = img.pixel(size_t(y) * w + x);
+            p[0] = p[1] = p[2] = x / float(w), p[3] = 1;
+        }
+    std::vector<Spot> spots(1);
+    spots[0].x = 0.5f, spots[0].y = 0.5f, spots[0].radius = 0.03f, spots[0].heal = false;
+    REQUIRE(findSpotSource(img, spots, 0, false));
+    CHECK(std::fabs(spots[0].sx - 0.5f) * w < 1.0f);
+    // Too small an image for a source (the spot fills it): nothing moves.
+    Image tiny(6, 6);
+    spots[0].radius = 0.3f;
+    spots[0].sx = 0.7f;
+    CHECK_FALSE(findSpotSource(tiny, spots, 0, false));
+    CHECK(spots[0].sx == 0.7f);
+    CHECK_FALSE(findSpotSource(img, spots, 3, false));
+}

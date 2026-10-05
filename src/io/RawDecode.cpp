@@ -247,8 +247,11 @@ std::shared_ptr<Image> load(const std::string& pathU8, std::string& err, int hig
         }
     });
 
-    if (fullW) *fullW = swap ? s.height : s.width;
-    if (fullH) *fullH = swap ? s.width : s.height;
+    // The full-resolution size, also for a half-size decode: previews scale their pixel sizes
+    // (blur radii) by proxy / full, so reporting the halved size made them twice the export's.
+    const int fw = halfSize ? sensorW : s.width, fh = halfSize ? sensorH : s.height;
+    if (fullW) *fullW = swap ? fh : fw;
+    if (fullH) *fullH = swap ? fw : fh;
     return img;
 }
 

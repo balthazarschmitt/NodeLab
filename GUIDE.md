@@ -140,17 +140,30 @@ Some nodes are edited directly on the Result panel while they are selected:
 - **Crop:** the Result shows the whole frame with the crop rectangle on top. Drag a corner or edge
   to resize, drag inside to move, and drag outside the frame to straighten (rotate). With an
   Aspect preset the frame keeps its ratio. Deselect the node to see the cropped result.
+  - **Crop guide overlays:** with the mouse over the Result, **O** cycles Lightroom's overlays
+    inside the frame: Grid, Thirds, Diagonal, Triangle, Golden Ratio, Golden Spiral and Aspect
+    Ratios. **Shift+O** turns the Triangle and Golden Spiral to face another corner. View > Crop
+    Guide Overlay picks one directly. A fine grid replaces it while you straighten.
+- **Perspective:** a fine grid covers the image. With Upright set to Guided, drag along a line
+  that should be straight to draw a guide (up to four); drag a guide's ends to move them and
+  Alt+click a guide to remove it. Steep guides are blue (they become vertical), flat ones pink
+  (horizontal).
 - **Radial Gradient, Box Mask, Ellipse Mask:** drag the centre to move, the side and bottom
   handles to resize, and the handle above to rotate (Shift snaps to 15 degrees).
 - **Linear Gradient:** drag the Start or End handle, or the middle one to move both.
 - **Brush Mask:** paint with the left mouse, Alt+paint to erase, and `[` / `]` to change the
   brush size. Turn on Auto Mask to keep strokes from spilling over edges onto other colours.
-- **Spot Removal:** click a blemish to add a spot, then drag its source circle onto clean
-  texture (see Spot Removal under Filter).
+- **Spot Removal:** click a blemish to add a spot (its source is picked automatically), press
+  `/` for another source, or drag the source circle yourself (see Spot Removal under Filter).
 - **Mask Overlay (O):** a selected mask node is tinted red over the image, so you can see what it
   covers even before it is wired into anything.
 
 Middle-drag still pans and the wheel still zooms while these controls are shown.
+
+**Loupe Overlay** (View > Loupe Overlay), as in Lightroom: **Grid** draws a grid over the Result
+(Grid Size sets its spacing in screen pixels) and **Guides** a horizontal and a vertical line you
+can drag (drag where they cross to move both). Use them to check that horizons and verticals are
+straight. Center Guides puts them back in the middle.
 
 **Add Mask** (on the Result toolbar) makes a local adjustment in one step, like Lightroom's
 "Create New Mask". It inserts a **Basic** labelled "Mask N" right before the Output and wires a
@@ -348,13 +361,17 @@ value while nothing is connected.
 ### Input / Output
 
 **Image Input**
-- Loads an image file: PNG, JPEG, BMP or TGA (8 or 16 bits per channel), or a camera **RAW**
-  file (CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2, PEF and most others, decoded by LibRaw).
+- Loads an image file: PNG, JPEG, BMP or TGA (8 or 16 bits per channel), **TIFF** (8 or 16-bit,
+  or 16/32-bit float; uncompressed, LZW, Deflate or PackBits, as scanners and other editors write
+  them), **OpenEXR** (the RGBA, or the first layer with colour, as Blender's multilayer files
+  have), or a camera **RAW** file (CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2, PEF and most others,
+  decoded by LibRaw). NodeLab's own TIFF and EXR exports open again this way.
 - Output: Image.
 - **Color Space** (as in Blender) says how the file's values are decoded in a scene-linear
   project: **sRGB** (photos and most images) converts to linear light; **Linear Rec.709** and
   **Non-Color** (masks, depth, data) load the values as they are. Legacy projects always load them
-  as they are. It is hidden for RAW files, which are always linear camera data.
+  as they are. It is hidden for RAW files, which are always linear camera data. As in Blender,
+  OpenEXR and float TIFF files start as Linear Rec.709 and other images as sRGB.
 - **Embedded Profile** (on by default, sRGB Color Space only): photos that carry an ICC colour
   profile other than sRGB are decoded through it, as Lightroom does. iPhone photos (Display P3)
   and camera or editor exports in Adobe RGB or ProPhoto otherwise look dull and shifted.
@@ -743,9 +760,12 @@ Sizes are in full-resolution pixels.
 **Spot Removal**
 - Lightroom's Spot Removal: removes dust spots, blemishes and small distractions by covering
   each with pixels from somewhere else in the photo. Select the node and work on the Result panel.
-- **Click** a blemish to add a spot. Its source (the second circle, with an arrow pointing to the
-  spot) is picked beside it; drag right after clicking, or drag the source circle later, to take
-  it from clean texture instead.
+- **Click** a blemish to add a spot. As in Lightroom, its source (the second circle, with an
+  arrow pointing to the spot) is picked automatically: nearby texture that matches the spot's
+  surroundings, clear of the spot and of other spots. Drag right after clicking, or drag the
+  source circle later, to choose it yourself.
+- **/** (or **Find New Source** in the Inspector) picks another automatic source for the selected
+  spot, somewhere other than the current one.
 - Drag a spot to move it and its edge to resize it. `[` / `]` change the Size, **Alt+click** or
   **Delete** removes a spot, and **Remove All** in the Inspector clears them.
 - **Mode:** **Heal** copies the source's texture but matches the colour and brightness around the
@@ -843,6 +863,39 @@ otherwise.
 - **Vignetting** brightens (positive) or darkens (negative) the corners; **Midpoint** sets how far
   in the effect reaches.
 
+**Lens Profile**
+- Lightroom's Enable Profile Corrections: undoes the distortion, colour fringing (lateral
+  chromatic aberration) and vignetting measured for your lens, at the photo's focal length and
+  aperture. The profiles come from [lensfun](https://lensfun.github.io)'s database (CC BY-SA 3.0),
+  which isn't part of NodeLab.exe: the Inspector offers to download it (about 3 MB, into
+  `%APPDATA%\NodeLab\lensfun`).
+- The node reads the camera, lens, focal length and aperture from the EXIF of the Image Input
+  feeding it, and picks the best-matching profile when you first select it. **Detect from Photo**
+  looks again; **Choose Lens** picks one by hand (for manual lenses, which write no EXIF).
+- The chosen profile is saved in the project, so it renders the same on another computer without
+  the database.
+- **Distortion** and **Vignetting** set how much of the correction to apply (100 is the profile's,
+  200 twice as much). **Chromatic Aberration** turns the fringe correction on or off.
+  **Constrain Crop** zooms in to hide the empty edges a distortion correction leaves.
+- Put it first, before anything that crops, rotates or blurs: profiles are measured on the whole
+  frame as it came from the lens.
+
+**Perspective**
+- Lightroom's Transform panel: fixes converging verticals and tilted horizons as if the camera had
+  been held level (a true perspective change, not a stretch).
+- **Upright: Guided.** Select the node and drag on the Result panel to draw up to four guides
+  along lines that should be straight: steep ones become vertical, flat ones horizontal. Two
+  guides along a building's sides straighten it; add two along a roof line or the horizon to level
+  it as well. Drag a guide's ends to adjust it; Alt+click a guide to remove it. Off ignores the
+  guides (they're kept).
+- **Vertical** below zero widens the top, for buildings leaning back when shot looking up; above
+  zero widens the bottom. **Horizontal** does the same sideways (positive widens the right side).
+- **Rotate** turns the image clockwise (positive), up to 10 degrees. **Aspect** stretches it
+  wider (positive) or taller (negative), to restore proportions after a strong correction.
+- **Scale** zooms in or out, **X Offset** and **Y Offset** move the image (positive moves right
+  and up). **Constrain Crop** zooms in just enough that no empty corners show.
+- A fine grid shows over the Result panel while the node is selected, to line things up against.
+
 **Displace**
 - Pushes each pixel sideways by the X channel and up and down by the Y channel. 0.5 means no
   movement, 0 moves fully one way and 1 the other, scaled by Strength X/Y in pixels.
@@ -907,6 +960,19 @@ with the matte applied as alpha.
   be and still be selected.
 - **Invert** selects everything else instead.
 
+**HSL Mask**
+- Selects colours by hue, saturation and lightness together, like DaVinci Resolve's HSL
+  qualifier: "the saturated blues", "the light greens". Each part has a **Use** switch, a range
+  and a **Softness** that feathers its edges. Like Range Mask, wire a mask into **Mask** to keep
+  only the part of it in range.
+- **Hue** is the centre in degrees (0 red, 60 yellow, 120 green, 180 cyan, 240 blue, 300
+  magenta) and **Hue Width** how far around it to take, in all. Grey pixels have no hue, so a
+  hue range leaves them out.
+- **Saturation** runs from 0 (grey) to 1 (the most vivid sRGB colours); the default **Low** of
+  0.15 leaves out near-greys. **Lightness** is perceptual, as in Range Mask.
+- Measured in Oklch, so a range is the same width to the eye in every colour.
+- **Invert** selects everything else instead.
+
 **Select Subject**
 - Lightroom's Select Subject: an AI model finds the main subject of the photo (people, animals,
   objects in front) and the node outputs it as a mask. Wire the photo into **Image**.
@@ -926,6 +992,10 @@ with the matte applied as alpha.
 - **Refine Edges** fits the mask's edges to the full-resolution photo (a guided filter), so hair
   and outlines stay crisp at any size. **Invert** selects the background instead (Add Mask >
   Background). An incoming **Mask** limits the result to it.
+- **Model:** **Accurate** (BiRefNet, above) or **Light** (U²-Net small): a 4.6 MB download that
+  runs in about a second with little memory, for computers where Accurate is too slow. Its mask
+  is coarser (it sees a 320 x 320 copy), so keep **Refine Edges** on.
+  `NodeLab.exe --install-model subject-light` downloads it from the command line.
 - Run it on the photo itself, before colour swaps or heavy grading: the model was trained on
   ordinary photos. For an infrared edit, wire the image from before the channel swap.
 
@@ -1134,8 +1204,20 @@ progress, and **Cancel** stops it.
 - **Batch** runs many photos through the same node tree. Add sources with **Add Files...**,
   **Add Folder...**, or by dropping images or folders on the window while the Batch tab is open.
   Choose which Image Input receives them (when the tree has several) and an output folder. Each
-  result is saved as the source's name plus the **Name suffix** (`_edit` by default). Sizes in
-  pixels (blur radius, offsets) apply to every photo, and each result keeps its own source's size.
+  result is named by the **File Naming** template (below). Sizes in pixels (blur radius, offsets)
+  apply to every photo, and each result keeps its own source's size.
+- **Preset** (Lightroom's export presets): pick **Full-Size JPEG**, **Web JPEG (2048 px)**,
+  **Email (1000 px)**, **Full-Size PNG**, **16-bit TIFF** or **OpenEXR (Half Float)** to set the
+  format, size, sharpening and naming in one go. **Save...** keeps the current settings as your
+  own preset (in the preferences, so every project has it); **Delete** removes one of yours.
+- **File Naming** (Lightroom's filename templates), for batches and Export Selected: text with
+  tokens in braces, which the **Insert** menu adds, and an example name below it. `{name}` is the
+  source's file name, `{folder}` its folder, `{seq}` the position in the export (`{seq:3}` pads it
+  to 001), `{copy}` "Copy 1" for a virtual copy, `{date}` the capture date (YYYY-MM-DD) with
+  `{year}` `{month}` `{day}` `{time}` and the others, `{today}` the export date, and `{camera}`,
+  `{lens}`, `{iso}`, `{focal}`, `{aperture}` and `{shutter}` from the EXIF. The default is
+  `{name}_edit`. Two photos that would get the same name get " (2)", " (3)" added, so no export
+  overwrites another, and an export never overwrites its source.
 - **Format:**
   - **PNG** and **TIFF** (8 or 16 bit) and **JPEG** (with a quality setting) are display images:
     the view transform is applied, as in the viewer, and they are tagged sRGB (PNG's sRGB chunk,
@@ -1159,6 +1241,17 @@ The settings and folders are saved with the project. From the command line,
 does the same batch without the window, and `NodeLab.exe --render project.nlproj out.tif
 [--depth 16]` renders one image (the extension picks the format; `--depth 32` for full-float EXR).
 Add `--device gpu` to render on the graphics card (`--precision half` for speed, full by default).
+
+## Snapshots
+
+**View > Snapshots** opens Lightroom's Snapshots panel: named states of the whole edit, to come
+back to or compare.
+
+- **Create Snapshot** stores the current node tree, named after the date and time; type a new name.
+- Click a snapshot to **Restore** it (it can be undone with Ctrl+Z). Right-click for **Rename**,
+  **Update with Current Settings** and **Delete**.
+- Snapshots are saved with the project (and with a library photo's sidecar), so they survive
+  closing NodeLab. Undo history doesn't, so take a snapshot before trying something drastic.
 
 ## Preferences
 
@@ -1208,8 +1301,19 @@ The Library panel along the bottom shows the folder's photos.
   tree, select other photos, and paste. Each one gets the tree with its own photo in the Image
   Input, and keeps its own rating and flag. Pasting onto the open photo can be undone.
 - **Export Selected...** exports each selected photo with its own edit, using the Export
-  window's format, size and **Name suffix**, into the Batch output folder (asked for the first
-  time).
+  window's format, size and **File Naming** template, into the Batch output folder (asked for the
+  first time).
+- **Sort** (the menu on the Library toolbar, as Lightroom's): **File Name**, **Capture Time**,
+  **File Type**, **Rating**, **Pick**, **Edit Time**, **Camera**, **Lens**, **ISO** or **Focal
+  Length**, and the **A-Z** button beside it reverses the order. Capture time and the camera
+  details come from the EXIF (the file's date when a photo has none). The open photo and the
+  selection stay as they are, and the order is remembered.
+- **Virtual copies** (Lightroom's): **Ctrl+'**, or right-click a thumbnail > **Create Virtual
+  Copy**, adds another edit of the same photo, starting as a copy of the current one. It is
+  listed after the photo as "(Copy 1)", with its own edit, rating and flag in
+  `IMG_1234.CR3.copy1.nlproj`, so you can try a black-and-white and a colour version side by
+  side. Right-click > **Remove Virtual Copy...** moves its sidecar to the Recycle Bin (the photo
+  and its other edits stay).
 - **Grid view (G):** the whole folder as a grid of cards over the window, like Lightroom's
   Library grid, to look over an import. **Grid** on the Library toolbar or View > Library Grid
   opens it too.

@@ -31,15 +31,26 @@ struct ExportSettings {
     int sharpenFor = SharpenOff;
     int sharpenAmount = 1;  // 0 Low, 1 Standard, 2 High
     bool fileOutputs = true;  // also write File Output nodes (single export only)
-    // Batch naming: <source name><suffix>.<ext> in the output folder.
-    std::string suffix = "_edit";
+    // Batch naming (Lightroom's File Naming): a filename template, see expandNameTemplate.
+    std::string nameTemplate = "{name}_edit";
 
     const char* extension() const { return formatExtension(FileFormat(format)); }
+    // The same file format, size, sharpening and naming (a preset's settings; fileOutputs and
+    // where the files go aren't part of one).
+    bool sameOutput(const ExportSettings& o) const;
     // The writer options for an image of w x h exported from `source` (for its EXIF).
     SaveOptions saveOptions(const std::string& source, int w, int h) const;
     nlohmann::json toJson() const;
     void fromJson(const nlohmann::json& j);
 };
+
+// Lightroom's export presets: named settings. The built-in ones come first; the user's are kept
+// in the preferences.
+struct ExportPreset {
+    std::string name;
+    ExportSettings settings;
+};
+const std::vector<ExportPreset>& builtInExportPresets();
 
 // Resamples to w x h with a Lanczos-3 filter (widened when downscaling, so it also antialiases).
 // Colour is filtered premultiplied by alpha, and each pass clamps to the range of the pixels it
@@ -64,8 +75,35 @@ bool saveRendered(const std::string& pathU8, const std::shared_ptr<const Image>&
 // The file whose metadata exports carry: the first Image Input with a file, or "".
 std::string metadataSource(const Graph& g);
 
-// Output path for one batch source: outDir/<stem><suffix><ext>. Never returns the source itself.
-std::string batchOutputPath(const std::string& sourceU8, const std::string& outDirU8, const ExportSettings& s);
+// Lightroom's filename templates. Tokens in braces are replaced, case-insensitively:
+//   {name} the source's file name without extension, {folder} its folder's name,
+//   {seq} the position in the export (from 1), {seq:3} padded to 3 digits,
+//   {copy} "Copy 1" for a library virtual copy (else nothing),
+//   {date} capture date as YYYY-MM-DD, {year} {month} {day} {hour} {minute} {second}, {time} HHMMSS,
+//   {today} the export date, {camera} {make} {lens} {iso} {focal} {aperture} {shutter}.
+// The capture date falls back to the file's modification time; other unknown values are empty.
+// Characters Windows forbids in file names become "_". Unknown tokens are kept as written.
+struct NameSource {
+    std::string path;  // the source photo ("" for a single export: {name} is "export")
+    int sequence = 1;
+    int copy = 0;      // library virtual copy number
+};
+std::string expandNameTemplate(const std::string& tmpl, const NameSource& src);
+// The tokens the template editor offers.
+struct NameToken {
+    const char* token;
+    const char* help;
+};
+extern const NameToken kNameTokens[];
+extern const int kNameTokenCount;
+
+// Output path for one batch source: outDir/<template>.<ext>. Never returns the source itself.
+std::string batchOutputPath(const std::string& sourceU8, const std::string& outDirU8, const ExportSettings& s,
+                            int sequence = 1, int copy = 0);
+// Output paths for a whole batch, numbered in order; a name the template gives twice gets
+// " (2)", " (3)"... so no export in the batch overwrites another.
+std::vector<std::string> batchOutputPaths(const std::vector<NameSource>& sources, const std::string& outDirU8,
+                                          const ExportSettings& s);
 
 // One file to write. For batches `source` replaces the File of the chosen Image Input node.
 struct ExportItem {

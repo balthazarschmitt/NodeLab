@@ -1,4 +1,6 @@
 #pragma once
+#include <chrono>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -12,9 +14,10 @@
 //   drag X0 Y0 X1 Y1 [B]   press at start, move in steps, release at end
 //   text STRING            type characters
 //   wheel N                mouse wheel steps (positive = up / zoom in)
-//   key NAME               press+release: enter, escape, delete, backspace, tab, up, down, left, right, a-z, 0-9, f1-f12
+//   key NAME               press+release: enter, escape, delete, backspace, tab, slash, up, down, left, right, a-z, 0-9, f1-f12
 //   ctrl|alt|shift on|off  hold/release a modifier
 //   shot PATH              save the rendered frame as PNG
+//   time LABEL             print LABEL and the time since the last `time` to stderr (the first only starts the clock)
 //   quit
 // Lines starting with '#' are comments.
 class UiScript {
@@ -37,4 +40,5 @@ private:
     size_t pos_ = 0;
     int wait_ = 0;
     int settled_ = 0;
+    std::optional<std::chrono::steady_clock::time_point> timed_;
 };

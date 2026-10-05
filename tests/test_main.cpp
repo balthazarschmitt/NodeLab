@@ -6,6 +6,7 @@
 
 #include "graph/NodeRegistry.h"
 #include "io/Paths.h"
+#include "io/LensProfiles.h"
 #include "ml/Models.h"
 
 int main(int argc, char** argv) {
@@ -17,6 +18,13 @@ int main(int argc, char** argv) {
         std::error_code ec;
         std::filesystem::remove_all(dir, ec);
         ml::setFolder(pathToU8(dir));
+    }
+    // Nor the user's lens database: lens tests load their own.
+    {
+        const std::filesystem::path dir = std::filesystem::temp_directory_path() / "nodelab_tests_lensfun";
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+        lensdb::setFolder(pathToU8(dir));
     }
     doctest::Context ctx(argc, argv);
     return ctx.run();

@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "core/Image.h"
 #include "io/ImageIO.h"
@@ -37,6 +38,10 @@ public:
     // Full-resolution size of a loaded image (false if it has not loaded).
     bool fullSize(const std::string& pathU8, int& w, int& h);
     void clear();
+    // Forgets every file but these (the library keeps the photos around the current one, so
+    // stepping back and forth doesn't decode them again). The first is the one on screen: only
+    // its full-resolution levels stay (each can be hundreds of MB); the others keep their proxies.
+    void retain(const std::vector<std::string>& pathsU8);
 
 private:
     struct Entry {

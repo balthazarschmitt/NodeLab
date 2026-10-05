@@ -496,6 +496,60 @@ public:
                 for (int c = 0; c < 3; ++c) img->px[i + c] = clampColor(false, img->px[i + c]);
         out[0] = Value(ImagePtr(img));
     }
+
+    // imageops::sharpenImage's passes: perceptual luminance, its blur, then the sharpening.
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const imageops::SharpenSettings s = settings(ctx);
+        if (!(s.amount > 0.0f) || !(s.radius > 0.0f)) {
+            // sharpenImage changes nothing; legacy projects still clamp.
+            gpu::PointOp op;
+            op.body = "    vec4 s = img0(p);\n    out0 = vec4(uLinear ? s.rgb : clampColor(false, s.rgb), s.a);\n";
+            gpu::runOver(ctx, *this, op, in, out);
+            return;
+        }
+        int w, h;
+        in[0].size(w, h);
+        gpu::PointOp lum;
+        lum.w = w, lum.h = h;
+        lum.full = true;
+        lum.body = "    float Y = finiteOr0(luminance(img0(p).rgb));\n"
+                   "    out0 = uLinear ? linearToSrgb(max(Y, 0.0)) : Y;\n";
+        const Value P = gpu::runPass(ctx, lum, {in[0]}, {false})[0];
+        auto blurred = std::make_shared<GpuChannel>();
+        blurred->tex = gpu::boxBlur(textureOf(P), s.radius, s.radius), blurred->w = w, blurred->h = h;
+
+        const float m = std::clamp(s.masking, 0.0f, 100.0f) / 100.0f;
+        gpu::PointOp op;
+        op.gather = {1, 2};
+        op.params = {std::clamp(s.amount, 0.0f, 150.0f) / 100.0f * 2.0f, std::clamp(s.detail, 0.0f, 100.0f) / 100.0f,
+                     m * std::sqrt(m) * 0.25f, s.radius / 0.4f * 0.5f};
+        op.body = R"(
+    float k = P[0], detail = P[1], threshold = P[2], gradScale = P[3];
+    float c = fetchCh1(p), lo = c, hi = c;
+    for (int j = -1; j <= 1; ++j)
+        for (int i = -1; i <= 1; ++i) {
+            float v = fetchCh1(p + ivec2(i, j));
+            lo = min(lo, v), hi = max(hi, v);
+        }
+    float weight = 1.0;
+    if (threshold > 0.0) {
+        float gx = fetchCh2(p + ivec2(1, 0)) - fetchCh2(p - ivec2(1, 0));
+        float gy = fetchCh2(p + ivec2(0, 1)) - fetchCh2(p - ivec2(0, 1));
+        float e = sqrt(gx * gx + gy * gy) * gradScale;
+        float t = clamp((e - threshold * 0.5) / threshold, 0.0, 1.0);
+        weight = t * t * (3.0 - 2.0 * t);
+    }
+    float sharp = c + k * weight * (c - fetchCh2(p));
+    float held = clamp(sharp, lo, hi);
+    float o = held + detail * (sharp - held);
+    float delta = uLinear ? srgbToLinear(max(o, 0.0)) - srgbToLinear(c) : o - c;
+    vec4 s = img0(p);
+    if (finiteOr0(delta) == delta) s.rgb = max(s.rgb + delta, 0.0);
+    out0 = vec4(uLinear ? s.rgb : clampColor(false, s.rgb), s.a);
+)";
+        gpu::runOver(ctx, *this, op, {in[0], P, Value(GpuChannelPtr(blurred))}, out);
+    }
 };
 
 class DilateErodeNode : public Node {

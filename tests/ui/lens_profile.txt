@@ -1,0 +1,23 @@
+# set NODELAB_LENSFUN_DIR=tests\ui\lensfun
+# build\NodeLab.exe tests\ui\lens_profile.nlproj --script tests\ui\lens_profile.txt
+# Lens Profile: a saved profile (strong distortion and vignetting) and the Inspector's lens list.
+settle
+click 700 104
+settle
+shot build/smoke/l1_profile.png
+# the Inspector's profile section: open the lens list and filter it
+move 800 780
+wheel -10
+wait 3
+shot build/smoke/l2_inspector.png
+click 870 768
+wait 2
+text sigma
+wait 3
+shot build/smoke/l3_choose.png
+# pick it: the profile is resolved at its shortest focal length (scene.png has no EXIF)
+click 790 850
+settle
+wait 3
+shot build/smoke/l4_chosen.png
+quit

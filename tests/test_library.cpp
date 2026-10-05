@@ -3,6 +3,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 
 #include "graph/Graph.h"
 #include "io/Export.h"
@@ -97,6 +98,26 @@ TEST_CASE("Library meta round-trips through the sidecar and keeps its graph") {
     REQUIRE(loadProject(library::sidecarPath(p), g2, ui, err));
     CHECK(firstOf(g2, "color.invert"));
     CHECK(library::Meta::fromJson(ui["library"]).flag == library::Rejected);
+}
+
+// A damaged sidecar holds the user's edit: rating the photo must not replace it with the default
+// graph (it used to, whenever the sidecar didn't parse).
+TEST_CASE("Rating a photo never replaces a sidecar it can't read") {
+    Folder f("nodelab_lib_damaged");
+    const std::string p = f.photo("p.png");
+    const std::string damaged = "{\"app\": \"NodeLab\", \"graph\": {\"nodes\": [ CUT OFF";
+    {
+        std::ofstream out(u8ToPath(library::sidecarPath(p)), std::ios::binary);
+        out << damaged;
+    }
+    library::Meta m;
+    m.rating = 5;
+    std::string err;
+    CHECK_FALSE(library::writeMeta(p, m, err));
+    CHECK_FALSE(err.empty());
+    std::ifstream in(u8ToPath(library::sidecarPath(p)), std::ios::binary);
+    const std::string after((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    CHECK(after == damaged);
 }
 
 TEST_CASE("Library default graph: Denoise and Basic, with RAW defaults for RAWs") {
@@ -211,4 +232,53 @@ TEST_CASE("Export Selected renders each photo with its own edit") {
     REQUIRE(rb);
     CHECK(ra->pixel(0)[0] == doctest::Approx(0.2f).epsilon(0.02));
     CHECK(rb->pixel(0)[0] > 0.9f);  // inverted (in linear light)
+}
+
+TEST_CASE("Virtual copies: their own edits next to the photo") {
+    Folder f("nodelab_lib_copies");
+    const std::string a = f.photo("a.png"), b = f.photo("b.png");
+    std::string err;
+    // A copy of a photo without a sidecar starts from the default graph.
+    REQUIRE(library::createVirtualCopy(a, 0, err) == 1);
+    CHECK(library::hasSidecar(a, 1));
+    CHECK_FALSE(library::hasSidecar(a, 0));
+    CHECK(library::sidecarPath(a, 1) == a + ".copy1.nlproj");
+
+    // A copy of copy 1 starts from its edit, and gets the next number.
+    Graph g;
+    library::defaultGraph(g, a);
+    g.addNode("color.invert")->label = "copy edit";
+    REQUIRE(saveProject(library::sidecarPath(a, 1), g, {{"library", library::Meta{4}.toJson()}}, err));
+    REQUIRE(library::createVirtualCopy(a, 1, err) == 2);
+    Graph g2;
+    nlohmann::json ui;
+    REQUIRE(loadProject(library::sidecarPath(a, 2), g2, ui, err));
+    CHECK(firstOf(g2, "color.invert")->label == "copy edit");
+    library::Meta m;
+    REQUIRE(library::readMeta(a, m, 2));
+    CHECK(m.rating == 4);
+
+    // Listed after their photo, in number order; the photo's own sidecar isn't a copy.
+    REQUIRE(library::writeMeta(b, library::Meta{1}, err));
+    const auto entries = library::listEntries(pathToU8(f.dir));
+    REQUIRE(entries.size() == 4);
+    CHECK((entries[0].photo == a && entries[0].copy == 0));
+    CHECK((entries[1].photo == a && entries[1].copy == 1));
+    CHECK((entries[2].photo == a && entries[2].copy == 2));
+    CHECK((entries[3].photo == b && entries[3].copy == 0));
+
+    // Pasting onto a copy writes that copy only; exporting reads its graph.
+    REQUIRE(library::pasteEdit(g.toJson(), a, a, err, 2));
+    CHECK(library::graphFor(a, err, 2).is_object());
+    CHECK_FALSE(library::hasSidecar(a, 0));
+
+    // Removing: never the photo's own edit.
+    CHECK_FALSE(library::removeVirtualCopy(a, 0, err));
+    library::setUseRecycleBin(false);  // a test shouldn't fill the user's Recycle Bin
+    CHECK(library::removeVirtualCopy(a, 1, err));
+    library::setUseRecycleBin(true);
+    CHECK_FALSE(library::hasSidecar(a, 1));
+    CHECK(library::listEntries(pathToU8(f.dir)).size() == 3);
+    // The next copy takes the free number.
+    CHECK(library::createVirtualCopy(a, 0, err) == 1);
 }

@@ -39,6 +39,12 @@ const std::vector<ModelSpec>& catalogue() {
            "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
            "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
            nullptr, 224005088, 224005088, "5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333"}}},
+        // Select Subject's Light model: 4.6 MB and well under a second on a CPU, for computers
+        // where BiRefNet's minute and 4 GB are too much. Coarser edges (Refine Edges helps).
+        {"subject-light", "Light subject model", "U\xC2\xB2-Net small (u2netp, Qin et al.), ONNX export from rembg",
+         "Apache-2.0",
+         {{"u2netp.onnx", "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx", nullptr,
+           4574861, 4574861, "309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8"}}},
         {"sky", "Sky model", "U\xC2\xB2-Net sky segmentation (xiongzhu666)", "MIT",
          {{"skyseg.onnx",
            "https://huggingface.co/JianyuanWang/skyseg/resolve/3ba8c6df1d9ba9ff26f637c7ba9568ac11a9aa7f/skyseg.onnx",

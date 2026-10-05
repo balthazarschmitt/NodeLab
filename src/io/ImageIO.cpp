@@ -19,11 +19,13 @@
 #include "core/ColorMath.h"
 #include "core/Parallel.h"
 #include "io/Exif.h"
+#include "io/ExrDecode.h"
 #include "io/Icc.h"
 #include "io/Paths.h"
 #include "io/JpegDecode.h"
 #include "io/PngDecode.h"
 #include "io/RawDecode.h"
+#include "io/TiffDecode.h"
 
 namespace {
 
@@ -104,8 +106,14 @@ std::string lowerExt(const std::string& pathU8) {
     return e;
 }
 
+// What a file says about its pixels beyond their values.
+struct FileMeta {
+    bool linearData = false;  // float samples (OpenEXR, float TIFF): scene-linear light
+    int orientation = 1;      // TIFF orientation tag (JPEGs read theirs from EXIF)
+};
+
 std::shared_ptr<Image> loadStb(const std::string& pathU8, std::string& err, bool srgbToLinear,
-                               const icc::Profile* profile) {
+                               const icc::Profile* profile, FileMeta& meta) {
     // One read of the file serves every decoder.
     std::vector<char> file;
     if (!readFileBytes(pathU8, file)) {
@@ -113,6 +121,28 @@ std::shared_ptr<Image> loadStb(const std::string& pathU8, std::string& err, bool
         return nullptr;
     }
     const auto* bytes = reinterpret_cast<const stbi_uc*>(file.data());
+    if (tiffdec::isTiff(bytes, file.size())) {
+        tiffdec::Decoded d;
+        if (!tiffdec::decode(bytes, file.size(), d, err)) return nullptr;
+        auto img = std::make_shared<Image>(d.info.w, d.info.h);
+        meta.orientation = d.info.orientation;
+        if (d.info.isFloat) {
+            std::copy(d.floats.begin(), d.floats.end(), img->px.begin());
+            meta.linearData = true;
+        } else {
+            decodePixels<uint16_t>(d.codes.data(), *img, d.maxCode + 1, srgbToLinear, profile);
+        }
+        return img;
+    }
+    if (exrdec::isExr(bytes, file.size())) {
+        int w = 0, h = 0;
+        std::vector<float> rgba;
+        if (!exrdec::decode(bytes, file.size(), w, h, rgba, err)) return nullptr;
+        auto img = std::make_shared<Image>(w, h);
+        std::copy(rgba.begin(), rgba.end(), img->px.begin());
+        meta.linearData = true;
+        return img;
+    }
     if (png::Decoded d; png::decode(bytes, file.size(), d)) {
         // Straight from the unfiltered rows to float, one row at a time.
         auto img = std::make_shared<Image>(d.w, d.h);
@@ -165,15 +195,42 @@ std::shared_ptr<Image> loadStb(const std::string& pathU8, std::string& err, bool
     return img;
 }
 
+// Float files hold scene-linear light. Scene-linear projects take it as stored (or decode it from
+// the sRGB curve when Color Space says so); legacy ones get sRGB-encoded 0..1 values, as RAW files
+// do. Non-finite values (OpenEXR allows them) become 0.
+void finishLinearData(Image& img, const DecodeOptions& opt) {
+    parallelFor(img.h, [&](int y) {
+        float* p = img.pixel(size_t(y) * img.w);
+        for (int i = 0; i < img.w * 4; ++i) {
+            float v = std::isfinite(p[i]) ? p[i] : 0.0f;
+            if ((i & 3) != 3) {
+                if (!opt.sceneLinear) v = float(colormath::linearToSrgb(std::clamp(v, 0.0f, 1.0f)));
+                else if (opt.srgbToLinear) v = float(colormath::srgbToLinear(v));
+            }
+            p[i] = v;
+        }
+    });
+}
+
 }  // namespace
 
 const char* const kImageFileFilter =
-    "Images|*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.cr2;*.cr3;*.crw;*.nef;*.nrw;*.arw;*.srf;*.sr2;*.dng;*.raf;*.orf;"
+    "Images|*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.exr;*.bmp;*.tga;*.cr2;*.cr3;*.crw;*.nef;*.nrw;*.arw;*.srf;*.sr2;*.dng;*.raf;*.orf;"
     "*.rw2;*.pef;*.srw;*.3fr;*.iiq;*.x3f;*.mos;*.erf;*.kdc;*.mrw;*.raw;*.rwl|All files|*.*";
+
+bool isLinearImageFile(const std::string& pathU8) {
+    const std::string e = lowerExt(pathU8);
+    if (e == ".exr") return true;
+    if (e != ".tif" && e != ".tiff") return false;
+    tiffdec::Info info;
+    std::string err;
+    return tiffdec::probeFile(pathU8, info, err) && info.isFloat;
+}
 
 bool isImageFile(const std::string& pathU8) {
     const std::string e = lowerExt(pathU8);
-    return e == ".png" || e == ".jpg" || e == ".jpeg" || e == ".bmp" || e == ".tga" || raw::isRawPath(pathU8);
+    return e == ".png" || e == ".jpg" || e == ".jpeg" || e == ".tif" || e == ".tiff" || e == ".exr" || e == ".bmp" ||
+           e == ".tga" || raw::isRawPath(pathU8);
 }
 
 std::shared_ptr<Image> loadImage(const std::string& pathU8, std::string& err, const DecodeOptions& opt, bool preview,
@@ -193,10 +250,13 @@ std::shared_ptr<Image> loadImage(const std::string& pathU8, std::string& err, co
     }
     std::unique_ptr<icc::Profile> profile;
     if (opt.srgbToLinear && opt.embeddedProfile) profile = usableProfile(pathU8);
-    auto img = loadStb(pathU8, err, opt.srgbToLinear, profile.get());
+    FileMeta meta;
+    auto img = loadStb(pathU8, err, opt.srgbToLinear, profile.get(), meta);
+    if (img && meta.linearData) finishLinearData(*img, opt);
     if (img && opt.sceneLinear) {
         const std::string e = lowerExt(pathU8);
         if (e == ".jpg" || e == ".jpeg") img = exif::applyOrientation(img, exif::jpegOrientation(pathU8));
+        else if (meta.orientation != 1) img = exif::applyOrientation(img, meta.orientation);
     }
     if (img && fullW) *fullW = img->w;
     if (img && fullH) *fullH = img->h;

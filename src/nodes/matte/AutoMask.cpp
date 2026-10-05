@@ -1,4 +1,5 @@
 #include "nodes/matte/AutoMask.h"
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -243,6 +244,13 @@ bool store(const AutoMaskNode::Model& m, size_t hash, std::vector<float> thumb, 
         if (m.sigmoid) v = 1.0f / (1.0f + std::exp(-v));
         v = std::isfinite(v) ? std::clamp(v, 0.0f, 1.0f) : 0.0f;
     }
+    if (m.stretch) {
+        const auto [lo, hi] = std::minmax_element(probs.begin(), probs.end());
+        const float a = *lo, range = *hi - *lo;
+        // A flat output (no subject at all) stays as it is rather than turning into noise.
+        if (range > 1e-3f)
+            for (float& v : probs) v = (v - a) / range;
+    }
     if (probsOut) *probsOut = probs, *pwOut = pw, *phOut = ph;
     std::lock_guard<std::mutex> lock(g_memoMutex);
     g_memo.push_front({m.id, hash, std::move(thumb), std::move(probs), pw, ph});
@@ -283,7 +291,7 @@ public:
             std::lock_guard<std::mutex> lock(mutex_);
             quit_ = true;
         }
-        cancel_ = true;
+        runCancel_ = true;
         cv_.notify_all();
         if (thread_.joinable()) thread_.join();
     }
@@ -291,6 +299,10 @@ public:
     void request(Request r) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (running_ && runningId_ == r.m.id && matches(runningThumb_, r.thumb)) return;
+        // A run on another photo is no use any more (it isn't even similar enough to stand in
+        // while this one runs): stop it rather than spend up to a minute and gigabytes on it. A
+        // run on the same photo before an edit (a crop, a retouch) finishes, as its mask stands in.
+        if (running_ && runningId_ == r.m.id && similarity(runningThumb_, r.thumb) < kSimilarShape) runCancel_ = true;
         // A newer picture for a model replaces the one waiting.
         bool queued = false;
         for (Request& q : queue_)
@@ -311,13 +323,20 @@ public:
         p.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started_).count();
         auto it = took_.find(runningId_);
         // First guesses from a 4-core laptop CPU: the model's load and run.
-        p.expected = it != took_.end() ? it->second : runningId_ == "subject" ? 50.0 : 4.0;
+        p.expected = it != took_.end() ? it->second : runningId_ == "subject" ? 50.0 : 4.0;  // light: like sky
         return p;
     }
 
     void wait() {
         std::unique_lock<std::mutex> lock(mutex_);
         idle_.wait(lock, [this] { return quit_ || (!running_ && queue_.empty()); });
+    }
+
+    // Drops the waiting runs and stops the one running (another project or photo was opened).
+    void cancelAll() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        queue_.clear();
+        if (running_) runCancel_ = true;
     }
 
 private:
@@ -332,18 +351,23 @@ private:
                 r = std::move(queue_.front());
                 queue_.pop_front();
                 running_ = true;
+                runCancel_ = false;
                 runningId_ = r.m.id;
                 runningThumb_ = r.thumb;
                 started_ = std::chrono::steady_clock::now();
             }
             ml::Tensor output;
             std::string err;
-            bool ok = ml::run(r.m.id, r.input, output, err, &cancel_);
+            bool ok = ml::run(r.m.id, r.input, output, err, &runCancel_);
             r.input = {};
-            if (cancel_) return;  // quitting
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (quit_) return;
+            }
+            const bool cancelled = !ok && runCancel_;  // not a failure: the picture just isn't wanted
             if (ok) ok = store(r.m, r.hash, r.thumb, output, err, nullptr, nullptr, nullptr);
             output = {};
-            if (!ok) recordFailure(r.m.id, r.thumb, err);
+            if (!ok && !cancelled) recordFailure(r.m.id, r.thumb, err);
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 running_ = false;
@@ -359,7 +383,8 @@ private:
     std::thread thread_;
     std::deque<Request> queue_;
     bool quit_ = false;
-    std::atomic<bool> cancel_{false};  // only when quitting
+    // Stops the running model: on quitting, for a run on another photo, or from cancelAll.
+    std::atomic<bool> runCancel_{false};
     bool running_ = false;
     std::string runningId_;
     std::vector<float> runningThumb_;
@@ -457,6 +482,7 @@ AutoMaskNode::Inferred AutoMaskNode::infer(const Image& img, bool linear, bool b
 AutoMaskNode::Progress AutoMaskNode::progress() { return runner().progress(); }
 int AutoMaskNode::resultGeneration() { return g_resultGeneration.load(); }
 void AutoMaskNode::waitForRuns() { runner().wait(); }
+void AutoMaskNode::cancelRuns() { runner().cancelAll(); }
 
 float AutoMaskNode::refineSigma(int fullW, int fullH, int pw, int ph) {
     // About one model pixel: edges are placed within the model's resolution, and the image's own
@@ -540,9 +566,11 @@ void AutoMaskNode::evaluate(EvalContext& ctx, const std::vector<Value>& in, std:
 }
 
 // BiRefNet (rembg's export) at 1024 x 1024 with ImageNet normalisation; its output is logits.
+// Light: rembg's U²-Net small at 320 x 320, the same normalisation, its output stretched to 0..1.
 const AutoMaskNode::Model& SelectSubjectNode::model() const {
-    static const Model m{"subject", 1024, 1024, {0.485f, 0.456f, 0.406f}, {0.229f, 0.224f, 0.225f}, true};
-    return m;
+    static const Model accurate{"subject", 1024, 1024, {0.485f, 0.456f, 0.406f}, {0.229f, 0.224f, 0.225f}, true};
+    static const Model light{"subject-light", 320, 320, {0.485f, 0.456f, 0.406f}, {0.229f, 0.224f, 0.225f}, false, true};
+    return paramI(ModelChoice) == 1 ? light : accurate;
 }
 
 // The U²-Net sky model at 320 x 320 with ImageNet normalisation; its output is already 0..1.
