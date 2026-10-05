@@ -13,6 +13,7 @@
 #include "ui/ImageView.h"
 #include "ui/LibraryPanel.h"
 #include "ui/NodeEditor.h"
+#include "ui/SystemStats.h"
 #include "ui/Theme.h"
 #include "ui/ViewerOverlay.h"
 
@@ -121,6 +122,7 @@ private:
     void drawFrame();
     void drawMainMenu();
     void drawStatusBar();
+    void drawStatusRight();
     void buildLayout(unsigned dockId);  // layoutPreset_'s docked layout
     void drawOriginalWindow();
     void drawEditorWindow();
@@ -263,8 +265,12 @@ private:
     std::vector<theme::Theme> customThemes_;  // saved with Save As in Preferences > Themes
     bool showPreferences_ = false;
     int prefsSection_ = 0;
+    int mlGeneration_ = 0;    // ml::generation() last seen
+    int maskGeneration_ = 0;  // AutoMaskNode::resultGeneration() last seen
+    SystemStats stats_;       // the status bar's memory and CPU
     bool prefsDirty_ = false;  // saved once no widget is being dragged
     bool drawCompositorSettings();  // Device and Precision; true when changed
+    bool drawAiSettings();          // AI Masks device and models; true when changed
     char themeName_[64] = {};
     // The Node Editor's canvas as last drawn, where the inspector overlay goes.
     bool editorShown_ = false;

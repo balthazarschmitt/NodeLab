@@ -3,6 +3,28 @@
 NodeLab uses [semantic versioning](https://semver.org): minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
+## 1.1.0 (2026-10-04)
+
+- **Select Subject** and **Select Sky** (Matte), Lightroom's AI masks. An AI model finds the
+  subject or the sky in the photo, and **Refine Edges** fits the mask to the full-resolution
+  image. Add Mask (and Mask Selected Nodes) has **Subject**, **Sky** and **Background**.
+  - The models aren't part of the exe: the Inspector offers the download the first time (about
+    240 MB for Subject, 190 MB for Sky, with the ONNX Runtime), checked against pinned SHA-256
+    hashes. `NodeLab.exe --install-model subject|sky` does it from the command line.
+  - A model runs once per picture and its result is cached, in memory and on disk, so the
+    export, zoomed views and reopening a project reuse it. Models on the CPU are unloaded after
+    each run, so their memory (about 4 GB while Select Subject runs) goes back to the system.
+  - While editing, models run in the background with their progress in the Inspector and the
+    status bar, so the rest of the graph keeps updating; exports wait for them. Tone edits
+    upstream (exposure, white balance) keep the mask instead of running the model again.
+  - Models run on the CPU by default. Edit > Preferences > Compositor > AI Masks can run them on
+    the GPU (DirectML), and lists and removes the downloaded models.
+- **Grain** (Filter), Lightroom's Effects > Grain: monochrome film grain with **Amount**, **Size**
+  and **Roughness**, strongest in the mid-tones. Its size is in full-resolution pixels, and the
+  preview shows it as the export would look at the preview's size.
+- The status bar shows NodeLab's memory and the computer's RAM and CPU use (hover for details),
+  in orange when the RAM is nearly full.
+
 ## 1.0.0 (2026-10-02)
 
 The first stable release, and the first one published on GitHub with a Windows build.

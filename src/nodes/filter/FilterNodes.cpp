@@ -2,7 +2,10 @@
 // Sizes are in full-resolution pixels; ctx.scale converts them for the preview proxy.
 #include <cmath>
 
+#include "core/ColorMath.h"
+#include "core/Noise.h"
 #include "gpu/Blur.h"
+#include "gpu/NoiseGlsl.h"
 #include "gpu/PointOp.h"
 #include "nodes/ImageOps.h"
 #include "nodes/NodeUtil.h"
@@ -762,6 +765,96 @@ public:
     }
 };
 
+// ---------------------------------------------------------------- grain
+
+// Lightroom's Effects > Grain: film grain, strongest in the mid-tones. The grain is gradient
+// noise in full-resolution pixels; a preview too small to show a grain averages it away, as the
+// export would look scaled down to the preview's size: finer than a preview pixel, it is drawn
+// at the pixel's size and weakened by the averaging (measured against box-averaged full-size
+// grain: about the grain-to-pixel ratio to the power 1.5, as gradient noise averages out faster
+// than independent grains would).
+class GrainNode : public Node {
+public:
+    enum { Amount, Size, Roughness, Seed };
+    NODELAB_NODE({"filter.grain", "Grain", "Filter",
+                  {{"Image", PinType::Image}, {"Amount", PinType::Channel, Amount}},
+                  {{"Image", PinType::Image}},
+                  {ParamDesc::Float("Amount", 25.0f, 0.0f, 100.0f), ParamDesc::Float("Size", 25.0f, 0.0f, 100.0f),
+                   ParamDesc::Float("Roughness", 50.0f, 0.0f, 100.0f), ParamDesc::Float("Seed", 0.0f, 0.0f, 100.0f)}})
+    int roiPadding(const EvalContext&) const override { return 0; }  // per pixel, at global positions
+
+    // The grain's size in full-resolution pixels, and what it is drawn at in this context.
+    struct Scale {
+        float cell;   // lattice spacing in working pixels
+        float atten;  // how much of the grain survives the preview's averaging
+    };
+    Scale grainScale(const EvalContext& ctx) const {
+        const float size = 1.0f + paramF(Size) / 100.0f * 3.0f;  // 1 .. 4 full-resolution pixels
+        const float s = std::max(ctx.scale, 1e-6f);
+        return {std::max(size * s, 1.0f), std::pow(std::min(size * s, 1.0f), 1.5f)};
+    }
+    // Amount 100 moves mid-grey by about 8% (one standard deviation), in display-referred values.
+    static constexpr float kStrength = 0.08f / 100.0f;
+    // The noise's standard deviation, for each part, so Roughness doesn't change the strength:
+    // fine grain, clumps at twice its size, and an uneven density at four times.
+    static constexpr float kPerlinStd = 0.32f;
+
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        ImagePtr src = toImage(in[0], 0, 0);
+        if (!src) return;
+        const PixelFrame f = frameOf(ctx, src->w, src->h);
+        ChannelPtr am = channelOr(in[1], paramF(Amount));
+        ChannelSampler sa = paramSampler(*this, 1, am, src->w, src->h);
+        const Scale gs = grainScale(ctx);
+        const float r = paramF(Roughness) / 100.0f;
+        const float fine = 1.0f - 0.5f * r, clump = 0.8f * r;
+        const float norm = gs.atten / (kPerlinStd * std::sqrt(fine * fine + clump * clump));
+        const uint32_t seed = uint32_t(std::max(0, int(std::round(paramF(Seed))))) * 3u;
+        const bool linear = ctx.linear();
+        out[0] = Value(ImagePtr(mapImage(*src, [&](int x, int y, const float* s, float* d) {
+            const float gx = (f.x0 + x + 0.5f) / gs.cell, gy = (f.y0 + y + 0.5f) / gs.cell;
+            float g = noise::perlin(gx, gy, seed) * fine + noise::perlin(gx * 0.5f + 17.3f, gy * 0.5f, seed + 1) * clump;
+            g *= 1.0f + 0.6f * r * noise::perlin(gx * 0.25f + 41.7f, gy * 0.25f, seed + 2);
+            float e[3];
+            for (int k = 0; k < 3; ++k) e[k] = linear ? colormath::linearToSrgb(s[k]) : s[k];
+            const float l = luminance(e[0], e[1], e[2]);
+            const float w = std::clamp(4.0f * l * (1.0f - l), 0.0f, 1.0f);
+            const float add = sa(x, y) * kStrength * w * g * norm;
+            for (int k = 0; k < 3; ++k) {
+                const float v = e[k] + add;
+                d[k] = clampColor(linear, linear ? colormath::srgbToLinear(v) : v);
+            }
+            d[3] = s[3];
+        })));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const Scale gs = grainScale(ctx);
+        const float r = paramF(Roughness) / 100.0f;
+        const float fine = 1.0f - 0.5f * r, clump = 0.8f * r;
+        const float norm = gs.atten / (kPerlinStd * std::sqrt(fine * fine + clump * clump));
+        gpu::PointOp op;
+        op.functions = kGlslNoise;
+        op.body = R"(
+    vec4 s = img0(p);
+    uint seed = uint(P[0]);
+    float gx = (float(uOrigin.x + p.x) + 0.5) / P[1], gy = (float(uOrigin.y + p.y) + 0.5) / P[1];
+    float g = nPerlin(gx, gy, seed) * P[2] + nPerlin(gx * 0.5 + 17.3, gy * 0.5, seed + 1u) * P[3];
+    g *= 1.0 + P[4] * nPerlin(gx * 0.25 + 41.7, gy * 0.25, seed + 2u);
+    vec3 e = uLinear ? linearToSrgb(s.rgb) : s.rgb;
+    float l = luminance(e);
+    float w = clamp(4.0 * l * (1.0 - l), 0.0, 1.0);
+    vec3 v = e + par1(p) * P[5] * w * g * P[6];
+    out0 = vec4(clampColor(uLinear, uLinear ? srgbToLinear(v) : v), s.a);
+)";
+        op.params = {float(uint32_t(std::max(0, int(std::round(paramF(Seed))))) * 3u), gs.cell, fine, clump, 0.6f * r,
+                     kStrength, norm};
+        op.defaults = {NAN, paramF(Amount)};
+        gpu::runOver(ctx, *this, op, in, out);
+    }
+};
+
 // ---------------------------------------------------------------- light effects
 
 class GlareNode : public Node {
@@ -968,4 +1061,5 @@ void registerFilterNodes(NodeRegistry& r) {
     r.add<PosterizeNode>();
     r.add<GlareNode>();
     r.add<SunBeamsNode>();
+    r.add<GrainNode>();
 }

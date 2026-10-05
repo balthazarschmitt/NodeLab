@@ -29,9 +29,10 @@ const std::vector<Menu> kLayout = {
      {"filter.blur", "filter.directional_blur", "filter.bilateral_blur", "filter.denoise", "filter.sharpen", "filter.spot_removal", "",  //
       "filter.filter", "filter.kuwahara", "filter.dilate_erode", "",                              //
       "filter.pixelate", "filter.posterize", "",                                                  //
-      "filter.glare", "filter.sun_beams"}},
+      "filter.glare", "filter.sun_beams", "filter.grain"}},
     {"Matte",
      {"matte.linear_gradient", "matte.radial_gradient", "matte.brush_mask", "matte.range_mask", "",  //
+      "matte.select_subject", "matte.select_sky", "",                                                 //
       "matte.box_mask", "matte.ellipse_mask", "matte.double_edge_mask", "",                           //
       "matte.channel_key", "matte.luminance_key", "conv.color_key", "matte.difference_key",
       "matte.distance_key", "matte.chroma_key", "matte.color_spill"}},

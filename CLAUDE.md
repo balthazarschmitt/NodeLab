@@ -118,11 +118,17 @@ src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (
               and custom colour themes: NodeEditor and ImageView draw themeable colours with
               theme::col), Preferences window and layout presets (in App),
               ParamWidgets (curve/ramp editors), ImageView, DisplayWorker (view transform and
-              histograms off the UI thread), LibraryPanel (filmstrip and Grid view, culling keys,
+              histograms off the UI thread), SystemStats (status bar's RAM/CPU), LibraryPanel (filmstrip and Grid view, culling keys,
               thumbnail worker), FileDialog (Win32), UiScript
+src/ml        AI masks' models: Models (catalogue pinned by size and SHA-256, WinHTTP downloads into
+              %APPDATA%\NodeLab\models, NuGet DLLs read by HTTP range from their zips), Http,
+              Onnx (ONNX Runtime + DirectML loaded at run time with LoadLibrary; C API headers in
+              third_party/onnxruntime). Nodes in nodes/matte/AutoMask (results cached by picture,
+              on disk in models/cache)
 src/gpu       Device (hidden GL 4.3 context sharing textures with the UI, texture pool, programs, timer queries, PBO downloads),
               GL (loader), PointOp (per-pixel nodes as GLSL bodies, fused into chains), Blur,
-              Reduce (exact percentiles by radix select), Display (viewer bytes and histogram)
+              Reduce (exact percentiles by radix select), Display (viewer bytes and histogram),
+              NoiseGlsl (core/Noise.h in GLSL)
 ```
 
 ## Conventions
@@ -218,6 +224,15 @@ src/gpu       Device (hidden GL 4.3 context sharing textures with the UI, textur
 - **Preferences:** `App::loadPreferences`/`savePreferences` (`%APPDATA%\NodeLab\preferences.json`).
   Automated runs neither load nor save them, never auto save, and keep the Inspector as a docked panel, so their
   scripts' coordinates hold.
+- **AI masks:** the exe never links ONNX Runtime; `ml::run` loads it on first use. Tests point
+  `ml::setFolder` at an empty folder (test_main), so nodes run without models; set
+  `NODELAB_ML_REAL=1` to test the installed ones. A model run can take a minute on the CPU, so
+  don't run AI nodes in loops. Interactive evaluations (`EvalContext::interactive`, set by
+  AsyncEvaluator) never wait for a model: `AutoMaskNode::infer` queues the run on its own thread
+  (the evaluation cancel would restart it on every edit) and the node shows a stand-in until
+  `resultGeneration()` bumps and the app re-evaluates. Exports and `--render` wait. CPU sessions are unloaded after each run (`SessionUse` in
+  Onnx.cpp) and run without ONNX Runtime's arena: BiRefNet peaks around 4 GB. DirectML is opt-in: on integrated GPUs its sessions take minutes
+  to create and can run out of memory.
 - **Image buffers:** `Image::px` uses `UninitAllocator`, so `Image(w, h)` zeroes and copies
   across threads. Big scratch buffers that are written before they're read can use it too
   (Denoise).

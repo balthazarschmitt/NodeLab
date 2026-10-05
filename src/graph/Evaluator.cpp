@@ -716,6 +716,7 @@ void AsyncEvaluator::run() {
             ctx.proxy = true;
             ctx.cache = &cache_;
             ctx.cancel = &cancel_;
+            ctx.interactive = true;
             ctx.proxyEdge = std::max(64, job.options.draft ? job.options.proxyEdge / 2 : job.options.proxyEdge);
             evaluator_.setLevel(job.options.draft ? Evaluator::Draft : Evaluator::Preview);
             initContextSize(g, ctx);
@@ -808,6 +809,7 @@ std::vector<AsyncEvaluator::Tile> AsyncEvaluator::evaluateDetails(const Graph& g
         EvalContext rctx;
         rctx.cache = &cache_;
         rctx.cancel = &cancel_;
+        rctx.interactive = true;
         if (!initRegionContext(g, rctx, level)) continue;
         rctx.gpu = ctx.gpu;
         rctx.gpuHalf = ctx.gpuHalf;

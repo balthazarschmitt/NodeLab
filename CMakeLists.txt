@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 # The app version. Bump it (and CHANGELOG.md) when a feature set lands; see CLAUDE.md.
-project(NodeLab VERSION 1.0.0 LANGUAGES C CXX)
+project(NodeLab VERSION 1.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -266,19 +266,27 @@ add_library(nodelab_core STATIC
     src/nodes/filter/SpotRemoval.cpp
     src/nodes/transform/TransformNodes.cpp
     src/nodes/matte/MatteNodes.cpp
+    src/nodes/matte/AutoMask.cpp
+    src/ml/Http.cpp
+    src/ml/Models.cpp
+    src/ml/Onnx.cpp
     src/nodes/texture/TextureNodes.cpp
     src/nodes/utility/UtilityNodes.cpp)
 target_include_directories(nodelab_core PUBLIC src)
+# ONNX Runtime's C API header (MIT): the runtime itself is loaded at run time (src/ml/Onnx.cpp).
+target_include_directories(nodelab_core PRIVATE third_party/onnxruntime)
 add_dependencies(nodelab_core nodelab_version)
 target_link_libraries(nodelab_core PUBLIC nlohmann_json::nlohmann_json stb tinyexpr libraw zlib glfw OpenGL::GL)
 if(WIN32)
     target_compile_definitions(nodelab_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(nodelab_core PUBLIC winhttp)  # AI model downloads (src/ml/Http.cpp)
 endif()
 
 # ---------------------------------------------------------------- application
 add_executable(NodeLab
     src/main.cpp
     src/ui/App.cpp
+    src/ui/SystemStats.cpp
     src/ui/ImageView.cpp
     src/ui/DisplayWorker.cpp
     src/ui/NodeEditor.cpp
@@ -319,7 +327,7 @@ if(NODELAB_BUILD_TESTS)
 
     enable_testing()
     add_executable(nodelab_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp tests/test_groups.cpp tests/test_nodes2.cpp tests/test_version.cpp tests/test_guide.cpp tests/test_layout.cpp tests/test_export.cpp tests/test_develop.cpp tests/test_ir_tools.cpp tests/test_expression_vm.cpp tests/test_parallel.cpp tests/test_colorpipe.cpp tests/test_develop_linear.cpp tests/test_raw_exif.cpp tests/test_image_write.cpp tests/test_roi.cpp tests/test_icc.cpp tests/test_gpu.cpp tests/test_denoise.cpp tests/test_masks.cpp tests/test_library.cpp tests/test_prefs.cpp tests/test_fuzz.cpp tests/test_jpeg_decode.cpp
-    tests/test_png_decode.cpp tests/test_decode_fuzz.cpp tests/test_node_menu.cpp tests/test_retouch.cpp tests/test_presets.cpp src/ui/Theme.cpp)
+    tests/test_png_decode.cpp tests/test_decode_fuzz.cpp tests/test_node_menu.cpp tests/test_retouch.cpp tests/test_presets.cpp tests/test_automask.cpp tests/test_grain.cpp src/ui/Theme.cpp)
     target_include_directories(nodelab_tests PRIVATE ${doctest_SOURCE_DIR})
     # Tests that load the shipped example projects find them here.
     target_compile_definitions(nodelab_tests PRIVATE NODELAB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

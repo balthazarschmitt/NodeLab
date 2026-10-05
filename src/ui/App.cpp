@@ -1,4 +1,6 @@
 #include "ui/App.h"
+#include "ml/Models.h"
+#include "ml/Onnx.h"
 
 #include <algorithm>
 #include <cctype>
@@ -25,6 +27,7 @@
 #include "io/ProjectFile.h"
 #include "nodes/group/GroupNodes.h"
 #include "nodes/io/IONodes.h"
+#include "nodes/matte/AutoMask.h"
 #include "nodes/matte/MatteNodes.h"
 #include "nodes/transform/TransformNodes.h"
 #include "nodes/utility/UtilityNodes.h"
@@ -36,6 +39,7 @@
 #include "nodes/filter/SpotRemoval.h"
 #include "ui/Inspector.h"
 #include "ui/NodeInspectors.h"
+#include "ui/SystemStats.h"
 #include "ui/UiScript.h"
 
 namespace fs = std::filesystem;
@@ -99,6 +103,7 @@ void App::loadPreferences() {
         const nlohmann::json j = nlohmann::json::parse(f);
         gpuDevice_ = j.value("compositorDevice", std::string("GPU")) == "GPU";
         gpuFull_ = j.value("compositorPrecision", std::string("Auto")) == "Full";
+        ml::setUseGpu(j.value("aiDevice", std::string("CPU")) == "GPU");
         inspectorOverlay_ = j.value("inspector", std::string("Overlay")) == "Overlay";
         editor_.showTimings = j.value("nodeTimings", editor_.showTimings);
         autosave_ = j.value("autosave", autosave_);
@@ -127,6 +132,7 @@ void App::savePreferences() const {
     std::ofstream f(tmp, std::ios::trunc);
     f << nlohmann::json{{"compositorDevice", gpuDevice_ ? "GPU" : "CPU"},
                         {"compositorPrecision", gpuFull_ ? "Full" : "Auto"},
+                        {"aiDevice", ml::useGpu() ? "GPU" : "CPU"},
                         {"inspector", inspectorOverlay_ ? "Overlay" : "Panel"},
                         {"nodeTimings", editor_.showTimings},
                         {"autosave", autosave_},
@@ -413,6 +419,16 @@ void App::drawFrame() {
         evalDirty_ = true;
     }
 
+    // An AI model was installed or removed: Select Subject and Select Sky re-run.
+    if (const int g = ml::generation(); g != mlGeneration_) {
+        mlGeneration_ = g;
+        evalDirty_ = true;
+    }
+    // A model finished in the background: its nodes show the real mask now.
+    if (const int g = AutoMaskNode::resultGeneration(); g != maskGeneration_) {
+        maskGeneration_ = g;
+        evalDirty_ = true;
+    }
     // Kick evaluation after the UI had a chance to change the graph this frame.
     const bool gesture = ImGui::IsAnyItemActive() || ImGui::IsMouseDown(ImGuiMouseButton_Left) || editor_.interacting();
     // The proxy follows the views' size; changed when no gesture (such as resizing a panel) is on.
@@ -906,6 +922,11 @@ void App::drawResultToolbar(Node* ov) {
         if (ImGui::MenuItem("Radial Gradient", "Shift+R")) addMask(int(recipes::MaskKind::Radial));
         if (ImGui::MenuItem("Brush", "K")) addMask(int(recipes::MaskKind::Brush));
         if (ImGui::MenuItem("Luminance Range")) addMask(int(recipes::MaskKind::Range));
+        // Lightroom's AI masks; the Inspector offers the model's download the first time.
+        ImGui::Separator();
+        if (ImGui::MenuItem("Subject")) addMask(int(recipes::MaskKind::Subject));
+        if (ImGui::MenuItem("Sky")) addMask(int(recipes::MaskKind::Sky));
+        if (ImGui::MenuItem("Background")) addMask(int(recipes::MaskKind::Background));
         // Keyboard navigation is off (Tab enters groups), so Escape doesn't close popups by itself.
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
@@ -959,6 +980,7 @@ void App::applyAutoTone(int nodeId) {
         EvalContext ctx;
         ctx.cache = &cache_;
         ctx.proxyEdge = 512;
+        ctx.interactive = true;  // on the UI thread: never wait for an AI model
         initContextSize(graph_, ctx);
         NodePath path = groupPath_;
         path.push_back(in->fromNode);
@@ -1019,10 +1041,76 @@ void App::drawStatusBar() {
                 st += "   (right-click or Esc cancels)";
             }
             ImGui::TextDisabled("%s", st.c_str());
+            drawStatusRight();
             ImGui::EndMenuBar();
         }
     }
     ImGui::End();
+}
+
+namespace {
+std::string gigabytes(uint64_t b) {
+    char s[32];
+    std::snprintf(s, sizeof s, b >= (uint64_t(1) << 30) ? "%.1f GB" : "%.0f MB",
+                  b >= (uint64_t(1) << 30) ? b / double(1 << 30) : b / double(1 << 20));
+    return s;
+}
+}  // namespace
+
+// Right of the status bar: an AI model running in the background, and the computer's load.
+void App::drawStatusRight() {
+    stats_.update();
+    const AutoMaskNode::Progress pr = AutoMaskNode::progress();
+    std::string ai;
+    float fraction = 0;
+    if (pr.running) {
+        const char* what = pr.model == "subject" ? "Selecting subject" : pr.model == "sky" ? "Selecting sky" : "AI mask";
+        char s[96];
+        if (pr.loading)
+            std::snprintf(s, sizeof s, "%s: loading the model, %.0f s", what, pr.seconds);
+        else
+            std::snprintf(s, sizeof s, "%s: %.0f s of about %.0f s", what, pr.seconds, pr.expected);
+        ai = s;
+        // Time, as the runtime reports no progress: held short of the end when it runs long.
+        fraction = float(std::min(pr.seconds / std::max(pr.expected, 1.0), 0.95));
+    }
+    const std::string mem = "NodeLab " + gigabytes(stats_.privateBytes);
+    char load[96];
+    std::snprintf(load, sizeof load, "RAM %s / %s   CPU %.0f%%", gigabytes(stats_.ramUsed).c_str(),
+                  gigabytes(stats_.ramTotal).c_str(), stats_.systemCpu * 100.0f);
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float barW = 120.0f;
+    float w = ImGui::CalcTextSize(mem.c_str()).x + ImGui::CalcTextSize(load).x + style.ItemSpacing.x * 3 + 8.0f;
+    if (pr.running) w += ImGui::CalcTextSize(ai.c_str()).x + barW + style.ItemSpacing.x * 2;
+    const float x = ImGui::GetWindowContentRegionMax().x - w;
+    if (x < ImGui::GetCursorPosX()) return;  // no room
+    ImGui::SetCursorPosX(x);
+    if (pr.running) {
+        ImGui::TextUnformatted(ai.c_str());
+        if (pr.queued && ImGui::IsItemHovered())
+            ImGui::SetTooltip("%d more waiting", pr.queued);
+        ImGui::ProgressBar(fraction, ImVec2(barW, ImGui::GetTextLineHeight() * 0.6f), "");
+        ImGui::SameLine(0, style.ItemSpacing.x * 2);
+    }
+    ImGui::TextDisabled("%s", mem.c_str());
+    const bool low = stats_.ramTotal && stats_.ramUsed > stats_.ramTotal / 10 * 9;
+    if (low)
+        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%s", load);
+    else
+        ImGui::TextDisabled("%s", load);
+    if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        ImGui::Text("NodeLab: %s committed, %s in RAM (peak %s), CPU %.0f%% of %d threads",
+                    gigabytes(stats_.privateBytes).c_str(), gigabytes(stats_.workingSet).c_str(),
+                    gigabytes(stats_.peakWorkingSet).c_str(), stats_.cpu * 100.0f, stats_.cores);
+        ImGui::Text("System: %s of %s RAM in use, CPU %.0f%%", gigabytes(stats_.ramUsed).c_str(),
+                    gigabytes(stats_.ramTotal).c_str(), stats_.systemCpu * 100.0f);
+        if (gpu::available())
+            ImGui::Text("GPU textures: %s in use, %s pooled", gigabytes(gpu::bytesInUse()).c_str(),
+                        gigabytes(gpu::bytesPooled()).c_str());
+        if (low) ImGui::TextUnformatted("Memory is nearly full: Windows swaps to disk, which slows everything down.");
+        ImGui::EndTooltip();
+    }
 }
 
 // ---------------------------------------------------------------- menus & shortcuts
@@ -1806,6 +1894,39 @@ bool App::drawCompositorSettings() {
     return changed;
 }
 
+// Select Subject and Select Sky: where their models run, and the downloaded models.
+bool App::drawAiSettings() {
+    bool changed = false;
+    ImGui::TextDisabled("Device");
+    if (ImGui::RadioButton("CPU##ai", !ml::useGpu())) changed = ml::useGpu(), ml::setUseGpu(false);
+    if (ImGui::RadioButton("GPU (DirectML)##ai", ml::useGpu())) changed = !ml::useGpu(), ml::setUseGpu(true);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Much faster on a dedicated graphics card. Integrated GPUs can take minutes to load a\n"
+                          "model or run out of memory; a model that fails there runs on the CPU instead.");
+    ImGui::TextDisabled("Models (in %s)", ml::folder().c_str());
+    const bool installing = ml::installState().running;
+    for (const ml::ModelSpec& m : ml::catalogue()) {
+        ImGui::PushID(m.id);
+        const bool have = ml::installed(m.id);
+        uint64_t size = 0;
+        for (const ml::FileSpec& f : m.files) size += f.size;
+        ImGui::Text("%s", m.title);
+        ImGui::SameLine(ImGui::GetFontSize() * 9);
+        ImGui::TextDisabled("%s", have ? "installed" : "not downloaded");
+        if (have) {
+            ImGui::SameLine(ImGui::GetFontSize() * 16);
+            ImGui::BeginDisabled(installing);
+            char label[48];
+            std::snprintf(label, sizeof label, "Remove (%.0f MB)", size / 1e6);
+            if (ImGui::SmallButton(label)) ml::remove(m.id);
+            ImGui::EndDisabled();
+        }
+        ImGui::PopID();
+    }
+    ImGui::TextDisabled("Select Subject and Select Sky offer the download when they need it.");
+    return changed;
+}
+
 // Edit > Preferences, as Blender's: sections on the left, their settings on the right. Every
 // change is kept in preferences.json straight away.
 void App::drawPreferencesWindow() {
@@ -1977,6 +2098,11 @@ void App::drawPreferencesWindow() {
         case 3:  // Compositor
             ImGui::SeparatorText("Performance");
             if (drawCompositorSettings()) {
+                evalDirty_ = true;
+                changed = true;
+            }
+            ImGui::SeparatorText("AI Masks");
+            if (drawAiSettings()) {
                 evalDirty_ = true;
                 changed = true;
             }

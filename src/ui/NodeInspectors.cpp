@@ -10,7 +10,10 @@
 
 #include "core/ColorMath.h"
 #include "io/ImageIO.h"
+#include "ml/Models.h"
+#include "ml/Onnx.h"
 #include "nodes/filter/SpotRemoval.h"
+#include "nodes/matte/AutoMask.h"
 #include "nodes/matte/MatteNodes.h"
 #include "ui/ViewerOverlay.h"
 
@@ -285,6 +288,60 @@ bool colorKey(Node& n, const ParamRow& row) {
     return changed;
 }
 
+// ---------------------------------------------------------------- Select Subject / Sky
+
+// The model's status, and its download (with the runtime the first time), like Lightroom's
+// "download AI models" prompt. Installing bumps ml::generation(), which re-evaluates the graph.
+static void autoMask(AutoMaskNode& n, const ParamRow& row) {
+    for (int i = 0; i < int(n.params.size()); ++i) row(i);
+    ImGui::Spacing();
+    const std::string id = n.model().id;
+    const ml::ModelSpec* spec = ml::findModel(id);
+    if (!spec) return;
+    const ml::InstallState st = ml::installState();
+    ImGui::PushTextWrapPos(0.0f);
+    if (st.running) {
+        const bool ours = st.id == id;
+        ImGui::TextDisabled("%s", ours ? "Downloading the model..." : "Another model is downloading...");
+        char text[64];
+        std::snprintf(text, sizeof text, "%.0f / %.0f MB", st.done / 1e6, st.total / 1e6);
+        ImGui::ProgressBar(st.total ? float(double(st.done) / double(st.total)) : 0.0f, ImVec2(-1, 0), text);
+        if (ImGui::Button("Cancel")) ml::cancelInstall();
+    } else if (!ml::available(id)) {
+        ImGui::TextUnformatted("This node needs an AI model, which isn't part of NodeLab.exe. Until it is "
+                               "downloaded the mask is empty.");
+        ImGui::TextDisabled("%s (%s licence)", spec->source, spec->license);
+        if (st.id == id && !st.error.empty()) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", st.error.c_str());
+        char label[64];
+        std::snprintf(label, sizeof label, "Download (%.0f MB)", ml::downloadSize(id) / 1e6);
+        if (ImGui::Button(label)) ml::startInstall(id);
+    } else {
+        const AutoMaskNode::Progress pr = AutoMaskNode::progress();
+        if (pr.running && pr.model == id) {
+            char text[64];
+            if (pr.loading)
+                std::snprintf(text, sizeof text, "Loading the model... %.0f s", pr.seconds);
+            else
+                std::snprintf(text, sizeof text, "%.0f s of about %.0f s", pr.seconds, pr.expected);
+            ImGui::TextUnformatted(pr.seconds > pr.expected * 1.5 && pr.seconds > 10
+                                       ? "Running the model, longer than usual (is memory full?)"
+                                       : "Running the model...");
+            // Time, as the runtime reports no progress: held short of the end when it runs long.
+            ImGui::ProgressBar(float(std::min(pr.seconds / std::max(pr.expected, 1.0), 0.95)), ImVec2(-1, 0), text);
+            ImGui::TextDisabled("Until it finishes, the mask is empty (or a similar picture's). You can keep editing.");
+        } else if (pr.running) {
+            ImGui::TextDisabled("Waiting for another AI mask to finish...");
+        }
+        const std::string err = n.lastError();
+        if (!err.empty()) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", err.c_str());
+        ImGui::TextDisabled("%s, on the %s. %s licence.", spec->source, ml::useGpu() ? "GPU when it can" : "CPU",
+                            spec->license);
+        ImGui::TextDisabled("The model runs once per picture (it can take a minute on a laptop CPU); "
+                            "its results are cached.");
+    }
+    ImGui::PopTextWrapPos();
+}
+
 bool drawNodeInspector(Node& n, const ParamRow& row, bool& changed) {
     if (NodeOverlay::supports(n)) {
         const char* hint = n.info().type == "xform.crop"
@@ -325,6 +382,8 @@ bool drawNodeInspector(Node& n, const ParamRow& row, bool& changed) {
             changed = true;
         }
         ImGui::EndDisabled();
+    } else if (auto* am = dynamic_cast<AutoMaskNode*>(&n)) {
+        autoMask(*am, row);
     } else if (t == "io.image_input") {
         for (int i = 0; i < int(n.params.size()); ++i) row(i);
         // Which profile Embedded Profile applies, so a P3 or Adobe RGB photo is recognisable.

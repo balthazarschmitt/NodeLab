@@ -18,6 +18,10 @@ F1 (or the **Guide** button in the Inspector) jumps straight to that node's entr
   By default it floats in the Node Editor's top-right corner while a node is selected; in
   **Edit > Preferences > Interface** (or **View > Inspector Overlay**) it can be a panel instead.
 - **Result** (right): what the Output node receives, or the node you are previewing.
+- **Status bar** (bottom): the preview's size and how long it took, then on the right an AI mask
+  being computed (with its progress), NodeLab's memory, and the whole computer's RAM and CPU use.
+  Hover it for details. The RAM turns orange when it is nearly full: Windows then swaps to disk,
+  which slows everything down.
 
 Every panel is a tab that can be dragged. Drop it on the edge of another panel to dock it there,
 or outside the window to float it. **View > Layout** offers ready-made arrangements, like
@@ -151,7 +155,7 @@ Middle-drag still pans and the wheel still zooms while these controls are shown.
 **Add Mask** (on the Result toolbar) makes a local adjustment in one step, like Lightroom's
 "Create New Mask". It inserts a **Basic** labelled "Mask N" right before the Output and wires a
 new mask into its Factor: Linear Gradient, Radial Gradient, Brush (its Image wired for Auto
-Mask) or Luminance Range. The mask is selected, so you can shape or paint it straight away, and
+Mask), Luminance Range, or the AI masks Subject, Sky and Background (Select Subject inverted). The mask is selected, so you can shape or paint it straight away, and
 the Inspector shows its settings with the Basic's sliders underneath. With the mouse over the
 Result: Shift+M opens the menu, M adds a Linear Gradient, Shift+R a Radial Gradient and K a
 Brush. One Ctrl+Z removes the whole adjustment.
@@ -790,6 +794,17 @@ Sizes are in full-resolution pixels.
 - Light rays radiating from a point (Source X/Y, 0..1). Bright areas are smeared away from the
   source. Length sets how far.
 
+**Grain**
+- Film grain, like Lightroom's Effects > Grain. It is monochrome and strongest in the mid-tones;
+  pure black and white stay clean.
+- **Amount:** how strong the grain is. Connect a mask to the Amount pin to vary it.
+- **Size:** the grain's size, from 1 to 4 pixels of the full-resolution image. The
+  preview shows grain smaller than its pixels as the export would look scaled down to the
+  preview's size: weaker and finer. Zoom to 100% to judge it.
+- **Roughness:** low is fine and even grain; high mixes in coarser clumps and an uneven density.
+- **Seed:** another pattern of the same grain.
+- Put it near the end of the graph, after sharpening and resizing would soften it.
+
 ### Transform
 
 These move pixels around. Pixels pulled from outside the image are transparent, unless noted
@@ -892,6 +907,36 @@ with the matte applied as alpha.
   be and still be selected.
 - **Invert** selects everything else instead.
 
+**Select Subject**
+- Lightroom's Select Subject: an AI model finds the main subject of the photo (people, animals,
+  objects in front) and the node outputs it as a mask. Wire the photo into **Image**.
+- The model isn't part of NodeLab.exe. The first time, the Inspector offers to download it
+  (about 240 MB with the AI runtime, once; stored in `%APPDATA%\NodeLab\models`). Until then the
+  mask is empty. `NodeLab.exe --install-model subject` downloads it from the command line.
+- The model sees a 1024 x 1024 copy of the photo, so it runs once per picture, not per pixel:
+  about a minute on a laptop CPU, a second or two on a good GPU (Edit > Preferences >
+  Compositor > AI Masks). Results are cached by picture, also on disk, so the export, the zoomed
+  views and reopening the project reuse it. Edits upstream that only change tones (exposure,
+  white balance, contrast) keep the mask; a crop or a retouch runs the model again.
+- While editing, the model runs in the background: everything else keeps updating, and the mask
+  stays empty (or shows the previous picture's) until it is done. The Inspector and the status
+  bar show its progress. File > Export and `--render` wait for it.
+- While it runs, the model needs about 4 GB of memory on the CPU; it is unloaded as soon as it
+  finishes. On a computer with 8 GB, close other big programs if it is slow.
+- **Refine Edges** fits the mask's edges to the full-resolution photo (a guided filter), so hair
+  and outlines stay crisp at any size. **Invert** selects the background instead (Add Mask >
+  Background). An incoming **Mask** limits the result to it.
+- Run it on the photo itself, before colour swaps or heavy grading: the model was trained on
+  ordinary photos. For an infrared edit, wire the image from before the channel swap.
+
+**Select Sky**
+- Lightroom's Select Sky: an AI model (a U²-Net trained on skies) masks the sky, up to the
+  horizon, trees and rooftops. It works like **Select Subject**: a one-time download (about
+  190 MB, or 175 MB once the runtime is there), the same caching, **Refine Edges** for crisp
+  edges at full resolution, **Invert** for everything but the sky, and an optional **Mask**.
+- It runs in a second or two on the CPU. Typical use: Add Mask > Sky, then lower the Basic's
+  Exposure or Highlights, or raise Dehaze, for the sky only.
+
 **Channel Key**
 - Keys on a single channel: Red, Green, Blue, Hue, Saturation, Value, Y (luma), Cb or Cr.
 - Pixels at or below Low are kept; pixels at or above High are removed, with a soft transition
@@ -962,7 +1007,8 @@ Coordinates are relative to the image, so textures look the same in the preview 
 
 **White Noise**
 - Random values per pixel (or per block of Grain Size pixels).
-- **Uses:** film grain (blend with Overlay or Add at low Factor), dithering, and digital static.
+- **Uses:** dithering, digital static and blocky grain (blend with Overlay or Add at low Factor). For
+  film grain, use the Grain node.
 
 ### Utility
 
@@ -1271,6 +1317,8 @@ look.
 4. To refine a mask, chain masks: wire a gradient into a **Range Mask**'s Mask input to keep
    only the bright sky inside it, or into a Brush Mask to paint areas in or out. Each Add Mask
    stacks another adjustment after the last.
+5. **Subject**, **Sky** and **Background** masks are found by AI models (**Select Subject**,
+   **Select Sky**). The first one asks you to download its model in the Inspector.
 
 The same graph can be built by hand: any colour node with a mask wired into its Factor.
 

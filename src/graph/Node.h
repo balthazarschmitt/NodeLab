@@ -140,6 +140,10 @@ struct EvalContext {
     float scale = 1.0f;
     ImageCache* cache = nullptr;
     const std::atomic<bool>* cancel = nullptr;
+    // An interactive preview, cancelled and restarted on every edit: slow work that doesn't
+    // depend on the edits (AI models) runs in the background, and the node shows what it has
+    // meanwhile. Exports and renders wait for it.
+    bool interactive = false;
     // The project's (root graph's) colour management. Nodes check linear() for the working space;
     // File Output uses the view transform to write display images.
     ColorManagement colorManagement;

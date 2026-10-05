@@ -7,8 +7,13 @@
 
 namespace recipes {
 
-// Lightroom's mask tools: Linear Gradient, Radial Gradient, Brush, and Range (luminance).
-enum class MaskKind { Linear, Radial, Brush, Range };
+// Lightroom's mask tools: Linear Gradient, Radial Gradient, Brush, Range (luminance), and the AI
+// masks Subject, Sky and Background (Select Subject inverted).
+enum class MaskKind { Linear, Radial, Brush, Range, Subject, Sky, Background };
+// The menu names, in MaskKind order.
+constexpr const char* kMaskKindNames[] = {"Linear Gradient", "Radial Gradient", "Brush", "Luminance Range",
+                                          "Subject",         "Sky",             "Background"};
+constexpr int kMaskKinds = 7;
 
 struct AddedMask {
     int adjust = 0;  // the new Basic
@@ -18,15 +23,15 @@ struct AddedMask {
 
 // Adds a local adjustment at the end of the chain: a new Basic inserted right before the Output
 // (the first Output node), with a new mask wired into its Factor. Brush and Range masks also get
-// the image entering the Basic on their Image input (for Auto Mask and the range). The Basic is
+// the image entering the Basic on their Image input (for Auto Mask, the range and the AI masks). The Basic is
 // labelled "Mask N". Returns nothing (and changes nothing) if there is no Output fed by an image.
 AddedMask addMask(Graph& g, MaskKind kind);
 
 // Limits the edit made by a chain of nodes to a mask, like Blender's compositor recipe of a Mix
 // after the edit: a Mix (labelled "Mask N") goes after the chain's last node, with A = the image
 // entering the chain (from outside it), B = the edited image and Factor = a new mask. Wires that
-// left the chain now leave the Mix, and the nodes downstream move right to make room. Range and
-// Brush masks get the entering image. `adjust` is the Mix. Fails (changing nothing) if the
+// left the chain now leave the Mix, and the nodes downstream move right to make room. Range,
+// Brush and AI masks get the entering image. `adjust` is the Mix. Fails (changing nothing) if the
 // chain has no image output.
 AddedMask maskNodes(Graph& g, const std::set<int>& ids, MaskKind kind);
 

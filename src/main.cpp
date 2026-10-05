@@ -17,6 +17,7 @@
 #include "io/ImageIO.h"
 #include "io/Paths.h"
 #include "io/ProjectFile.h"
+#include "ml/Models.h"
 #include "nodes/io/IONodes.h"
 #include "nodes/utility/UtilityNodes.h"
 #include "ui/App.h"
@@ -267,6 +268,24 @@ int main(int argc, char** argv) {
         attachParentConsole();
         listNodes();
         return 0;
+    }
+    // NodeLab.exe --install-model subject|sky : downloads an AI model (and the runtime) as the
+    // Inspector's Download button does.
+    if (argc >= 3 && std::string(argv[1]) == "--install-model") {
+        attachParentConsole();
+        const ml::ModelSpec* m = ml::findModel(argv[2]);
+        if (!m || std::string(argv[2]) == ml::kRuntime) {
+            std::fprintf(stderr, "Unknown model '%s' (subject or sky)\n", argv[2]);
+            return 1;
+        }
+        std::printf("Installing %s: %.0f MB to %s\n", m->title, double(ml::downloadSize(argv[2])) / 1e6,
+                    ml::folder().c_str());
+        const std::string err = ml::installNow(argv[2], [](uint64_t done, uint64_t total) {
+            std::printf("\r%5.1f%%", total ? 100.0 * double(done) / double(total) : 100.0);
+            std::fflush(stdout);
+        });
+        std::printf("\n%s\n", err.empty() ? "Done" : err.c_str());
+        return err.empty() ? 0 : 1;
     }
     // Note: argv is in the ANSI code page on Windows; fine for ASCII paths in headless mode.
     if (argc >= 4 && std::string(argv[1]) == "--render") {

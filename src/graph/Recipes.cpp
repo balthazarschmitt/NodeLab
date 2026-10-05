@@ -19,8 +19,29 @@ const char* maskType(MaskKind k) {
         case MaskKind::Linear: return "matte.linear_gradient";
         case MaskKind::Radial: return "matte.radial_gradient";
         case MaskKind::Brush: return "matte.brush_mask";
+        case MaskKind::Subject:
+        case MaskKind::Background: return "matte.select_subject";
+        case MaskKind::Sky: return "matte.select_sky";
         default: return "matte.range_mask";
     }
+}
+
+// The pin a mask reads the image on, or -1: Range and the AI masks look at the image being
+// adjusted, and Brush's Auto Mask does.
+int imagePin(MaskKind k) {
+    switch (k) {
+        case MaskKind::Range:
+        case MaskKind::Subject:
+        case MaskKind::Sky:
+        case MaskKind::Background: return 0;
+        case MaskKind::Brush: return 1;
+        default: return -1;
+    }
+}
+
+// Select Background is Select Subject inverted.
+void setupMask(Node& mask, MaskKind k) {
+    if (k == MaskKind::Background) mask.params[1] = true;  // AutoMaskNode::Invert
 }
 
 // "Mask N", one more than the highest N already used, so names stay unique after deletions.
@@ -77,9 +98,8 @@ AddedMask addMask(Graph& g, MaskKind kind) {
     g.connect(srcNode, srcPin, basic->id, 0);
     g.connect(basic->id, 0, outId, 0);
     g.connect(mask->id, 0, basic->id, kBasicFactorPin);
-    // Range and Brush (Auto Mask) look at the image being adjusted.
-    if (kind == MaskKind::Range) g.connect(srcNode, srcPin, mask->id, 0);
-    if (kind == MaskKind::Brush) g.connect(srcNode, srcPin, mask->id, 1);
+    setupMask(*mask, kind);
+    if (imagePin(kind) >= 0) g.connect(srcNode, srcPin, mask->id, imagePin(kind));
     return {basic->id, mask->id};
 }
 
@@ -151,8 +171,8 @@ AddedMask maskNodes(Graph& g, const std::set<int>& ids, MaskKind kind) {
     if (entryNode) g.connect(entryNode, entryPin, mix->id, 0);
     g.connect(exitNode, exitPin, mix->id, 1);
     g.connect(mask->id, 0, mix->id, kMixFactorPin);
-    if (entryNode && kind == MaskKind::Range) g.connect(entryNode, entryPin, mask->id, 0);
-    if (entryNode && kind == MaskKind::Brush) g.connect(entryNode, entryPin, mask->id, 1);
+    setupMask(*mask, kind);
+    if (entryNode && imagePin(kind) >= 0) g.connect(entryNode, entryPin, mask->id, imagePin(kind));
     return {mix->id, mask->id};
 }
 

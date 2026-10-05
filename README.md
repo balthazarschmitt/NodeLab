@@ -11,6 +11,9 @@ It's a single portable exe for 64-bit Windows 10/11 (OpenGL 3.0 or newer) and ne
 The zip also has the guide, the changelog and example projects. Help > Guide shows the same guide
 inside the app.
 
+The AI masks (Select Subject, Select Sky) download their models on first use, from the
+Inspector: about 240 MB for Subject and 190 MB for Sky, into `%APPDATA%\NodeLab\models`.
+
 ## Build (Windows)
 
 Requires CMake ≥ 3.24 and a C++20 compiler. CLion's bundled MinGW toolchain works out of the box:
@@ -55,6 +58,8 @@ Benchmark: `NodeLab.exe --benchmark project.nlproj [--full] [--runs N]` (median 
 GPU compositing: `--device gpu|cpu` and `--precision half|full` for `--render` (CPU by default) and
 `--benchmark` (GPU, half by default); `NodeLab.exe --gpu-info` names the GPU device or says why
 there is none. In the app: View > Compositor.
+AI models: `NodeLab.exe --install-model subject|sky` downloads one (and the ONNX Runtime) without
+the UI.
 Open an image directly (also works with Windows' Open with): `NodeLab.exe photo.CR2` starts a new
 project with it.
 
@@ -120,7 +125,7 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Spot removal | Select a Spot Removal node, click a blemish on the Result, drag its source onto clean texture; drag a spot to move it, its edge to resize; Alt+click or Delete removes one |
 | Auto tone | Basic's Inspector → Auto sets Exposure, Contrast, Highlights, Shadows, Whites and Blacks from the image |
 | Auto save | Every 5 minutes by default (Edit > Preferences > Save & Load), once a project has been saved (library photos always) |
-| Add Mask | Result toolbar → Add Mask (Shift+M over the Result), or M linear, Shift+R radial, K brush: inserts a Basic labelled "Mask N" before the Output, driven by a new mask; the Inspector shows the mask with the Basic's sliders below it |
+| Add Mask | Result toolbar → Add Mask (Shift+M over the Result), or M linear, Shift+R radial, K brush (also Luminance Range and the AI masks Subject, Sky and Background): inserts a Basic labelled "Mask N" before the Output, driven by a new mask; the Inspector shows the mask with the Basic's sliders below it |
 | Import image | File > Import Image, or drop a file on the window |
 | Library | File > Open Folder (Ctrl+Shift+O), drop a folder on the window, or `NodeLab.exe <folder>`: a filmstrip of the folder's photos. Click or ←/→ to open one; its edit is saved automatically in `<photo>.nlproj` beside it. New photos start as Image Input → Denoise → Basic → Output |
 | Culling | In the Library: 0-5 rate, P pick, X reject, U unflag; Ctrl+click / Shift+click select several; the filter menu shows picks, stars, rejects or edited photos |
@@ -153,9 +158,9 @@ layout is saved per user in `%APPDATA%\NodeLab\layout.ini`.
 | Color | Basic (Lightroom's exposure, highlights/shadows, whites/blacks, texture, clarity, dehaze, vibrance), Color Mixer (8-band HSL), Color Grading (shadow/midtone/highlight/global wheels), Brightness / Contrast, Saturation, Hue Shift, Hue Correct (per-hue H/S/V curves), Exposure, Gamma, Levels, Curves, Color Balance (Lift/Gamma/Gain, ASC CDL), Tone Map, Convert Colorspace, Invert, Luminance, Split/Combine RGB, HSV, HSL, Lab, YCbCr, YUV |
 | Mix | Mix, Blend (19 modes), Alpha Over |
 | Converter | Color Ramp, Color Key, Map Range, Math (21 ops), Clamp, Threshold, Normalize (min/max or percentiles), Float Curve, Set Alpha, Wavelength (nm to color), Blackbody (Kelvin to color), Expression, Image Expression |
-| Filter | Blur (pixels or Relative %), Directional Blur (+spin/zoom), Bilateral Blur (both with a Fast quality), Denoise (Luminance/Color, wavelets), Sharpen (Amount, Radius, Detail, Masking), Spot Removal (Heal / Clone, on the Result), Filter (Soften, Sharpen, Laplace, Sobel, Prewitt, Kirsch, Shadow), Dilate / Erode, Kuwahara, Pixelate, Posterize, Glare (Fog Glow, Streaks, Simple Star), Sun Beams |
+| Filter | Blur (pixels or Relative %), Directional Blur (+spin/zoom), Bilateral Blur (both with a Fast quality), Denoise (Luminance/Color, wavelets), Sharpen (Amount, Radius, Detail, Masking), Spot Removal (Heal / Clone, on the Result), Filter (Soften, Sharpen, Laplace, Sobel, Prewitt, Kirsch, Shadow), Dilate / Erode, Kuwahara, Pixelate, Posterize, Glare (Fog Glow, Streaks, Simple Star), Sun Beams, Grain (Amount, Size, Roughness, as Lightroom) |
 | Transform | Transform, Flip, Crop (straighten, aspect presets, on-image frame), Lens Correction (distortion, fringing, vignetting), Lens Distortion (with chromatic dispersion), Displace, Map UV, Corner Pin |
-| Matte | Box Mask, Ellipse Mask, Radial Gradient, Linear Gradient, Brush Mask (painted on the Result, with Auto Mask), Range Mask (luminance or colour range), Channel Key, Luminance Key, Difference Key, Distance Key, Chroma Key, Color Spill, Double Edge Mask |
+| Matte | Box Mask, Ellipse Mask, Radial Gradient, Linear Gradient, Brush Mask (painted on the Result, with Auto Mask), Range Mask (luminance or colour range), Select Subject and Select Sky (AI masks, models downloaded on first use), Channel Key, Luminance Key, Difference Key, Distance Key, Chroma Key, Color Spill, Double Edge Mask |
 | Texture | Noise, Voronoi, Gradient, Wave, Checker, White Noise |
 | Utility | Reroute, Switch, Split (compare), Image Info, File Output (PNG/JPEG/TIFF/OpenEXR; written on single Export / File > Write File Outputs / --render) |
 | Group | Groups (Ctrl+G) with Group Input / Group Output inside, and Value Input / Value Output for single sockets |
@@ -179,6 +184,7 @@ src/gpu     GPU device (OpenGL 4.3 compute), per-pixel kernels and their fusion 
             reductions (exact percentiles)
 src/nodes   Node implementations by family (io, color, math, converter, group)
 src/io      Image load/save, source image cache, project files
+src/ml      AI models: downloads (WinHTTP, pinned SHA-256), ONNX Runtime loaded at run time
 src/ui      App window, node editor (imnodes), inspector, image views, file dialogs
 tests       doctest unit tests
 ```
@@ -190,4 +196,6 @@ Adding a node: write a class with a `NODELAB_NODE({...})` descriptor and `evalua
 
 NodeLab is released under the [MIT License](LICENSE). The release exe statically links GLFW (zlib),
 Dear ImGui (MIT), nlohmann/json (MIT), stb (public domain / MIT), tinyexpr (zlib), zlib-ng (zlib)
-and LibRaw (LGPL 2.1 / CDDL 1.0, used under CDDL).
+and LibRaw (LGPL 2.1 / CDDL 1.0, used under CDDL). The AI masks download ONNX Runtime and DirectML
+(MIT) and their models (BiRefNet and U²-Net sky segmentation, MIT) on first use; they aren't
+part of the exe. `third_party/onnxruntime` has ONNX Runtime's C API headers (MIT).

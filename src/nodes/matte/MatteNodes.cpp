@@ -1,6 +1,7 @@
 // Matte nodes: shape masks and keyers. Keyers output a Matte channel (1 = keep) and the keyed
 // image (color * matte, alpha = matte).
 #include "nodes/matte/MatteNodes.h"
+#include "nodes/matte/AutoMask.h"
 
 #include <cmath>
 #include <cstring>
@@ -954,6 +955,8 @@ void registerMatteNodes(NodeRegistry& r) {
     r.add<LinearGradientNode>();
     r.add<BrushMaskNode>();
     r.add<RangeMaskNode>();
+    r.add<SelectSubjectNode>();
+    r.add<SelectSkyNode>();
     r.add<ChannelKeyNode>();
     r.add<LuminanceKeyNode>();
     r.add<DifferenceKeyNode>();

@@ -12,6 +12,7 @@
 #include "graph/Layout.h"
 #include "graph/NodeMenu.h"
 #include "graph/NodeRegistry.h"
+#include "graph/Recipes.h"
 #include "nodes/group/GroupNodes.h"
 #include "io/ImageIO.h"
 #include "io/ImageWrite.h"
@@ -1546,9 +1547,8 @@ void NodeEditor::drawNodeMenu(Graph& g, int& preview, Result& r) {
     if (ImGui::BeginMenu("Mask Selected Nodes")) {
         // Their edit applies only where a new mask is white: a Mix after them blends it with
         // what came in, so it works with any nodes (not just Basic's Factor).
-        static constexpr const char* kKinds[] = {"Linear Gradient", "Radial Gradient", "Brush", "Luminance Range"};
-        for (int k = 0; k < 4; ++k)
-            if (ImGui::MenuItem(kKinds[k])) {
+        for (int k = 0; k < recipes::kMaskKinds; ++k)
+            if (ImGui::MenuItem(recipes::kMaskKindNames[k])) {
                 r.maskSelection = k;
                 r.maskNodes.assign(selection_.begin(), selection_.end());
             }
