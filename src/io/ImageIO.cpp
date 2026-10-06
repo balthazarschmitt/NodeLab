@@ -20,6 +20,7 @@
 #include "core/Parallel.h"
 #include "io/Exif.h"
 #include "io/ExrDecode.h"
+#include "io/ImageCodecs.h"
 #include "io/Icc.h"
 #include "io/Paths.h"
 #include "io/JpegDecode.h"
@@ -109,7 +110,7 @@ std::string lowerExt(const std::string& pathU8) {
 // What a file says about its pixels beyond their values.
 struct FileMeta {
     bool linearData = false;  // float samples (OpenEXR, float TIFF): scene-linear light
-    int orientation = 1;      // TIFF orientation tag (JPEGs read theirs from EXIF)
+    int orientation = 1;      // TIFF's orientation tag, JPEG XL's and AVIF's (JPEGs read EXIF)
 };
 
 std::shared_ptr<Image> loadStb(const std::string& pathU8, std::string& err, bool srgbToLinear,
@@ -166,6 +167,14 @@ std::shared_ptr<Image> loadStb(const std::string& pathU8, std::string& err, bool
         });
         return img;
     }
+    if (codecs::sniff(bytes, file.size()) != codecs::Kind::None) {
+        codecs::Decoded d;
+        if (!codecs::decode(bytes, file.size(), d, err)) return nullptr;
+        auto img = std::make_shared<Image>(d.w, d.h);
+        meta.orientation = d.orientation;
+        decodePixels<uint16_t>(d.rgba.data(), *img, 65536, srgbToLinear, profile);
+        return img;
+    }
     if (file.size() > size_t(INT_MAX)) {
         err = "file too large";
         return nullptr;
@@ -215,7 +224,7 @@ void finishLinearData(Image& img, const DecodeOptions& opt) {
 }  // namespace
 
 const char* const kImageFileFilter =
-    "Images|*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.exr;*.bmp;*.tga;*.cr2;*.cr3;*.crw;*.nef;*.nrw;*.arw;*.srf;*.sr2;*.dng;*.raf;*.orf;"
+    "Images|*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.exr;*.webp;*.jxl;*.avif;*.bmp;*.tga;*.cr2;*.cr3;*.crw;*.nef;*.nrw;*.arw;*.srf;*.sr2;*.dng;*.raf;*.orf;"
     "*.rw2;*.pef;*.srw;*.3fr;*.iiq;*.x3f;*.mos;*.erf;*.kdc;*.mrw;*.raw;*.rwl|All files|*.*";
 
 bool isLinearImageFile(const std::string& pathU8) {
@@ -229,8 +238,8 @@ bool isLinearImageFile(const std::string& pathU8) {
 
 bool isImageFile(const std::string& pathU8) {
     const std::string e = lowerExt(pathU8);
-    return e == ".png" || e == ".jpg" || e == ".jpeg" || e == ".tif" || e == ".tiff" || e == ".exr" || e == ".bmp" ||
-           e == ".tga" || raw::isRawPath(pathU8);
+    return e == ".png" || e == ".jpg" || e == ".jpeg" || e == ".tif" || e == ".tiff" || e == ".exr" || e == ".webp" ||
+           e == ".jxl" || e == ".avif" || e == ".bmp" || e == ".tga" || raw::isRawPath(pathU8);
 }
 
 std::shared_ptr<Image> loadImage(const std::string& pathU8, std::string& err, const DecodeOptions& opt, bool preview,

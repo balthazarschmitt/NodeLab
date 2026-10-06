@@ -7,6 +7,7 @@
 
 #include <zlib.h>
 
+#include "io/ImageCodecs.h"
 #include "io/Paths.h"
 #include "io/TiffDecode.h"
 
@@ -219,6 +220,17 @@ float Curve::eval(float x) const {
 }
 
 std::vector<uint8_t> embeddedProfile(const std::string& pathU8) {
+    // WebP, JPEG XL and AVIF: their decoders find it (or build it from CICP), from the whole file.
+    {
+        std::ifstream s(u8ToPath(pathU8), std::ios::binary);
+        uint8_t head[16] = {};
+        s.read(reinterpret_cast<char*>(head), sizeof head);
+        if (codecs::sniff(head, size_t(s.gcount())) != codecs::Kind::None) {
+            std::vector<char> file;
+            if (!readFileBytes(pathU8, file)) return {};
+            return codecs::profile(reinterpret_cast<const uint8_t*>(file.data()), file.size());
+        }
+    }
     const Bytes f = readProfileSegments(pathU8);
     if (f.size() >= 2 && ((f[0] == 'I' && f[1] == 'I') || (f[0] == 'M' && f[1] == 'M'))) {
         // TIFF: the directory's ICC tag. Float TIFFs are scene-linear data, so theirs isn't used.

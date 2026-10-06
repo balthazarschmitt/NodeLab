@@ -13,6 +13,7 @@
 #include "io/ImageIO.h"
 #include "io/Paths.h"
 #include "graph/NodeRegistry.h"
+#include "core/OutputSpace.h"
 #include "core/ColorManagement.h"
 #include "gpu/Device.h"
 #include "gpu/Blur.h"
@@ -954,5 +955,38 @@ TEST_CASE("GPU nodes match the CPU on one-pixel-wide images") {
                 }
             }
         }
+    }
+}
+
+TEST_CASE("GPU display's gamut warning marks the pixels the CPU does") {
+    if (!gpuReady()) return;
+    const int w = 64, h = 32;
+    auto img = std::make_shared<Image>(w, h);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            float* p = img->pixel(size_t(y) * w + x);
+            const float u = float(x) / w, v = float(y) / h;
+            p[0] = 1.2f * u, p[1] = 0.6f - 0.8f * v, p[2] = 0.3f * u - 0.1f, p[3] = 1.0f;
+        }
+    ColorManagement cm = ColorManagement::sceneLinear();
+    for (int space : {int(outspace::sRGB), int(outspace::DisplayP3), int(outspace::ProPhoto)}) {
+        CAPTURE(space);
+        gpu::DisplayResult r;
+        {
+            gpu::Scope scope;
+            r = gpu::display(Value(img), cm, false, false, false, space);
+        }
+        REQUIRE(r.bytes.size() == size_t(w) * h * 4);
+        float m[9];
+        outspace::gamutMatrix(space, m);
+        int marked = 0, differ = 0;
+        for (size_t i = 0; i < size_t(w) * h; ++i) {
+            const bool cpu = outspace::outOfGamut(m, img->pixel(i));
+            const bool gpu = r.bytes[i * 4] == 255 && r.bytes[i * 4 + 1] == 0 && r.bytes[i * 4 + 2] == 255;
+            marked += cpu;
+            differ += cpu != gpu;
+        }
+        CHECK(differ <= w * h / 200);  // values within float rounding of the edge
+        if (space == outspace::sRGB) CHECK(marked > w * h / 4);
     }
 }

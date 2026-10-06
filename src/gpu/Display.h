@@ -26,7 +26,9 @@ struct DisplayResult {
 // `scene` is an image or channel on the device (a channel shows as grey), or a CPU image or
 // channel, which is uploaded. Needs a Scope; throws gpu::Error on device failures.
 // keepTexture (only with sharesUiContext()) returns the texture instead of reading it back.
+// gamut >= 0 marks colours outside that export space (outspace::Space) magenta: soft proofing's
+// gamut warning, for scene-linear projects with the Standard view.
 DisplayResult display(const Value& scene, const ColorManagement& cm, bool clipping, bool histogram,
-                      bool keepTexture = false);
+                      bool keepTexture = false, int gamut = -1);
 
 }  // namespace gpu

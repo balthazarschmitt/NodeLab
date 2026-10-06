@@ -2,6 +2,7 @@
 // the right linear Rec.709 colours.
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -10,6 +11,8 @@
 #include <zlib.h>
 
 #include "graph/Graph.h"
+#include "core/OutputSpace.h"
+#include "io/Export.h"
 #include "io/Icc.h"
 #include "io/ImageIO.h"
 #include "io/ImageWrite.h"
@@ -192,4 +195,105 @@ TEST_CASE("Image Input applies embedded profiles only to sRGB images in scene-li
     CHECK_FALSE(in.decode(true).embeddedProfile);
     in.params[0] = "photo.CR2";
     CHECK_FALSE(in.paramVisible(5));
+}
+
+TEST_CASE("Exports in wider colour spaces embed their profile and read back to the same colours") {
+    ColorManagement cm = ColorManagement::sceneLinear();
+    cm.view = ColorManagement::Standard;
+
+    for (int space : {int(outspace::DisplayP3), int(outspace::AdobeRGB), int(outspace::ProPhoto), int(outspace::Rec2020)}) {
+        CAPTURE(outspace::kNames[space]);
+        icc::Profile p;
+        REQUIRE(icc::parse(iccProfile(space), p));
+        CHECK(p.name.find(std::string(outspace::kNames[space]).substr(0, 5)) != std::string::npos);
+        CHECK_FALSE(icc::isSrgb(p));
+        // The profile undoes the export's matrix: fromRec709 then toRec709 is the identity.
+        const outspace::Mat3& m = outspace::fromRec709(space);
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 3; ++c) {
+                double v = 0;
+                for (int k = 0; k < 3; ++k) v += p.toRec709[r][k] * m[k][c];
+                CHECK(v == doctest::Approx(r == c ? 1.0 : 0.0).epsilon(0.002));
+            }
+
+        // A green inside the space but outside sRGB, and a grey, scene-linear.
+        const float g[3] = {0.05f, 0.7f, 0.05f};
+        float green[4] = {0, 0, 0, 1};
+        for (int r = 0; r < 3; ++r) green[r] = p.toRec709[r][0] * g[0] + p.toRec709[r][1] * g[1] + p.toRec709[r][2] * g[2];
+        CHECK(std::min(green[0], green[2]) < -0.01f);
+        Image scene(2, 1);
+        const float grey[4] = {0.18f, 0.18f, 0.18f, 1.0f};
+        std::copy(green, green + 4, scene.pixel(0));
+        std::copy(grey, grey + 4, scene.pixel(1));
+        auto sp = std::make_shared<const Image>(scene);
+
+        const fs::path path = fs::temp_directory_path() / ("nodelab_space_" + std::to_string(space) + ".png");
+        SaveOptions opt;
+        opt.depth = 16;
+        opt.space = space;
+        std::string err;
+        REQUIRE(saveRendered(path.string(), sp, cm, opt, err));
+        CHECK(icc::embeddedProfile(path.string()) == iccProfile(space));
+        auto back = loadImage(path.string(), err, withProfile(true));
+        REQUIRE(back);
+        // The wide spaces hold the green sRGB can't; grey stays grey.
+        for (int c = 0; c < 3; ++c) {
+            CHECK(back->pixel(0)[c] == doctest::Approx(green[c]).epsilon(0.004));
+            CHECK(back->pixel(1)[c] == doctest::Approx(0.18f).epsilon(0.004));
+        }
+    }
+    // sRGB's profile is the one earlier versions wrote.
+    CHECK(&iccProfile(outspace::sRGB) == &srgbIccProfile());
+}
+
+TEST_CASE("HDR PNG export: Rec.2100 PQ with a cICP chunk, highlights kept above white") {
+    Image scene(2, 1);
+    const float white[4] = {1, 1, 1, 1}, bright[4] = {4, 4, 4, 1};
+    std::copy(white, white + 4, scene.pixel(0));
+    std::copy(bright, bright + 4, scene.pixel(1));
+    auto sp = std::make_shared<const Image>(scene);
+    ColorManagement cm = ColorManagement::sceneLinear();
+    auto d = displayInSpace(sp, cm, outspace::Rec2100PQ);
+    // Reference white at 203 nits is PQ 0.58; four times brighter stays brighter, unclipped.
+    CHECK(d->pixel(0)[0] == doctest::Approx(0.5807f).epsilon(0.002));
+    CHECK(d->pixel(1)[0] > d->pixel(0)[0] + 0.1f);
+    CHECK(d->pixel(1)[0] < 1.0f);
+
+    const fs::path path = fs::temp_directory_path() / "nodelab_hdr.png";
+    SaveOptions opt;
+    opt.depth = 16;
+    opt.space = outspace::Rec2100PQ;
+    std::string err;
+    REQUIRE(saveRendered(path.string(), sp, cm, opt, err));
+    const Bytes f = readAll(path);
+    const std::string s(f.begin(), f.end());
+    const size_t at = s.find("cICP");
+    REQUIRE(at != std::string::npos);
+    CHECK(Bytes(f.begin() + at + 4, f.begin() + at + 8) == Bytes{9, 16, 0, 1});
+    CHECK(s.find("sRGB") == std::string::npos);
+
+    // The export settings send HDR to PNG at 16 bits, and other formats to Rec.2020.
+    ExportSettings es;
+    es.colorSpace = outspace::Rec2100PQ;
+    es.format = ExportSettings::PNG;
+    CHECK(es.saveOptions("", 2, 1).depth == 16);
+    es.format = ExportSettings::JPEG;
+    CHECK(es.saveOptions("", 2, 1).space == outspace::Rec2020);
+}
+
+TEST_CASE("Soft proofing's gamut warning marks colours outside the space") {
+    float m[9];
+    const float inside[3] = {0.5f, 0.4f, 0.3f}, p3Red[3] = {1.2249f, -0.0420f, -0.0196f}, laser[3] = {1.6f, -0.3f, -0.1f};
+    outspace::gamutMatrix(outspace::sRGB, m);
+    CHECK_FALSE(outspace::outOfGamut(m, inside));
+    CHECK(outspace::outOfGamut(m, p3Red));
+    outspace::gamutMatrix(outspace::DisplayP3, m);
+    CHECK_FALSE(outspace::outOfGamut(m, p3Red));
+    CHECK(outspace::outOfGamut(m, laser));
+    // (P3's red lies on ProPhoto's red-green edge, so test inside it.)
+    const float orange[3] = {1.1f, -0.02f, 0.01f};
+    outspace::gamutMatrix(outspace::ProPhoto, m);
+    CHECK_FALSE(outspace::outOfGamut(m, orange));
+    outspace::gamutMatrix(outspace::sRGB, m);
+    CHECK(outspace::outOfGamut(m, orange));
 }

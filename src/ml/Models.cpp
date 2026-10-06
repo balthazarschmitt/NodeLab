@@ -49,6 +49,21 @@ const std::vector<ModelSpec>& catalogue() {
          {{"skyseg.onnx",
            "https://huggingface.co/JianyuanWang/skyseg/resolve/3ba8c6df1d9ba9ff26f637c7ba9568ac11a9aa7f/skyseg.onnx",
            nullptr, 175997079, 175997079, "ab9c34c64c3d821220a2886a4a06da4642ffa14d5b30e8d5339056a089aa1d39"}}},
+        // Select Landscape and Select Objects: SegFormer-B2 on ADE20K's 150 classes of scenes
+        // and things, 512 x 512. Size and hash from the Hugging Face API (LFS metadata).
+        {"scene", "Scene model", "SegFormer-B2 on ADE20K (NVIDIA, Xie et al.), ONNX export by Xenova",
+         "NVIDIA Source Code License (non-commercial)",
+         {{"segformer-b2-ade.onnx",
+           "https://huggingface.co/Xenova/segformer-b2-finetuned-ade-512-512/resolve/"
+           "df795789e70f4089c8658907679c6fd2367c89a5/onnx/model.onnx",
+           nullptr, 110445327, 110445327, "819c15e6af8c4de3359c1de7ab0a17d0dde495df1d16f8908a7163f8038e0fa0"}}},
+        // Select People: SegFormer-B5 fine-tuned on CelebAMask-HQ's 19 face parts, 512 x 512.
+        {"face", "Face parts model", "SegFormer-B5 face parsing on CelebAMask-HQ (jonathandinu), ONNX export by Xenova",
+         "NVIDIA Source Code License, CelebAMask-HQ (non-commercial)",
+         {{"face-parsing.onnx",
+           "https://huggingface.co/jonathandinu/face-parsing/resolve/"
+           "758b82e15a0178c9db39c1ff666a8b56e3a550c8/onnx/model.onnx",
+           nullptr, 340316611, 340316611, "6d4e67af60ff78184745ebf74cc15163c0adc27d45cdeba31e3a03d1096fb8c3"}}},
     };
     return list;
 }

@@ -1330,10 +1330,299 @@ private:
     }
 };
 
+// ---------------------------------------------------------------- Tone Equalizer
+
+// darktable's Tone Equalizer: a gain per exposure band (-8 to 0 EV, one stop apart), read from a
+// mask of the image's exposure that a guided filter smooths within regions but not across edges,
+// so a sky or a face brightens as a whole and keeps its local contrast. It works on linear light
+// in both kinds of project (legacy ones are decoded and re-encoded).
+constexpr int kToneBands = 9;
+// As darktable does, the curve through the bands' gains is a sum of Gaussians (about 0.6 EV
+// wide) whose weights are solved so it passes exactly through each band's value: a slider sets
+// the gain at its exposure, and the curve between bands is smooth.
+constexpr float kToneSpread = 1.4f;  // 1 / (2 sigma^2)
+
+// The Gaussians' weights for the band gains (Gaussian elimination on the 9 x 9 system; it is
+// diagonally dominant, so no pivoting is needed).
+void toneWeights(const float* gains, float* alpha) {
+    double K[kToneBands][kToneBands + 1];
+    for (int i = 0; i < kToneBands; ++i) {
+        for (int j = 0; j < kToneBands; ++j) K[i][j] = std::exp(-double((i - j) * (i - j)) * kToneSpread);
+        K[i][kToneBands] = gains[i];
+    }
+    for (int c = 0; c < kToneBands; ++c)
+        for (int r = c + 1; r < kToneBands; ++r) {
+            const double f = K[r][c] / K[c][c];
+            for (int k = c; k <= kToneBands; ++k) K[r][k] -= f * K[c][k];
+        }
+    for (int r = kToneBands - 1; r >= 0; --r) {
+        double v = K[r][kToneBands];
+        for (int k = r + 1; k < kToneBands; ++k) v -= K[r][k] * alpha[k];
+        alpha[r] = float(v / K[r][r]);
+    }
+}
+
+std::vector<ParamDesc> toneEqParams() {
+    std::vector<ParamDesc> p{ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f)};
+    for (int i = 0; i < kToneBands; ++i) p.push_back(ParamDesc::Float(std::to_string(i - 8) + " EV", 0.0f, -2.0f, 2.0f));
+    p.push_back(ParamDesc::Float("Smoothing", 2.0f, 0.0f, 10.0f));
+    p.push_back(ParamDesc::Float("Feathering", 5.0f, 0.1f, 100.0f));
+    p.push_back(ParamDesc::Float("Mask Exposure", 0.0f, -4.0f, 4.0f));
+    p.push_back(ParamDesc::Float("Mask Contrast", 0.0f, -2.0f, 2.0f));
+    p.push_back(ParamDesc::Bool("Show Mask", false));
+    return p;
+}
+
+float toneGainEv(float e, const float* alpha) {
+    e = std::clamp(e, -8.0f, 0.0f);
+    float sum = 0;
+    for (int i = 0; i < kToneBands; ++i) {
+        const float d = e - float(i - 8);
+        sum += alpha[i] * std::exp(-d * d * kToneSpread);
+    }
+    return sum;
+}
+
+class ToneEqualizerNode : public Node {
+public:
+    enum { Factor = 0, Band0 = 1, Smoothing = 10, Feathering, MaskExposure, MaskContrast, ShowMask };
+    NODELAB_NODE({"color.tone_equalizer", "Tone Equalizer", "Color",
+                  {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
+                  {{"Image", PinType::Image}},
+                  toneEqParams(), false, true})
+
+    int roiPadding(const EvalContext& ctx) const override {
+        const float sigma = maskSigma(ctx, ctx.defaultW, ctx.defaultH);
+        return sigma > 0.0f ? guidedReach(sigma) : 0;
+    }
+
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        ImagePtr src = toImage(in[0], 0, 0);
+        if (!src) return;
+        const bool lin = ctx.linear();
+        const int w = src->w, h = src->h;
+        const PixelFrame fr = frameOf(ctx, w, h);
+        std::vector<float> ev(size_t(w) * h);
+        parallelFor(h, [&](int y) {
+            for (int x = 0; x < w; ++x) {
+                const float* s = src->pixel(size_t(y) * w + x);
+                ev[size_t(y) * w + x] = evOf(lin ? luma(s) : srgbToLinear(clamp01(luma(s))));
+            }
+        });
+        const float sigma = maskSigma(ctx, w, h);
+        if (sigma > 0.0f) ev = fastGuidedSmooth(ev, w, h, sigma, eps(), fr.x0, fr.y0);
+        float gains[kToneBands], alpha[kToneBands];
+        for (int i = 0; i < kToneBands; ++i) gains[i] = paramF(Band0 + i);
+        toneWeights(gains, alpha);
+        const float shift = paramF(MaskExposure), scale = std::exp2(paramF(MaskContrast));
+        const bool show = paramB(ShowMask);
+        auto img = std::make_shared<Image>(w, h);
+        parallelFor(h, [&](int y) {
+            for (int x = 0; x < w; ++x) {
+                const size_t i = size_t(y) * w + x;
+                // Contrast spreads the mask around -4 EV, the middle of the bands.
+                const float m = (ev[i] + shift + 4.0f) * scale - 4.0f;
+                const float* s = src->pixel(i);
+                float* d = img->pixel(i);
+                d[3] = s[3];
+                if (show) {
+                    const float t = clamp01((m + 8.0f) / 8.0f);
+                    d[0] = d[1] = d[2] = lin ? srgbToLinear(t) : t;
+                    continue;
+                }
+                const float g = std::exp2(toneGainEv(m, alpha));
+                for (int k = 0; k < 3; ++k)
+                    d[k] = lin ? clampColor(true, s[k] * g) : clamp01(linearToSrgb(srgbToLinear(clamp01(s[k])) * g));
+            }
+        });
+        if (!show) applyFactor(*this, *src, *img, in[1], lin);
+        out[0] = Value(ImagePtr(img));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const bool lin = ctx.linear();
+        int w, h;
+        if (!in[0].size(w, h)) throw gpu::Error("GPU: Tone Equalizer needs an image");
+        const PixelFrame fr = frameOf(ctx, w, h);
+        const std::string functions = kGlslDevelop + std::string(lin ? "const bool LIN = true;\n" : "const bool LIN = false;\n") +
+                                      "float teEv(float y) { return log2(max(y, 1.0 / 65536.0)); }\n";
+        gpu::PointOp e;
+        e.w = w, e.h = h;
+        e.full = true;
+        e.functions = functions;
+        e.body = "    vec3 c = img0(p).rgb;\n    out0 = teEv(LIN ? luminance(c) : srgbToLinear(clamp01(luminance(c))));\n";
+        Value mask = gpu::runPass(ctx, e, {in[0]}, {false})[0];
+        const float sigma = maskSigma(ctx, w, h);
+        if (sigma > 0.0f) mask = guidedGpu(ctx, mask, w, h, sigma, eps(), true, fr.x0, fr.y0);
+        gpu::PointOp op;
+        op.defaults = {NAN, 1.0f};
+        // P: the Gaussians' weights, then the mask's shift and scale.
+        float gains[kToneBands], alpha[kToneBands];
+        for (int i = 0; i < kToneBands; ++i) gains[i] = paramF(Band0 + i);
+        toneWeights(gains, alpha);
+        op.params.assign(alpha, alpha + kToneBands);
+        op.params.push_back(paramF(MaskExposure));
+        op.params.push_back(std::exp2(paramF(MaskContrast)));
+        op.functions = functions + (paramB(ShowMask) ? "const bool SHOW = true;\n" : "const bool SHOW = false;\n") +
+                       "const float SPREAD = " + std::to_string(kToneSpread) + ";\n" + R"(
+float toneGainEv(float e) {
+    e = clamp(e, -8.0, 0.0);
+    float sum = 0.0;
+    for (int i = 0; i < 9; ++i) {
+        float d = e - float(i - 8);
+        sum += P[i] * exp(-d * d * SPREAD);
+    }
+    return sum;
+}
+)";
+        op.body = R"(
+    vec4 s = img0(p);
+    float m = (ch2(p) + P[9] + 4.0) * P[10] - 4.0;
+    if (SHOW) {
+        float t = clamp01((m + 8.0) / 8.0);
+        out0 = vec4(vec3(LIN ? srgbToLinear(t) : t), s.a);
+        return;
+    }
+    float g = exp2(toneGainEv(m));
+    vec3 d = LIN ? max(s.rgb * g, 0.0) : clamp01(linearToSrgb(srgbToLinear(clamp01(s.rgb)) * g));
+    out0 = applyFactor(s, d, par1(p), LIN);)";
+        gpu::runOver(ctx, *this, op, {in[0], in[1], mask}, out);
+    }
+
+private:
+    // The guided filter's radius (Smoothing is a percentage of the image's long edge) and its
+    // edge threshold in EV^2 (more Feathering follows edges more closely).
+    float maskSigma(const EvalContext& ctx, int w, int h) const {
+        const float s = paramF(Smoothing);
+        if (!(s > 0.0f)) return 0.0f;
+        const PixelFrame fr = frameOf(ctx, w, h);
+        return std::max(float(std::max(fr.fullW, fr.fullH)) * s / 100.0f, 1.0f);
+    }
+    float eps() const { return 2.5f / std::max(paramF(Feathering), 0.1f); }
+};
+
+// ---------------------------------------------------------------- Color Equalizer
+
+// darktable's Color Equalizer: hue, saturation and brightness per hue, at eight nodes on Oklch's
+// hue circle. Each pixel takes a Gaussian blend of the nodes around its hue (Smoothness widens
+// it), and everything fades out with chroma, so greys stay put. Brightness moves Oklab lightness
+// rather than exposure, so saturation holds.
+constexpr int kEqNodes = 8;
+constexpr const char* kEqNames[kEqNodes] = {"Red", "Orange", "Yellow", "Green", "Cyan", "Blue", "Lavender", "Magenta"};
+constexpr float kEqHues[kEqNodes] = {29.0f, 60.0f, 110.0f, 142.0f, 195.0f, 264.0f, 295.0f, 328.0f};
+
+std::vector<ParamDesc> colorEqParams() {
+    std::vector<ParamDesc> p{ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f)};
+    for (const char* what : {"Hue", "Saturation", "Brightness"})
+        for (const char* n : kEqNames)
+            p.push_back(*what == 'H' ? ParamDesc::Float(std::string(n) + " " + what, 0.0f, -45.0f, 45.0f)
+                                     : ParamDesc::Float(std::string(n) + " " + what, 0.0f, -100.0f, 100.0f));
+    p.push_back(ParamDesc::Float("Smoothness", 1.0f, 0.2f, 3.0f));
+    return p;
+}
+
+class ColorEqualizerNode : public Node {
+public:
+    NODELAB_NODE({"color.color_equalizer", "Color Equalizer", "Color",
+                  {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
+                  {{"Image", PinType::Image}},
+                  colorEqParams(), false, true})
+
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        ImagePtr src = toImage(in[0], 0, 0);
+        if (!src) return;
+        const bool lin = ctx.linear();
+        float hue[kEqNodes], sat[kEqNodes], bri[kEqNodes];
+        for (int i = 0; i < kEqNodes; ++i)
+            hue[i] = paramF(1 + i), sat[i] = paramF(9 + i) / 100, bri[i] = paramF(17 + i) / 100;
+        const float spread = spreadOf();
+        auto img = mapImage(*src, [&](int, int, const float* s, float* d) {
+            float c[3];
+            for (int k = 0; k < 3; ++k) c[k] = lin ? s[k] : srgbToLinear(clamp01(s[k]));
+            float lab[3];
+            colorsci::rgbToOklab(c, lab);
+            const float C = std::sqrt(lab[1] * lab[1] + lab[2] * lab[2]);
+            float hDeg = (C > 0.0f ? std::atan2(lab[2], lab[1]) : 0.0f) * 57.29578f;
+            if (hDeg < 0.0f) hDeg += 360.0f;
+            float dh = 0, ds = 0, db = 0, wsum = 0;
+            for (int i = 0; i < kEqNodes; ++i) {
+                float gap = std::fabs(hDeg - kEqHues[i]);
+                gap = std::min(gap, 360.0f - gap);
+                const float w = std::exp(-gap * gap * spread);
+                dh += w * hue[i], ds += w * sat[i], db += w * bri[i], wsum += w;
+            }
+            // Hues no slider reaches keep their value exactly, without a trip through Oklab.
+            if (dh == 0.0f && ds == 0.0f && db == 0.0f) {
+                std::copy(s, s + 4, d);
+                return;
+            }
+            const float colourful = smooth(0.0f, 0.04f, C) / wsum;
+            const float h = (hDeg + dh * colourful) * 0.017453293f, cc = C * std::max(0.0f, 1.0f + ds * colourful);
+            // Brightness: +-100 moves lightness by up to a quarter of the way to white or black.
+            const float L = lab[0] + db * colourful * 0.25f * (db > 0 ? std::max(1.0f - lab[0], 0.0f) : lab[0]);
+            const float o[3] = {L, cc * std::cos(h), cc * std::sin(h)};
+            colorsci::oklabToRgb(o, c);
+            colorsci::compressToGamut(c);
+            for (int k = 0; k < 3; ++k) d[k] = lin ? clampColor(true, c[k]) : clamp01(linearToSrgb(c[k]));
+            d[3] = s[3];
+        });
+        applyFactor(*this, *src, *img, in[1], lin);
+        out[0] = Value(ImagePtr(img));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const bool lin = ctx.linear();
+        gpu::PointOp op;
+        op.defaults = {NAN, 1.0f};
+        // P: the node hues, their hue, saturation and brightness moves (8 each), then the spread.
+        op.params.assign(kEqHues, kEqHues + kEqNodes);
+        for (int i = 0; i < kEqNodes; ++i) op.params.push_back(paramF(1 + i));
+        for (int i = 0; i < kEqNodes; ++i) op.params.push_back(paramF(9 + i) / 100);
+        for (int i = 0; i < kEqNodes; ++i) op.params.push_back(paramF(17 + i) / 100);
+        op.params.push_back(spreadOf());
+        op.functions = kGlslDevelop + std::string(lin ? "const bool LIN = true;\n" : "const bool LIN = false;\n");
+        op.body = R"(
+    vec4 s = img0(p);
+    vec3 c = LIN ? s.rgb : srgbToLinear(clamp01(s.rgb));
+    vec3 lab = rgbToOklab(c);
+    float C = sqrt(lab.y * lab.y + lab.z * lab.z);
+    float hDeg = atan2C(lab.z, lab.y) * 57.29578;
+    if (hDeg < 0.0) hDeg += 360.0;
+    vec3 adj = vec3(0.0);
+    float wsum = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        float gap = abs(hDeg - P[i]);
+        gap = min(gap, 360.0 - gap);
+        float w = exp(-gap * gap * P[32]);
+        adj += w * vec3(P[8 + i], P[16 + i], P[24 + i]);
+        wsum += w;
+    }
+    if (adj == vec3(0.0)) { out0 = applyFactor(s, s.rgb, par1(p), LIN); return; }
+    float colourful = smoothT(0.0, 0.04, C) / wsum;
+    float h = (hDeg + adj.x * colourful) * 0.017453293, cc = C * max(0.0, 1.0 + adj.y * colourful);
+    float L = lab.x + adj.z * colourful * 0.25 * (adj.z > 0.0 ? max(1.0 - lab.x, 0.0) : lab.x);
+    vec3 d = compressToGamut(oklabToRgb(vec3(L, cc * cos(h), cc * sin(h))));
+    d = LIN ? max(d, 0.0) : clamp01(linearToSrgb(d));
+    out0 = applyFactor(s, d, par1(p), LIN);)";
+        gpu::runOver(ctx, *this, op, in, out);
+    }
+
+private:
+    // 1 / (2 sigma^2) in degrees: Smoothness 1 gives sigma 20 degrees, about half the nodes' gap.
+    float spreadOf() const {
+        const float sigma = 20.0f * std::clamp(paramF(26), 0.2f, 3.0f);
+        return 1.0f / (2.0f * sigma * sigma);
+    }
+};
+
 }  // namespace
 
 void registerDevelopNodes(NodeRegistry& r) {
     r.add<BasicNode>();
+    r.add<ToneEqualizerNode>();
+    r.add<ColorEqualizerNode>();
     r.add<ColorMixerNode>();
     r.add<ColorGradingNode>();
 }

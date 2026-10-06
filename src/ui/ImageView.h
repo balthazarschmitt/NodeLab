@@ -75,6 +75,8 @@ struct PickRequest {
 struct ImageOverlay {
     virtual ~ImageOverlay() = default;
     virtual bool update(ImDrawList* dl, const ImVec2& imgMin, const ImVec2& imgMax, bool hovered, bool active) = 0;
+    // Ctrl+wheel goes to the overlay (Pan and Zoom's zoom) instead of zooming the view.
+    virtual bool wantsCtrlWheel() const { return false; }
 };
 
 // Per-channel histogram (256 bins) of an image, for the viewer's histogram overlay.

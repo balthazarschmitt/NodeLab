@@ -15,10 +15,12 @@
 #include "io/Export.h"
 #include "io/ImageCache.h"
 #include "io/ImageIO.h"
+#include "io/Library.h"
 #include "io/Paths.h"
 #include "io/ProjectFile.h"
 #include "ml/Models.h"
 #include "nodes/io/IONodes.h"
+#include "nodes/matte/AutoMask.h"
 #include "nodes/utility/UtilityNodes.h"
 #include "ui/App.h"
 
@@ -65,12 +67,13 @@ private:
     bool started_ = false;
 };
 
-// NodeLab.exe --render project.nlproj out.png [--depth N] [--device gpu [--precision half]] [--timings] :
-// evaluate at full resolution without a window. The extension picks the format (.png, .jpg, .tif, .exr); --depth 16 for 16-bit PNG/TIFF,
-// 32 for full-float EXR. --timings prints how long loading and evaluating, the view transform and
-// encoding took.
-static int renderHeadless(const std::string& project, const std::string& outPath, int depth, const HeadlessDevice& dev,
-                          bool timings) {
+// NodeLab.exe --render project.nlproj out.png [--depth N] [--quality Q] [--device gpu [--precision half]] [--timings] :
+// evaluate at full resolution without a window. The extension picks the format (.png, .jpg, .tif, .exr, .webp, .jxl,
+// .avif); --depth 16 for 16-bit PNG/TIFF/JPEG XL (10-bit AVIF), 32 for full-float EXR. --quality sets
+// JPEG's quality and makes WebP, JPEG XL and AVIF lossy at it (they're lossless without it).
+// --timings prints how long loading and evaluating, the view transform and encoding took.
+static int renderHeadless(const std::string& project, const std::string& outPath, int depth, int quality,
+                          const HeadlessDevice& dev, bool timings) {
     using Clock = std::chrono::steady_clock;
     const auto t0 = Clock::now();
     auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
@@ -99,6 +102,11 @@ static int renderHeadless(const std::string& project, const std::string& outPath
         ev.releaseIntermediates = true;
         ImagePtr img = ev.evaluateDisplay(g, outId, ctx);
         if (ev.gpuFallbacks) std::fprintf(stderr, "%d nodes ran on the CPU instead: %s\n", ev.gpuFallbacks, ev.lastGpuError.c_str());
+        // An AI mask whose model failed is empty, which looks like a picture with nothing in it.
+        for (const auto& [id, n] : g.nodes())
+            if (const auto* mask = dynamic_cast<const AutoMaskNode*>(n.get()))
+                if (const std::string e = mask->lastError(); !e.empty())
+                    std::fprintf(stderr, "%s: %s\n", n->info().displayName.c_str(), e.c_str());
         if (!img) {
             std::fprintf(stderr, "Output node produced no image\n");
             return 1;
@@ -107,7 +115,11 @@ static int renderHeadless(const std::string& project, const std::string& outPath
         SaveOptions opt;
         opt.format = formatFromPath(outPath);
         opt.depth = depth;
-        if (opt.format == FileFormat::JPEG) opt.exif = exif::exportBlock(metadataSource(g), img->w, img->h);
+        if (quality > 0) opt.jpegQuality = std::clamp(quality, 1, 100), opt.lossless = false;
+        if (hasQuality(opt.format)) opt.exif = exif::exportBlock(metadataSource(g), img->w, img->h);
+        // A library sidecar's title, caption, keywords and rating.
+        if (auto lib = ui.find("library"); lib != ui.end() && lib->is_object())
+            opt.xmp = library::xmpPacket(library::Meta::fromJson(*lib));
         if (!saveRendered(outPath, img, ctx.colorManagement, opt, err)) {
             std::fprintf(stderr, "save failed: %s\n", err.c_str());
             return 1;
@@ -190,7 +202,7 @@ static int benchmarkHeadless(const std::string& project, bool full, int runs, bo
     return 0;
 }
 
-// NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr] [--depth N] in1 in2 ... : runs
+// NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr|--webp|--jxl|--avif] [--depth N] [--quality Q] in1 in2 ... : runs
 // each source image through the project (fed into its first Image Input) and writes
 // outDir/<name>_edit.<ext>, or as the project's filename template names it. Unset options come
 // from the project's Export settings.
@@ -212,13 +224,22 @@ static int batchHeadless(const std::string& project, const std::string& outDir, 
         else if (a == "--png") s.format = ExportSettings::PNG;
         else if (a == "--tif") s.format = ExportSettings::TIFF;
         else if (a == "--exr") s.format = ExportSettings::EXR;
+        else if (a == "--webp") s.format = ExportSettings::WEBP;
+        else if (a == "--jxl") s.format = ExportSettings::JXL;
+        else if (a == "--avif") s.format = ExportSettings::AVIF;
         else if (a == "--depth" && i + 1 < args.size()) s.depth = std::atoi(args[++i].c_str());
+        else if (a == "--quality" && i + 1 < args.size())
+            s.jpegQuality = std::clamp(std::atoi(args[++i].c_str()), 1, 100), s.lossless = false;
         else if (a.rfind("--", 0) != 0) sources.push_back(a);
     }
     std::vector<NameSource> names;
     for (const std::string& a : sources) names.push_back({a});
     const std::vector<std::string> outputs = batchOutputPaths(names, outDir, s);
-    for (size_t i = 0; i < sources.size(); ++i) items.push_back({sources[i], outputs[i]});
+    for (size_t i = 0; i < sources.size(); ++i) {
+        items.push_back({sources[i], outputs[i]});
+        library::Meta m;
+        if (library::readMeta(sources[i], m)) items.back().xmp = library::xmpPacket(m);
+    }
     const int input = g.firstOfType(ImageInputNode::staticInfo().type);
     if (!input || items.empty()) {
         std::fprintf(stderr, input ? "no source images given\n" : "project has no Image Input node\n");
@@ -297,13 +318,13 @@ int main(int argc, char** argv) {
         listNodes();
         return 0;
     }
-    // NodeLab.exe --install-model subject|subject-light|sky : downloads an AI model (and the runtime) as the
+    // NodeLab.exe --install-model subject|subject-light|sky|scene|face : downloads an AI model (and the runtime) as the
     // Inspector's Download button does.
     if (argc >= 3 && std::string(argv[1]) == "--install-model") {
         attachParentConsole();
         const ml::ModelSpec* m = ml::findModel(argv[2]);
         if (!m || std::string(argv[2]) == ml::kRuntime) {
-            std::fprintf(stderr, "Unknown model '%s' (subject or sky)\n", argv[2]);
+            std::fprintf(stderr, "Unknown model '%s' (subject, subject-light, sky, scene or face)\n", argv[2]);
             return 1;
         }
         std::printf("Installing %s: %.0f MB to %s\n", m->title, double(ml::downloadSize(argv[2])) / 1e6,
@@ -317,13 +338,15 @@ int main(int argc, char** argv) {
     }
     if (argc >= 4 && std::string(argv[1]) == "--render") {
         attachParentConsole();
-        int depth = 8;
-        for (int i = 4; i + 1 < argc; ++i)
+        int depth = 8, quality = 0;
+        for (int i = 4; i + 1 < argc; ++i) {
             if (std::string(argv[i]) == "--depth") depth = std::atoi(argv[i + 1]);
+            if (std::string(argv[i]) == "--quality") quality = std::atoi(argv[i + 1]);
+        }
         bool timings = false;
         for (int i = 4; i < argc; ++i) timings |= std::string(argv[i]) == "--timings";
         HeadlessDevice dev(argc, argv, false);
-        return renderHeadless(argv[2], argv[3], depth, dev, timings);
+        return renderHeadless(argv[2], argv[3], depth, quality, dev, timings);
     }
 
     if (argc >= 3 && std::string(argv[1]) == "--benchmark") {

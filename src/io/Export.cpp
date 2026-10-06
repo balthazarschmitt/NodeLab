@@ -12,6 +12,7 @@
 #include <set>
 
 #include "core/ColorMath.h"
+#include "core/OutputSpace.h"
 #include "core/Parallel.h"
 #include "gpu/Device.h"
 #include "graph/Evaluator.h"
@@ -31,28 +32,38 @@ SaveOptions ExportSettings::saveOptions(const std::string& source, int w, int h)
     o.format = FileFormat(format);
     o.depth = depth;
     o.jpegQuality = jpegQuality;
-    if (format == JPEG) o.exif = exif::exportBlock(source, w, h);
+    o.lossless = lossless;
+    if (format == JPEG || format == WEBP || format == JXL || format == AVIF) o.exif = exif::exportBlock(source, w, h);
+    o.space = outspace::valid(colorSpace) ? colorSpace : 0;
+    // HDR needs a format that can say PQ (PNG's cICP chunk, JPEG XL's colour encoding, AVIF's
+    // CICP), at 16 bits (AVIF 10); other formats get Rec.2020.
+    if (outspace::isHdr(o.space)) {
+        if (hasHdr(FileFormat(format))) o.depth = 16;
+        else o.space = outspace::Rec2020;
+    }
     return o;
 }
 
 nlohmann::json ExportSettings::toJson() const {
-    return {{"format", format},     {"depth", depth},           {"jpegQuality", jpegQuality},
+    return {{"format", format},     {"depth", depth},           {"jpegQuality", jpegQuality}, {"lossless", lossless},
             {"sizeMode", sizeMode}, {"longEdge", longEdge},     {"percent", percent},
             {"fileOutputs", fileOutputs}, {"nameTemplate", nameTemplate},   {"sharpenFor", sharpenFor},
-            {"sharpenAmount", sharpenAmount}};
+            {"sharpenAmount", sharpenAmount}, {"colorSpace", colorSpace}};
 }
 
 void ExportSettings::fromJson(const nlohmann::json& j) {
     if (!j.is_object()) return;
-    format = std::clamp(j.value("format", format), 0, 3);
+    format = std::clamp(j.value("format", format), 0, kFileFormatCount - 1);
     depth = std::clamp(j.value("depth", depth), 8, 32);
     jpegQuality = std::clamp(j.value("jpegQuality", jpegQuality), 1, 100);
+    if (auto l = j.find("lossless"); l != j.end() && l->is_boolean()) lossless = l->get<bool>();
     sizeMode = std::clamp(j.value("sizeMode", sizeMode), 0, 2);
     longEdge = std::clamp(j.value("longEdge", longEdge), 16, 65536);
     percent = std::clamp(j.value("percent", percent), 1, 100);
     fileOutputs = j.value("fileOutputs", fileOutputs);
     sharpenFor = std::clamp(j.value("sharpenFor", sharpenFor), 0, 3);
     sharpenAmount = std::clamp(j.value("sharpenAmount", sharpenAmount), 0, 2);
+    colorSpace = std::clamp(j.value("colorSpace", colorSpace), 0, int(outspace::kCount) - 1);
     // Before templates there was only a suffix after the source's name.
     if (auto t = j.find("nameTemplate"); t != j.end() && t->is_string() && !t->get<std::string>().empty())
         nameTemplate = t->get<std::string>();
@@ -64,8 +75,12 @@ bool ExportSettings::sameOutput(const ExportSettings& o) const {
     nlohmann::json a = toJson(), b = o.toJson();
     a.erase("fileOutputs");
     b.erase("fileOutputs");
-    // The depth means nothing for JPEG.
-    if (format == JPEG) a.erase("depth"), b.erase("depth");
+    // The depth means nothing for JPEG and WebP, the quality nothing for lossless files, and
+    // lossless nothing for formats without it.
+    if (format == JPEG || format == WEBP) a.erase("depth"), b.erase("depth");
+    if (!hasLossless(FileFormat(format))) a.erase("lossless"), b.erase("lossless");
+    if (!hasQuality(FileFormat(format)) || (hasLossless(FileFormat(format)) && lossless && o.lossless))
+        a.erase("jpegQuality"), b.erase("jpegQuality");
     return a == b;
 }
 
@@ -245,7 +260,7 @@ bool saveRendered(const std::string& pathU8, const std::shared_ptr<const Image>&
         err = "nothing to save";
         return false;
     }
-    if (opt.format != FileFormat::EXR) return writeImage(pathU8, *colormgmt::displayImage(scene, cm), opt, err);
+    if (opt.format != FileFormat::EXR) return writeImage(pathU8, *displayInSpace(scene, cm, opt.space), opt, err);
     if (cm.linear) return writeImage(pathU8, *scene, opt, err);
     // Legacy projects hold sRGB-encoded values; EXR stores linear light.
     Image lin(scene->w, scene->h);
@@ -259,6 +274,57 @@ bool saveRendered(const std::string& pathU8, const std::shared_ptr<const Image>&
         }
     });
     return writeImage(pathU8, lin, opt, err);
+}
+
+std::shared_ptr<const Image> displayInSpace(const std::shared_ptr<const Image>& scene, const ColorManagement& cm,
+                                            int space) {
+    if (!outspace::valid(space) || space == outspace::sRGB || !scene) return colormgmt::displayImage(scene, cm);
+    const outspace::Mat3& m = outspace::fromRec709(space);
+    const float exposure = std::exp2(cm.exposure);
+    auto out = std::make_shared<Image>(scene->w, scene->h);
+    if (outspace::isHdr(space)) {
+        parallelFor(scene->h, [&](int y) {
+            for (int x = 0; x < scene->w; ++x) {
+                const size_t i = size_t(y) * scene->w + x;
+                const float* s = scene->pixel(i);
+                float lin[3], t[3];
+                for (int c = 0; c < 3; ++c) {
+                    const float v = std::isfinite(s[c]) ? s[c] : 0.0f;
+                    lin[c] = (cm.linear ? v : colormath::srgbToLinear(std::clamp(v, 0.0f, 1.0f))) * exposure;
+                }
+                outspace::apply(m, lin, t);
+                float* d = out->pixel(i);
+                for (int c = 0; c < 3; ++c) d[c] = outspace::pqEncode(std::max(t[c], 0.0f) * outspace::kHdrReferenceWhite);
+                d[3] = s[3];
+            }
+        });
+        return out;
+    }
+    const bool direct = cm.linear && cm.view == ColorManagement::Standard;
+    // Other views tone map into sRGB's gamut: convert what they display.
+    const std::shared_ptr<const Image> src = direct ? scene : colormgmt::displayImage(scene, cm);
+    parallelFor(src->h, [&](int y) {
+        for (int x = 0; x < src->w; ++x) {
+            const size_t i = size_t(y) * src->w + x;
+            const float* s = src->pixel(i);
+            float lin[3], t[3];
+            for (int c = 0; c < 3; ++c) {
+                const float v = std::isfinite(s[c]) ? s[c] : 0.0f;
+                if (direct) lin[c] = v * exposure;
+                else lin[c] = colormath::srgbToLinear(std::clamp(v, 0.0f, 1.0f));
+            }
+            // The display gamma was applied to sRGB values by displayImage; as Standard's own step
+            // here, after encoding.
+            outspace::apply(m, lin, t);
+            float* d = out->pixel(i);
+            for (int c = 0; c < 3; ++c) {
+                d[c] = outspace::encode(space, t[c]);
+                if (direct && cm.gamma != 1.0f) d[c] = std::pow(d[c], 1.0f / cm.gamma);
+            }
+            d[3] = s[3];
+        }
+    });
+    return out;
 }
 
 std::string metadataSource(const Graph& g) {
@@ -321,6 +387,12 @@ std::string exifTime(std::time_t t) {
 }
 
 }  // namespace
+
+std::string presetFolder(const std::string& outDirU8, const std::string& presetName) {
+    std::string name = sanitizeName(presetName);
+    if (name.empty() || name == "..") name = "Preset";
+    return pathToU8(u8ToPath(outDirU8) / u8ToPath(name));
+}
 
 std::string expandNameTemplate(const std::string& tmpl, const NameSource& src) {
     const fs::path path = u8ToPath(src.path);
@@ -541,7 +613,7 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
             // keeps a big photo's peak memory to a few images instead of one per node. File
             // Outputs read the graph again afterwards, so they keep everything.
             ev.releaseIntermediates = !fileOutputs;
-            if (!item.output.empty()) {
+            if (!item.output.empty() || !item.extras.empty()) {
                 setStage("Rendering " + outName);
                 ImagePtr img;
                 if (outId) {
@@ -552,15 +624,31 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
                     img = ev.evaluateDisplay(g, outId, ctx);
                 }
                 if (!img) throw std::runtime_error("the Output node has no input");
-                // Before the view transform: resampling in scene light.
-                img = resizeForExport(img, s, !ctx.linear());
-                img = sharpenForExport(img, s, ctx.linear());
-                if (cancel_) break;
-                setStage("Saving " + outName);
-                std::string err;
-                const SaveOptions opt = s.saveOptions(batch || ownGraph ? item.source : metadataSource(g), img->w, img->h);
-                if (!saveRendered(item.output, img, ctx.colorManagement, opt, err)) throw std::runtime_error(err);
-                log("Wrote " + item.output + " (" + std::to_string(img->w) + " x " + std::to_string(img->h) + ")");
+                const std::string meta = batch || ownGraph ? item.source : metadataSource(g);
+                // Every file comes from the one render: each resizes and sharpens it for itself.
+                auto write = [&](const std::string& path, const ExportSettings& set) {
+                    // Before the view transform: resampling in scene light.
+                    ImagePtr out = resizeForExport(img, set, !ctx.linear());
+                    out = sharpenForExport(out, set, ctx.linear());
+                    if (cancel_) return false;
+                    setStage("Saving " + pathToU8(u8ToPath(path).filename()));
+                    std::error_code ec;
+                    if (u8ToPath(path).has_parent_path()) fs::create_directories(u8ToPath(path).parent_path(), ec);
+                    std::string err;
+                    SaveOptions opt = set.saveOptions(meta, out->w, out->h);
+                    opt.xmp = item.xmp;
+                    if (!saveRendered(path, out, ctx.colorManagement, opt, err)) throw std::runtime_error(err);
+                    log("Wrote " + path + " (" + std::to_string(out->w) + " x " + std::to_string(out->h) + ")");
+                    return true;
+                };
+                if (!item.output.empty() && !write(item.output, s)) break;
+                bool stopped = false;
+                for (const ExportItem::Extra& e : item.extras)
+                    if (!write(e.output, e.settings)) {
+                        stopped = true;
+                        break;
+                    }
+                if (stopped) break;
             }
             if (fileOutputs) {
                 setStage("Writing File Outputs");

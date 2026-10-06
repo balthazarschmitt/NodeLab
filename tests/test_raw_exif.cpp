@@ -196,12 +196,15 @@ TEST_CASE("Choosing a RAW sets darktable-style Baseline Exposure defaults that o
 
 // Opt-in, because it needs a camera file: NODELAB_FUZZ_RAW=<a RAW>. A half-size decode of a sensor
 // with an odd width or height (CR3s are 5999x3999) left its last row and column a colour short,
-// a green or yellow line on the preview's edge. Each edge must look like the line next to it.
-TEST_CASE("half-size RAW decodes have no off-colour edge lines") {
+// a green or yellow line on the preview's edge, and the EOS 70D's junk last row made a cyan line at
+// any size. Each edge must look like the lines next to it.
+TEST_CASE("RAW decodes have no off-colour edge lines") {
     const char* src = std::getenv("NODELAB_FUZZ_RAW");
     if (!src) return;
+    for (const bool half : {true, false}) {
+    CAPTURE(half);
     std::string err;
-    auto img = raw::load(src, err, raw::Blend, true);
+    auto img = raw::load(src, err, raw::Blend, half);
     REQUIRE(img);
     auto mean = [&](bool column, int i) {
         std::array<double, 3> m{};
@@ -216,8 +219,53 @@ TEST_CASE("half-size RAW decodes have no off-colour edge lines") {
         const auto a = mean(column, edge), b = mean(column, inner);
         for (int c = 0; c < 3; ++c) CHECK(std::abs(a[size_t(c)] - b[size_t(c)]) < 0.2 * std::max(b[size_t(c)], 0.01) + 0.005);
     };
-    near(true, 0, 1);
-    near(true, img->w - 1, img->w - 2);
-    near(false, 0, 1);
-    near(false, img->h - 1, img->h - 2);
+    // Two lines deep, against lines past the reach of demosaicing's smear.
+    for (int k = 0; k < 2; ++k) {
+        near(true, k, 4);
+        near(true, img->w - 1 - k, img->w - 5);
+        near(false, k, 4);
+        near(false, img->h - 1 - k, img->h - 5);
+    }
+    }
+}
+
+TEST_CASE("RAW junk edge lines are replaced by the nearest line of their colours, real edges kept") {
+    const int W = 40, H = 30, pitch = 48, left = 4, top = 2, black = 2048, white = 15000;
+    std::vector<uint16_t> raw(size_t(pitch) * 36);
+    // A Bayer-like mosaic: two colours alternating along each line, with a gentle gradient down
+    // and across, as a picture has.
+    auto at = [&](int x, int y) -> uint16_t& { return raw[size_t(top + y) * pitch + left + x]; };
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) at(x, y) = uint16_t(3000 + 40 * y + 15 * x + ((x + y) & 1 ? 600 : 0));
+    auto clean = raw;
+    CHECK(raw::repairEdgeLines(raw.data(), pitch, left, top, W, H, black, white) == 0);
+    CHECK(raw == clean);
+    // The 70D's last row: near white.
+    for (int x = 0; x < W; ++x) at(x, H - 1) = 13800;
+    // A dead first column.
+    for (int y = 0; y < H; ++y) at(0, y) = 0;
+    CHECK(raw::repairEdgeLines(raw.data(), pitch, left, top, W, H, black, white) == 2);
+    for (int x = 0; x < W; ++x) CHECK(at(x, H - 1) == at(x, H - 3));
+    for (int y = 1; y < H - 1; ++y) CHECK(at(0, y) == at(2, y));
+    // Nothing outside the visible area or inside it changed.
+    for (int y = 0; y < 36; ++y)
+        for (int x = 0; x < pitch; ++x) {
+            const int vx = x - left, vy = y - top;
+            if (vy == H - 1 || vx == 0) continue;
+            CHECK(raw[size_t(y) * pitch + x] == clean[size_t(y) * pitch + x]);
+        }
+    // In a night shot the same row reads only about twice the signal above black.
+    raw = clean;
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) at(x, y) = uint16_t(black + 130 + ((x + y) & 1 ? 40 : 0));
+    for (int x = 0; x < W; ++x) at(x, H - 1) = uint16_t(at(x, H - 1) + 130);
+    auto dark = raw;
+    CHECK(raw::repairEdgeLines(raw.data(), pitch, left, top, W, H, black, white) == 1);
+    for (int x = 0; x < W; ++x) CHECK(at(x, H - 1) == at(x, H - 3));
+    // A real dark edge (a vignette's gradient) stays.
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) at(x, y) = uint16_t(black + 100 + 20 * std::min(x, 6) + 20 * std::min(y, 6));
+    dark = raw;
+    CHECK(raw::repairEdgeLines(raw.data(), pitch, left, top, W, H, black, white) == 0);
+    CHECK(raw == dark);
 }

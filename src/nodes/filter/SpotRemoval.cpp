@@ -4,8 +4,10 @@
 #include <cmath>
 #include <cstdio>
 
+#include "core/ColorMath.h"
 #include "core/Parallel.h"
 #include "graph/NodeRegistry.h"
+#include "nodes/ImageOps.h"
 #include "nodes/NodeUtil.h"
 
 using namespace nodeutil;
@@ -236,6 +238,103 @@ bool findSpotSource(const Image& img, std::vector<Spot>& spots, int index, bool 
     if (!std::isfinite(bestScore)) return false;
     s.sx = bx / W, s.sy = by / H;
     return true;
+}
+
+std::vector<Spot> detectDust(const Image& img, bool linear, float sensitivity) {
+    std::vector<Spot> found;
+    const int w = img.w, h = img.h;
+    if (w < 16 || h < 16) return found;
+    const int longEdge = std::max(w, h);
+    // Perceptual lightness, so a spot's contrast means the same in shadows and sky.
+    std::vector<float> l(size_t(w) * h);
+    parallelFor(h, [&](int y) {
+        for (int x = 0; x < w; ++x) {
+            const float* p = img.pixel(size_t(y) * w + x);
+            float v = luminance(p[0], p[1], p[2]);
+            if (!std::isfinite(v)) v = 0.0f;
+            l[size_t(y) * w + x] = linear ? colormath::linearToSrgb(std::clamp(v, 0.0f, 1.0f)) : std::clamp(v, 0.0f, 1.0f);
+        }
+    });
+    // Sensor dust is a soft dark disc a little darker than its surroundings: lightness lightly
+    // smoothed (against noise) below the local background (a wider blur).
+    const float maxR = std::max(3.0f, 0.012f * longEdge);  // the largest spot, in pixels
+    std::vector<float> fine = l, bg = l;
+    imageops::blurChannel(fine, w, h, 0.8f, 0.8f);
+    imageops::blurChannel(bg, w, h, maxR * 1.5f, maxR * 1.5f);
+    // Texture: how much the lightness varies around each place. Dust is only looked for where
+    // the background is smooth (sky, walls, studio backdrops); in foliage everything is a spot.
+    std::vector<float> tex(size_t(w) * h);
+    for (size_t i = 0; i < tex.size(); ++i) tex[i] = std::abs(fine[i] - bg[i]);
+    imageops::blurChannel(tex, w, h, maxR * 3.0f, maxR * 3.0f);
+    // Sensitivity 0..100: the contrast a spot needs, from 4% down to 0.5% of the lightness range.
+    const float need = 0.04f * std::pow(0.125f, std::clamp(sensitivity, 0.0f, 100.0f) / 100.0f);
+    std::vector<uint8_t> cand(size_t(w) * h, 0);
+    parallelFor(h, [&](int y) {
+        for (int x = 0; x < w; ++x) {
+            const size_t i = size_t(y) * w + x;
+            const float d = bg[i] - fine[i];
+            cand[i] = d > need && d > 3.0f * tex[i];
+        }
+    });
+    // Connected blobs of candidates, kept when round and of a dust spot's size.
+    std::vector<int> label(size_t(w) * h, -1), stack;
+    struct Blob {
+        double sx = 0, sy = 0, wsum = 0, peak = 0;
+        int n = 0, x0, y0, x1, y1;
+        bool edge = false;
+    };
+    std::vector<Blob> blobs;
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const size_t s = size_t(y) * w + x;
+            if (!cand[s] || label[s] >= 0) continue;
+            Blob b;
+            b.x0 = b.x1 = x, b.y0 = b.y1 = y;
+            const int id = int(blobs.size());
+            label[s] = id;
+            stack.assign(1, int(s));
+            while (!stack.empty()) {
+                const int p = stack.back();
+                stack.pop_back();
+                const int px = p % w, py = p / w;
+                const float d = bg[size_t(p)] - fine[size_t(p)];
+                b.sx += double(px + 0.5f) * d, b.sy += double(py + 0.5f) * d, b.wsum += d;
+                b.peak = std::max(b.peak, double(d));
+                ++b.n;
+                b.x0 = std::min(b.x0, px), b.x1 = std::max(b.x1, px), b.y0 = std::min(b.y0, py), b.y1 = std::max(b.y1, py);
+                b.edge |= px == 0 || py == 0 || px == w - 1 || py == h - 1;
+                for (int k = 0; k < 4; ++k) {
+                    const int nx = px + (k == 0) - (k == 1), ny = py + (k == 2) - (k == 3);
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                    const size_t q = size_t(ny) * w + nx;
+                    if (cand[q] && label[q] < 0) label[q] = id, stack.push_back(int(q));
+                }
+            }
+            blobs.push_back(b);
+        }
+    struct Hit {
+        float x, y, r, score;
+    };
+    std::vector<Hit> hits;
+    for (const Blob& b : blobs) {
+        const int bw = b.x1 - b.x0 + 1, bh = b.y1 - b.y0 + 1;
+        const float r = std::sqrt(float(b.n) / kPi);
+        // Too big (a dark object, not dust), a line (an edge or a wire), or cut by the frame.
+        if (b.edge || r > maxR || std::max(bw, bh) > 2.5f * std::min(bw, bh) || float(b.n) < 0.5f * bw * bh) continue;
+        hits.push_back({float(b.sx / b.wsum), float(b.sy / b.wsum), r, float(b.peak) * float(b.n)});
+    }
+    // The clearest spots first, and no more than Lightroom would sensibly show.
+    std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) { return a.score > b.score; });
+    if (hits.size() > 60) hits.resize(60);
+    for (const Hit& hit : hits) {
+        Spot s;
+        s.x = hit.x / w, s.y = hit.y / h;
+        // The circle covers the spot's soft edge too.
+        s.radius = std::clamp((hit.r * 1.8f + 2.0f) / longEdge, 0.003f, 0.3f);
+        s.sx = s.x, s.sy = s.y;
+        found.push_back(s);
+    }
+    return found;
 }
 
 void SpotRemovalNode::evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) {

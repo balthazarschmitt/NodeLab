@@ -227,19 +227,37 @@ struct Failure {
 std::vector<Failure> g_failures;
 
 // The model's output as a mask, stored in the caches. False with err set when it isn't one.
-bool store(const AutoMaskNode::Model& m, size_t hash, std::vector<float> thumb, const ml::Tensor& output,
-           std::string& err, std::vector<float>* probsOut, int* pwOut, int* phOut) {
+bool store(const AutoMaskNode::Model& m, const std::vector<int>& sel, const std::string& key, size_t hash,
+           std::vector<float> thumb, const ml::Tensor& output, std::string& err, std::vector<float>* probsOut,
+           int* pwOut, int* phOut) {
     if (output.shape.size() < 2) {
         err = "Unexpected model output";
         return false;
     }
     const int ph = int(output.shape[output.shape.size() - 2]);
     const int pw = int(output.shape[output.shape.size() - 1]);
-    if (pw <= 0 || ph <= 0 || output.data.size() < size_t(pw) * ph) {
+    const size_t plane = size_t(std::max(pw, 0)) * size_t(std::max(ph, 0));
+    if (pw <= 0 || ph <= 0 || output.data.size() < plane * size_t(std::max(m.classes, 1)) ||
+        (m.classes && (output.shape.size() < 3 || output.shape[output.shape.size() - 3] != m.classes))) {
         err = "Unexpected model output";
         return false;
     }
-    std::vector<float> probs(output.data.begin(), output.data.begin() + size_t(pw) * ph);
+    std::vector<float> probs(output.data.begin(), output.data.begin() + plane);
+    if (m.classes) {
+        // Softmax over the classes at each pixel, and the chosen ones' share.
+        parallelFor(ph, [&](int y) {
+            for (int x = 0; x < pw; ++x) {
+                const size_t i = size_t(y) * pw + x;
+                float hi = -1e30f;
+                for (int c = 0; c < m.classes; ++c) hi = std::max(hi, output.data[size_t(c) * plane + i]);
+                double sum = 0, chosen = 0;
+                for (int c = 0; c < m.classes; ++c) sum += std::exp(double(output.data[size_t(c) * plane + i] - hi));
+                for (int c : sel)
+                    if (c >= 0 && c < m.classes) chosen += std::exp(double(output.data[size_t(c) * plane + i] - hi));
+                probs[i] = sum > 0 ? float(chosen / sum) : 0.0f;
+            }
+        });
+    }
     for (float& v : probs) {
         if (m.sigmoid) v = 1.0f / (1.0f + std::exp(-v));
         v = std::isfinite(v) ? std::clamp(v, 0.0f, 1.0f) : 0.0f;
@@ -253,7 +271,7 @@ bool store(const AutoMaskNode::Model& m, size_t hash, std::vector<float> thumb, 
     }
     if (probsOut) *probsOut = probs, *pwOut = pw, *phOut = ph;
     std::lock_guard<std::mutex> lock(g_memoMutex);
-    g_memo.push_front({m.id, hash, std::move(thumb), std::move(probs), pw, ph});
+    g_memo.push_front({key, hash, std::move(thumb), std::move(probs), pw, ph});
     if (g_memo.size() > 4) g_memo.pop_back();
     writeMask(g_memo.front());
     return true;
@@ -281,6 +299,8 @@ class Runner {
 public:
     struct Request {
         AutoMaskNode::Model m;
+        std::vector<int> sel;  // a segmentation model's classes
+        std::string key;       // AutoMaskNode::maskKey
         size_t hash;
         std::vector<float> thumb;
         ml::Tensor input;
@@ -298,7 +318,7 @@ public:
 
     void request(Request r) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (running_ && runningId_ == r.m.id && matches(runningThumb_, r.thumb)) return;
+        if (running_ && runningKey_ == r.key && matches(runningThumb_, r.thumb)) return;
         // A run on another photo is no use any more (it isn't even similar enough to stand in
         // while this one runs): stop it rather than spend up to a minute and gigabytes on it. A
         // run on the same photo before an edit (a crop, a retouch) finishes, as its mask stands in.
@@ -306,7 +326,7 @@ public:
         // A newer picture for a model replaces the one waiting.
         bool queued = false;
         for (Request& q : queue_)
-            if (std::string_view(q.m.id) == r.m.id) q = std::move(r), queued = true;
+            if (q.key == r.key) q = std::move(r), queued = true;
         if (!queued) queue_.push_back(std::move(r));
         if (!thread_.joinable()) thread_ = std::thread([this] { loop(); });
         cv_.notify_all();
@@ -323,7 +343,7 @@ public:
         p.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started_).count();
         auto it = took_.find(runningId_);
         // First guesses from a 4-core laptop CPU: the model's load and run.
-        p.expected = it != took_.end() ? it->second : runningId_ == "subject" ? 50.0 : 4.0;  // light: like sky
+        p.expected = it != took_.end() ? it->second : runningId_ == "subject" ? 50.0 : runningId_ == "face" ? 15.0 : 4.0;  // light: like sky
         return p;
     }
 
@@ -353,6 +373,7 @@ private:
                 running_ = true;
                 runCancel_ = false;
                 runningId_ = r.m.id;
+                runningKey_ = r.key;
                 runningThumb_ = r.thumb;
                 started_ = std::chrono::steady_clock::now();
             }
@@ -365,9 +386,9 @@ private:
                 if (quit_) return;
             }
             const bool cancelled = !ok && runCancel_;  // not a failure: the picture just isn't wanted
-            if (ok) ok = store(r.m, r.hash, r.thumb, output, err, nullptr, nullptr, nullptr);
+            if (ok) ok = store(r.m, r.sel, r.key, r.hash, r.thumb, output, err, nullptr, nullptr, nullptr);
             output = {};
-            if (!ok && !cancelled) recordFailure(r.m.id, r.thumb, err);
+            if (!ok && !cancelled) recordFailure(r.key, r.thumb, err);
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 running_ = false;
@@ -386,7 +407,7 @@ private:
     // Stops the running model: on quitting, for a run on another photo, or from cancelAll.
     std::atomic<bool> runCancel_{false};
     bool running_ = false;
-    std::string runningId_;
+    std::string runningId_, runningKey_;
     std::vector<float> runningThumb_;
     std::chrono::steady_clock::time_point started_;
     std::map<std::string, double> took_;  // seconds the model's last run took
@@ -422,6 +443,8 @@ AutoMaskNode::Inferred AutoMaskNode::infer(const Image& img, bool linear, bool b
                                           int& pw, int& ph, std::string& err,
                                           const std::atomic<bool>* cancel) const {
     const Model& m = model();
+    const std::vector<int> sel = selectedClasses();
+    const std::string key = maskKey();
     auto result = [&](Inferred r) {
         std::lock_guard<std::mutex> lock(g_memoMutex);
         g_errors[m.id] = r == Inferred::Failed ? err : std::string();
@@ -441,12 +464,12 @@ AutoMaskNode::Inferred AutoMaskNode::infer(const Image& img, bool linear, bool b
     {
         std::lock_guard<std::mutex> lock(g_memoMutex);
         Memo e;
-        if (lookup(m.id, hash, thumb, e)) {
+        if (lookup(key, hash, thumb, e)) {
             probs = std::move(e.probs), pw = e.pw, ph = e.ph;
             g_errors[m.id].clear();
             return Inferred::Ready;
         }
-        if (const Failure* f = failedOn(m.id, thumb)) {
+        if (const Failure* f = failedOn(key, thumb)) {
             err = f->err;
             g_errors[m.id] = err;
             return Inferred::Failed;
@@ -459,23 +482,23 @@ AutoMaskNode::Inferred AutoMaskNode::infer(const Image& img, bool linear, bool b
             std::lock_guard<std::mutex> lock(g_memoMutex);
             double best = kSimilarShape;
             for (const Memo& e : g_memo)
-                if (e.id == m.id)
+                if (e.id == key)
                     if (const double sim = similarity(e.thumb, thumb); sim >= best) {
                         best = sim;
                         probs = e.probs, pw = e.pw, ph = e.ph;
                     }
         }
-        runner().request({m, hash, std::move(thumb), std::move(input)});
+        runner().request({m, sel, key, hash, std::move(thumb), std::move(input)});
         return result(Inferred::Pending);
     }
     ml::Tensor output;
     if (!ml::run(m.id, input, output, err, cancel)) {
         if (cancel && cancel->load()) throw EvalCancelled();
-        recordFailure(m.id, thumb, err);
+        recordFailure(key, thumb, err);
         return result(Inferred::Failed);
     }
     input = {};
-    if (!store(m, hash, std::move(thumb), output, err, &probs, &pw, &ph)) return result(Inferred::Failed);
+    if (!store(m, sel, key, hash, std::move(thumb), output, err, &probs, &pw, &ph)) return result(Inferred::Failed);
     return result(Inferred::Ready);
 }
 
@@ -495,8 +518,18 @@ int AutoMaskNode::roiPadding(const EvalContext& ctx) const {
     const std::vector<float>* s = ctx.previewStats;
     if (!s || s->size() < 2 || !ctx.roi) return kRoiWhole;
     const int pw = int((*s)[0]), ph = int((*s)[1]);
-    if (!paramB(RefineEdges)) return 1;
-    return 2 * imageops::blurReach(refineSigma(ctx.roi->canvasW, ctx.roi->canvasH, pw, ph)) + 2;
+    const int cw = ctx.roi->canvasW, ch = ctx.roi->canvasH;
+    const int shape = imageops::blurReach(featherSigma(cw, ch)) + imageops::blurReach(edgeSigma(cw, ch));
+    if (!paramB(RefineEdges)) return 1 + shape;
+    return 2 * imageops::blurReach(refineSigma(cw, ch, pw, ph)) + 2 + shape;
+}
+
+// Feather 100 softens over 3% of the long edge; Edge +-100 moves the outline by about 2%.
+float AutoMaskNode::featherSigma(int fullW, int fullH) const {
+    return paramF(featherParam()) / 100.0f * 0.03f * float(std::max(fullW, fullH));
+}
+float AutoMaskNode::edgeSigma(int fullW, int fullH) const {
+    return std::abs(paramF(featherParam() + 1)) / 100.0f * 0.02f * float(std::max(fullW, fullH));
 }
 
 std::string AutoMaskNode::signatureExtra() const {
@@ -554,6 +587,24 @@ void AutoMaskNode::evaluate(EvalContext& ctx, const std::vector<Value>& in, std:
             });
             m = guidedFilter(guide, m, w, h, refineSigma(f.fullW, f.fullH, pw, ph), 1e-3f);
         }
+        // Edge (Lightroom's mask Shift Edge): grow or shrink the mask. Blurring by sigma turns an
+        // outline into a ramp, and the ramp's 16% or 84% level is one sigma outside or inside it.
+        if (const float es = edgeSigma(f.fullW, f.fullH); es > 0.3f) {
+            std::vector<float> b = m;
+            imageops::blurChannel(b, w, h, es, es);
+            const bool grow = paramF(featherParam() + 1) > 0.0f;
+            const float level = grow ? 0.16f : 0.84f;
+            parallelFor(h, [&](int y) {
+                for (int x = 0; x < w; ++x) {
+                    const size_t i = size_t(y) * w + x;
+                    const float t = std::clamp((b[i] - level) / 0.2f + 0.5f, 0.0f, 1.0f);
+                    const float shifted = t * t * (3.0f - 2.0f * t);
+                    m[i] = grow ? std::max(m[i], shifted) : std::min(m[i], shifted);
+                }
+            });
+        }
+        // Feather: a softer outline.
+        if (const float fs = featherSigma(f.fullW, f.fullH); fs > 0.3f) imageops::blurChannel(m, w, h, fs, fs);
     }
     ChannelPtr base = toChannel(in[1]);
     ChannelSampler sb{base.get(), w, h};
@@ -571,6 +622,68 @@ const AutoMaskNode::Model& SelectSubjectNode::model() const {
     static const Model accurate{"subject", 1024, 1024, {0.485f, 0.456f, 0.406f}, {0.229f, 0.224f, 0.225f}, true};
     static const Model light{"subject-light", 320, 320, {0.485f, 0.456f, 0.406f}, {0.229f, 0.224f, 0.225f}, false, true};
     return paramI(ModelChoice) == 1 ? light : accurate;
+}
+
+std::string AutoMaskNode::maskKey() const {
+    std::string key = model().id;
+    if (model().classes) {
+        key += "_c";
+        for (int c : selectedClasses()) key += "-" + std::to_string(c);
+    }
+    return key;
+}
+
+namespace {
+
+// The classes for each of a node's Bool params, from its first class param on.
+std::vector<int> classesOf(const Node& n, int first, std::initializer_list<std::initializer_list<int>> groups) {
+    std::vector<int> sel;
+    int i = first;
+    for (const auto& g : groups)
+        if (n.paramB(i++)) sel.insert(sel.end(), g.begin(), g.end());
+    std::sort(sel.begin(), sel.end());
+    sel.erase(std::unique(sel.begin(), sel.end()), sel.end());
+    return sel;
+}
+
+// SegFormer: ImageNet normalisation at 512 x 512, logits per class at a quarter of that.
+const AutoMaskNode::Model kSceneModel{"scene", 512, 512, {0.485f, 0.456f, 0.406f}, {0.229f, 0.224f, 0.225f}, false, false, 150};
+const AutoMaskNode::Model kFaceModel{"face", 512, 512, {0.485f, 0.456f, 0.406f}, {0.229f, 0.224f, 0.225f}, false, false, 19};
+
+}  // namespace
+
+const AutoMaskNode::Model& SelectPeopleNode::model() const { return kFaceModel; }
+// CelebAMask-HQ: 1 skin, 2 nose, 3 glasses, 4-5 eyes, 6-7 brows, 8-9 ears, 10 mouth, 11-12 lips,
+// 13 hair, 14 hat, 15 earring, 16 necklace, 17 neck, 18 cloth.
+std::vector<int> SelectPeopleNode::selectedClasses() const {
+    return classesOf(*this, FaceSkin, {{1, 2, 8, 9}, {6, 7}, {4, 5}, {11, 12}, {10}, {13}, {17}, {18}, {3, 14, 15, 16}});
+}
+
+const AutoMaskNode::Model& SelectLandscapeNode::model() const { return kSceneModel; }
+// ADE20K's classes (0-based, as the model's outputs) for Lightroom's landscape parts. It has no
+// snow class.
+std::vector<int> SelectLandscapeNode::selectedClasses() const {
+    return classesOf(*this, Sky,
+                     {{2},                                    // sky
+                      {21, 26, 60, 104, 109, 113, 128},       // water, sea, river, fountain, pool, waterfall, lake
+                      {4, 9, 17, 29, 66, 72},                 // tree, grass, plant, field, flower, palm
+                      {16, 68},                               // mountain, hill
+                      {13, 34, 46, 94},                       // earth, rock, sand, land
+                      {0, 1, 25, 32, 38, 42, 48, 61, 79, 84, 86, 95, 106},  // wall, building, house, fence, ...
+                      {3, 6, 11, 52, 53, 54, 59, 91, 121, 140}});           // floor, road, sidewalk, path, ...
+}
+
+const AutoMaskNode::Model& SelectObjectsNode::model() const { return kSceneModel; }
+std::vector<int> SelectObjectsNode::selectedClasses() const {
+    return classesOf(*this, People,
+                     {{12},                                                        // person
+                      {126},                                                       // animal
+                      {20, 76, 80, 83, 90, 102, 103, 116, 127},                    // car, boat, bus, truck, ...
+                      {7, 10, 15, 19, 23, 24, 30, 31, 33, 35, 44, 62, 64, 69, 97, 110},  // bed, cabinet, table, ...
+                      {43, 87, 93, 100, 123, 136, 149},                            // signboard, streetlight, pole, ...
+                      {36, 82, 85, 134},                                           // lamp, light, chandelier, sconce
+                      {74, 89, 130, 141, 143},                                     // computer, television, screens
+                      {66, 125, 135}});                                            // flower, pot, vase
 }
 
 // The U²-Net sky model at 320 x 320 with ImageNet normalisation; its output is already 0..1.

@@ -162,6 +162,60 @@ void Decoder::afterInterpolate(void* ctx) {
 
 }  // namespace
 
+int repairEdgeLines(uint16_t* raw, size_t pitch, int left, int top, int width, int height, int black, int white) {
+    if (!raw || width < 16 || height < 16) return 0;
+    const double range = std::max(white - black, 1);
+    // An edge line as a run of samples: the k-th row or column in from one of the four edges.
+    struct Line {
+        uint16_t* p;
+        ptrdiff_t step;  // between samples along the line
+        int n;
+    };
+    auto line = [&](int edge, int k) -> Line {
+        const ptrdiff_t row = ptrdiff_t(pitch);
+        uint16_t* org = raw + size_t(top) * pitch + left;
+        switch (edge) {
+            case 0: return {org + k * row, 1, width};                         // top
+            case 1: return {org + (height - 1 - k) * row, 1, width};          // bottom
+            case 2: return {org + k, row, height};                            // left
+            default: return {org + (width - 1 - k), row, height};             // right
+        }
+    };
+    // The mean of each of the two colours alternating along a line (lines two apart share them).
+    auto means = [](const Line& l, double m[2]) {
+        double s[2] = {0, 0};
+        for (int i = 0; i < l.n; ++i) s[i & 1] += l.p[i * l.step];
+        m[0] = s[0] / ((l.n + 1) / 2);
+        m[1] = s[1] / (l.n / 2);
+    };
+    int repaired = 0;
+    for (int edge = 0; edge < 4; ++edge) {
+        // Judge both depths before changing anything, each against the two lines behind it: a
+        // junk line differs from the next line of its colours by much more than that one differs
+        // from the line after, which a real picture's gradient doesn't do over a whole edge. The
+        // jump is judged against the signal above black too: the 70D's junk row reads near white
+        // in a bright photo but only about twice the signal in a night shot.
+        bool junk[2] = {false, false};
+        for (int k = 0; k < 2; ++k) {
+            double a[2], b[2], c[2];
+            means(line(edge, k), a);
+            means(line(edge, k + 2), b);
+            means(line(edge, k + 4), c);
+            for (int i = 0; i < 2; ++i) {
+                const double jump = std::abs(a[i] - b[i]), slope = std::abs(b[i] - c[i]);
+                if (jump > 0.25 * std::max(b[i] - black, 0.0) && jump > 6.0 * slope + 0.002 * range) junk[k] = true;
+            }
+        }
+        for (int k = 1; k >= 0; --k) {
+            if (!junk[k]) continue;
+            const Line dst = line(edge, k), src = line(edge, k + 2);
+            for (int i = 0; i < dst.n; ++i) dst.p[i * dst.step] = src.p[i * src.step];
+            ++repaired;
+        }
+    }
+    return repaired;
+}
+
 std::shared_ptr<Image> load(const std::string& pathU8, std::string& err, int highlights, bool halfSize, int* fullW,
                             int* fullH) {
     // Read the file ourselves: LibRaw's narrow-char open can't take UTF-8 paths on Windows.
@@ -195,6 +249,14 @@ std::shared_ptr<Image> load(const std::string& pathU8, std::string& err, int hig
     if (int r = lr->unpack(); r != LIBRAW_SUCCESS) return fail(r);
     // The sensor's size before half_size halves it (rounding up), for the edge fix below.
     const int sensorW = lr->imgdata.sizes.width, sensorH = lr->imgdata.sizes.height;
+    // Bayer sensors only (filters below 1000 are LibRaw's codes for X-Trans and other layouts,
+    // whose colours don't repeat every two lines).
+    if (auto& rd = lr->imgdata.rawdata; rd.raw_image && lr->imgdata.idata.filters >= 1000) {
+        const auto& z = lr->imgdata.sizes;
+        if (z.left_margin + sensorW <= z.raw_width && z.top_margin + sensorH <= z.raw_height)
+            repairEdgeLines(rd.raw_image, z.raw_pitch / 2, z.left_margin, z.top_margin, sensorW, sensorH,
+                            int(lr->imgdata.color.black), int(lr->imgdata.color.maximum));
+    }
     if (int r = lr->dcraw_process(); r != LIBRAW_SUCCESS) return fail(r);
 
     // With highlight recovery on, LibRaw scales by the largest white-balance multiplier so no

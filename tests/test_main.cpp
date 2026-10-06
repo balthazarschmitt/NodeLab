@@ -7,6 +7,7 @@
 #include "graph/NodeRegistry.h"
 #include "io/Paths.h"
 #include "io/LensProfiles.h"
+#include "io/Library.h"
 #include "ml/Models.h"
 
 int main(int argc, char** argv) {
@@ -25,6 +26,13 @@ int main(int argc, char** argv) {
         std::error_code ec;
         std::filesystem::remove_all(dir, ec);
         lensdb::setFolder(pathToU8(dir));
+    }
+    // Nor the user's collections.
+    {
+        const std::filesystem::path file = std::filesystem::temp_directory_path() / "nodelab_tests_collections.json";
+        std::error_code ec;
+        std::filesystem::remove(file, ec);
+        library::setCollectionsFile(pathToU8(file));
     }
     doctest::Context ctx(argc, argv);
     return ctx.run();

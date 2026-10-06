@@ -261,3 +261,31 @@ TEST_CASE("Spot Removal: Clone's automatic source matches colours too") {
     CHECK(spots[0].sx == 0.7f);
     CHECK_FALSE(findSpotSource(img, spots, 3, false));
 }
+
+TEST_CASE("Detect Dust finds soft dark spots on a smooth sky and nothing else") {
+    // A sky gradient with three dust spots, a dark building at the bottom and a thin wire.
+    const int w = 600, h = 400;
+    Image img(w, h);
+    const float dust[3][3] = {{100, 80, 4}, {300, 120, 6}, {480, 60, 3}};  // x, y, radius
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            float v = 0.35f + 0.25f * y / h;
+            for (const auto& d : dust) {
+                const float r = std::hypot(x + 0.5f - d[0], y + 0.5f - d[1]);
+                v *= 1.0f - 0.12f * std::exp(-0.5f * (r / d[2]) * (r / d[2]));
+            }
+            if (y > 300 && x > 150 && x < 450) v = 0.05f;    // building
+            if (std::abs(y - 200 - (x - 300) / 10) < 1) v = 0.1f;  // wire
+            float* p = img.pixel(size_t(y) * w + x);
+            p[0] = p[1] = p[2] = v, p[3] = 1.0f;
+        }
+    const std::vector<Spot> found = detectDust(img, true, 50.0f);
+    CHECK(found.size() == 3);
+    for (const auto& d : dust) {
+        bool hit = false;
+        for (const Spot& s : found) hit |= std::hypot(s.x * w - d[0], s.y * h - d[1]) < 3.0f && s.radius * w > d[2];
+        CHECK(hit);
+    }
+    // Low sensitivity never finds more.
+    CHECK(detectDust(img, true, 0.0f).size() < found.size() + 1);
+}

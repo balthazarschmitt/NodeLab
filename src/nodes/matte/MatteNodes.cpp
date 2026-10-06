@@ -1097,6 +1097,9 @@ void registerMatteNodes(NodeRegistry& r) {
     r.add<HslMaskNode>();
     r.add<SelectSubjectNode>();
     r.add<SelectSkyNode>();
+    r.add<SelectPeopleNode>();
+    r.add<SelectLandscapeNode>();
+    r.add<SelectObjectsNode>();
     r.add<ChannelKeyNode>();
     r.add<LuminanceKeyNode>();
     r.add<DifferenceKeyNode>();

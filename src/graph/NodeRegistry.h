@@ -41,11 +41,16 @@ void registerIONodes(NodeRegistry& r);
 void registerColorNodes(NodeRegistry& r);
 void registerDevelopNodes(NodeRegistry& r);
 void registerMathNodes(NodeRegistry& r);
+void registerPhotoMergeNodes(NodeRegistry& r);  // math/PhotoMerge.cpp: HDR Merge, Panorama Merge
 void registerConverterNodes(NodeRegistry& r);
 void registerGroupNodes(NodeRegistry& r);
 void registerFilterNodes(NodeRegistry& r);
 void registerDenoiseNode(NodeRegistry& r);  // filter/Denoise.cpp, listed among the filters
 void registerSpotRemovalNode(NodeRegistry& r);  // filter/SpotRemoval.cpp
+void registerSharpeningNodes(NodeRegistry& r);  // filter/Sharpening.cpp: Capture Sharpening, Diffuse or Sharpen
+void registerEffectNodes(NodeRegistry& r);      // filter/Effects.cpp: Vignette, Defringe, Border
+void registerWatermarkNodes(NodeRegistry& r);   // filter/Watermark.cpp
+void registerRemoveNodes(NodeRegistry& r);      // filter/Remove.cpp: content-aware Remove
 void registerTransformNodes(NodeRegistry& r);
 void registerMatteNodes(NodeRegistry& r);
 void registerTextureNodes(NodeRegistry& r);

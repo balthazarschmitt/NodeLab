@@ -9,6 +9,7 @@
 #include "core/ColorManagement.h"
 #include "core/Value.h"
 
+class Graph;
 class ImageCache;
 
 struct PinDesc {
@@ -177,6 +178,10 @@ public:
     virtual void loadExtra(const nlohmann::json&) {}
     // Folded into the evaluation cache key so changes to extra state trigger recomputation.
     virtual std::string signatureExtra() const { return {}; }
+    // Called by Graph::connect after a wire into this node is made, for nodes whose pins depend on
+    // their links (Layer Stack adds an empty layer when its top one is connected). It may add pins
+    // but must keep the existing ones where they are.
+    virtual void linksChanged(Graph&) {}
 
     // ---- Region of interest (see RoiWindow). Each node says what it reads to produce a region.
     static constexpr int kRoiWhole = -1;

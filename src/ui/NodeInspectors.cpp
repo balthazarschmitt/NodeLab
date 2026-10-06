@@ -482,9 +482,13 @@ bool drawNodeInspector(Node& n, const ParamRow& row, bool& changed, const Graph*
                                ? "Edit the crop on the Result viewer: drag the frame, its corners or edges; drag outside it to "
                                  "straighten. O cycles the guide overlay (Thirds, Golden Spiral...), Shift+O turns it."
                            : n.info().type == perspective::kType
-                               ? "Guided Upright: on the Result viewer, drag along up to four lines that should be straight. "
-                                 "Steep guides become vertical, flat ones horizontal. Drag their ends to adjust them; "
-                                 "Alt+click removes one. The sliders below apply on top."
+                               ? "Upright: Auto, Level, Vertical and Full find straight lines in the photo and turn the "
+                                 "camera so they're level (Level), vertical too (Vertical) or both ways (Full); Auto is "
+                                 "a gentler Full. Guided: on the Result viewer, drag along up to four lines that should "
+                                 "be straight; steep guides become vertical, flat ones horizontal. Drag their ends to "
+                                 "adjust them; Alt+click removes one. The sliders below apply on top."
+                           : n.info().type == panzoom::kType
+                               ? "Drag on the Result viewer to move the picture and Ctrl+wheel to zoom. Empty areas are transparent."
                            : dynamic_cast<BrushMaskNode*>(&n)
                                ? "Paint on the Result viewer. Alt+paint erases, [ and ] change the brush size, O toggles the overlay."
                            : dynamic_cast<SpotRemovalNode*>(&n)
@@ -536,6 +540,12 @@ bool drawNodeInspector(Node& n, const ParamRow& row, bool& changed, const Graph*
             changed = true;
         }
         ImGui::EndDisabled();
+        if (ImGui::Button("Detect Dust")) spots->detectDustRequest = true;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Find sensor dust (small soft dark spots on smooth areas such as sky) and add a spot with an automatic source for each");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+        ImGui::SliderFloat("##dustSensitivity", &spots->dustSensitivity, 0.0f, 100.0f, "Sensitivity %.0f");
     } else if (auto* lp = dynamic_cast<LensProfileNode*>(&n)) {
         lensProfile(*lp, row, changed, g);
     } else if (auto* am = dynamic_cast<AutoMaskNode*>(&n)) {

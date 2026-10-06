@@ -15,29 +15,30 @@ namespace {
 const std::vector<Menu> kLayout = {
     {"Input / Output", {"io.image_input", "io.number", "util.image_info", "", "io.output", "util.file_output"}},
     {"Color",
-     {"color.basic", "color.color_grading", "color.color_mixer", "",                                  //
+     {"color.basic", "color.color_grading", "color.color_mixer", "color.tone_equalizer", "color.color_equalizer", "",  //
       "color.exposure", "color.brightness_contrast", "color.gamma", "color.levels", "color.curves",  //
       "color.tone_map", "",                                                                           //
       "color.saturation", "color.hue_shift", "color.hue_correct", "color.color_balance", "",         //
-      "color.invert", "color.luminance", "color.convert_colorspace"}},
+      "color.invert", "color.film_negative", "color.luminance", "color.convert_colorspace"}},
     {"Split / Combine",
      {"color.split_rgb", "color.combine_rgb", "color.split_hsv", "color.combine_hsv", "color.split_hsl",
       "color.combine_hsl", "color.split_lab", "color.combine_lab", "color.split_ycbcr", "color.combine_ycbcr",
       "color.split_yuv", "color.combine_yuv"}},
-    {"Mix", {"math.mix", "math.blend", "math.alpha_over"}},
+    {"Mix", {"math.mix", "math.blend", "math.alpha_over", "math.layer_stack", "math.hdr_merge", "math.panorama_merge"}},
     {"Filter",
-     {"filter.blur", "filter.directional_blur", "filter.bilateral_blur", "filter.denoise", "filter.sharpen", "filter.spot_removal", "",  //
+     {"filter.blur", "filter.directional_blur", "filter.bilateral_blur", "filter.denoise", "filter.sharpen", "filter.capture_sharpen", "filter.diffuse", "filter.spot_removal", "filter.remove", "",  //
       "filter.filter", "filter.kuwahara", "filter.dilate_erode", "",                              //
       "filter.pixelate", "filter.posterize", "",                                                  //
-      "filter.glare", "filter.sun_beams", "filter.grain"}},
+      "filter.glare", "filter.sun_beams", "filter.grain", "filter.vignette", "",  //
+      "filter.defringe"}},
     {"Matte",
      {"matte.linear_gradient", "matte.radial_gradient", "matte.brush_mask", "matte.range_mask", "matte.hsl_mask", "",  //
-      "matte.select_subject", "matte.select_sky", "",                                                 //
+      "matte.select_subject", "matte.select_sky", "matte.select_people", "matte.select_landscape", "matte.select_objects", "",                                                 //
       "matte.box_mask", "matte.ellipse_mask", "matte.double_edge_mask", "",                           //
       "matte.channel_key", "matte.luminance_key", "conv.color_key", "matte.difference_key",
       "matte.distance_key", "matte.chroma_key", "matte.color_spill"}},
     {"Transform",
-     {"xform.transform", "xform.flip", "xform.crop", "",              //
+     {"xform.transform", "xform.pan_zoom", "xform.flip", "xform.crop", "xform.border", "xform.watermark", "",              //
       "xform.lens_distortion", "xform.lens_correction", "xform.lens_profile", "xform.perspective", "",  //
       "xform.displace", "xform.map_uv", "xform.corner_pin"}},
     {"Texture", {"tex.noise", "tex.voronoi", "tex.gradient", "tex.wave", "tex.checker", "tex.white_noise"}},

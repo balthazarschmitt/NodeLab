@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "core/ColorMath.h"
+#include "gpu/Device.h"
 #include "gpu/PointOp.h"
 #include "nodes/ImageOps.h"
 #include "nodes/NodeUtil.h"
@@ -70,6 +71,69 @@ public:
                                {paramF(0) * ctx.scale, paramF(1) * ctx.scale, std::cos(a), std::sin(a), std::max(paramF(3), 1e-3f),
                                 paramB(4) ? 1.0f : 0.0f}),
                       in, out);
+    }
+};
+
+// Moves and zooms the picture inside the same frame, for framing by eye: X and Y are fractions
+// of the image's width and height (so the preview matches the export), Zoom scales about the
+// frame's centre, and wherever the moved picture doesn't reach is fully transparent. Nearest
+// keeps hard pixels when zooming far in.
+class PanZoomNode : public Node {
+public:
+    NODELAB_NODE({panzoom::kType, "Pan and Zoom", "Transform",
+                  {{"Image", PinType::Image}},
+                  {{"Image", PinType::Image}},
+                  {ParamDesc::FloatFree("Zoom", 1.0f, 0.1f, 8.0f), ParamDesc::FloatFree("X", 0.0f, -1.0f, 1.0f),
+                   ParamDesc::FloatFree("Y", 0.0f, -1.0f, 1.0f), ParamDesc::Enum("Interpolation", 0, {"Bilinear", "Nearest"})}})
+    // The zoom, kept to a sane range (the param is free so it can be typed past the slider), and
+    // the offset in pixels of a w x h image.
+    float zoom() const {
+        const float z = paramF(panzoom::Zoom);
+        return std::isfinite(z) ? std::clamp(z, 1e-3f, 1e4f) : 1.0f;
+    }
+    void offset(int w, int h, float& ox, float& oy) const {
+        auto finite = [](float v) { return std::isfinite(v) ? std::clamp(v, -1e4f, 1e4f) : 0.0f; };
+        ox = finite(paramF(panzoom::X)) * w;
+        oy = finite(paramF(panzoom::Y)) * h;
+    }
+    void evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) override {
+        ImagePtr src = toImage(in[0], 0, 0);
+        if (!src) return;
+        const float z = zoom(), cx = src->w * 0.5f, cy = src->h * 0.5f;
+        float ox, oy;
+        offset(src->w, src->h, ox, oy);
+        const bool nearest = paramI(panzoom::Interpolation) == 1;
+        out[0] = Value(ImagePtr(mapImage(*src, [&](int x, int y, const float*, float* d) {
+            const float sx = (x + 0.5f - cx - ox) / z + cx, sy = (y + 0.5f - cy - oy) / z + cy;
+            if (!nearest) {
+                sampleBilinear(*src, sx, sy, d, true);
+                return;
+            }
+            // Compared as floats first, so a far-off coordinate never overflows the int.
+            if (!(sx >= 0 && sy >= 0 && sx < src->w && sy < src->h)) {
+                d[0] = d[1] = d[2] = d[3] = 0;
+                return;
+            }
+            const int ix = std::min(int(sx), src->w - 1), iy = std::min(int(sy), src->h - 1);
+            const float* p = src->pixel(size_t(iy) * src->w + ix);
+            std::copy(p, p + 4, d);
+        })));
+    }
+
+    // Nearest snaps at pixel boundaries, where the GPU's coordinates can round the other way.
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override {
+        return paramI(panzoom::Interpolation) == 0 && gpu::sizedValue(in[0]);
+    }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        int w, h;
+        in[0].size(w, h);
+        float ox, oy;
+        offset(w, h, ox, oy);
+        gpu::runPoint(ctx, *this, gatherOp(in[0], R"(
+    vec2 c = vec2(size0) * 0.5;
+    vec2 s = (vec2(p) + 0.5 - c - vec2(P[0], P[1])) / P[2] + c;
+    out0 = bilinear0(s, true);
+)", {ox, oy, zoom()}), in, out);
     }
 };
 
@@ -654,91 +718,52 @@ void PerspectiveNode::guidedAngles(int w, int h, double ang[3]) const {
     if (paramI(Upright) != UprightGuided || guides.empty()) return;
     w = std::max(w, 1), h = std::max(h, 1);
     const double cx = w * 0.5, cy = h * 0.5, f = std::hypot(cx, cy);
-    struct Line {
-        double x0, y0, x1, y1;  // centred, in units of f
-        bool vertical;
-    };
-    std::vector<Line> lines;
+    std::vector<UprightLine> lines;
     for (const Guide& g : guides) {
-        const Line l{(g.x0 * w - cx) / f, (g.y0 * h - cy) / f, (g.x1 * w - cx) / f, (g.y1 * h - cy) / f, g.vertical(float(w) / h)};
+        const UprightLine l{(g.x0 * w - cx) / f, (g.y0 * h - cy) / f, (g.x1 * w - cx) / f, (g.y1 * h - cy) / f,
+                            g.vertical(float(w) / h), 1.0};
         if (std::hypot(l.x1 - l.x0, l.y1 - l.y0) > 1e-4) lines.push_back(l);
         if (int(lines.size()) == kMaxGuides) break;
     }
-    if (lines.empty()) return;
-    // Residuals: each line's slope away from upright once the camera is turned by a, and a
-    // small pull towards no rotation, which settles the angles the lines leave free (one
-    // vertical line says nothing about the horizon).
-    constexpr int kMaxRes = kMaxGuides + 3;
-    const auto residuals = [&](const double a[3], double r[kMaxRes]) {
-        const Mat R = rotation(a);
-        int n = 0;
-        for (const Line& l : lines) {
-            const double z0 = R[6] * l.x0 + R[7] * l.y0 + R[8], z1 = R[6] * l.x1 + R[7] * l.y1 + R[8];
-            if (z0 < 1e-3 || z1 < 1e-3) {
-                r[n++] = 1.0;  // turned out of view
-                continue;
-            }
-            const double px0 = (R[0] * l.x0 + R[1] * l.y0 + R[2]) / z0, py0 = (R[3] * l.x0 + R[4] * l.y0 + R[5]) / z0;
-            const double px1 = (R[0] * l.x1 + R[1] * l.y1 + R[2]) / z1, py1 = (R[3] * l.x1 + R[4] * l.y1 + R[5]) / z1;
-            const double len = std::max(std::hypot(px1 - px0, py1 - py0), 1e-9);
-            r[n++] = (l.vertical ? px1 - px0 : py1 - py0) / len;
-        }
-        for (int k = 0; k < 3; ++k) r[n++] = 1e-3 * a[k];
-        return n;
-    };
-    // Levenberg-Marquardt with a numeric Jacobian: three unknowns, a handful of residuals.
-    double a[3] = {0, 0, 0}, r[kMaxRes], r2[kMaxRes], J[kMaxRes][3];
-    int n = residuals(a, r);
-    const auto cost = [&](const double* res) {
-        double c = 0;
-        for (int i = 0; i < n; ++i) c += res[i] * res[i];
-        return c;
-    };
-    double c = cost(r), mu = 1e-3;
-    for (int it = 0; it < 60 && c > 1e-20; ++it) {
-        for (int k = 0; k < 3; ++k) {
-            double b[3] = {a[0], a[1], a[2]};
-            b[k] += 1e-7;
-            residuals(b, r2);
-            for (int i = 0; i < n; ++i) J[i][k] = (r2[i] - r[i]) / 1e-7;
-        }
-        double A[9] = {}, g[3] = {};
-        for (int i = 0; i < n; ++i)
-            for (int p = 0; p < 3; ++p) {
-                g[p] -= J[i][p] * r[i];
-                for (int q = 0; q < 3; ++q) A[p * 3 + q] += J[i][p] * J[i][q];
-            }
-        bool improved = false;
-        while (mu < 1e8) {
-            double M[9], step[3];
-            std::copy(A, A + 9, M);
-            for (int p = 0; p < 3; ++p) M[p * 4] += mu * (1.0 + A[p * 4]);
-            if (!solve3(M, g, step)) break;
-            double b[3];
-            for (int k = 0; k < 3; ++k) b[k] = std::clamp(a[k] + step[k], -0.8, 0.8);
-            residuals(b, r2);
-            const double c2 = cost(r2);
-            if (c2 < c) {
-                std::copy(b, b + 3, a);
-                std::copy(r2, r2 + n, r);
-                c = c2;
-                mu = std::max(mu * 0.3, 1e-9);
-                improved = true;
-                break;
-            }
-            mu *= 10;
-        }
-        if (!improved) break;
-    }
-    std::copy(a, a + 3, ang);
+    const bool free[3] = {true, true, true};
+    solveUpright(lines, free, ang);
 }
 
-perspective::Mat PerspectiveNode::matrix(int w, int h) const {
+void PerspectiveNode::detectedAngles(double ang[3]) const {
+    std::lock_guard<std::mutex> lock(detectedMutex_);
+    std::copy(detected_, detected_ + 3, ang);
+}
+
+void PerspectiveNode::uprightAngles(EvalContext& ctx, const Image* src, int w, int h, double ang[3]) {
+    using namespace perspective;
+    ang[0] = ang[1] = ang[2] = 0;
+    const int mode = paramI(Upright);
+    if (!uprightDetects(mode)) {
+        guidedAngles(w, h, ang);
+        return;
+    }
+    if (ctx.roi && ctx.previewStats && ctx.previewStats->size() == 3) {
+        for (int k = 0; k < 3; ++k) ang[k] = (*ctx.previewStats)[size_t(k)];
+    } else if (src) {
+        autoUprightAngles(detectLines(*src, ctx.linear()), w, h, mode, ang);
+    }
+    if (ctx.statsOut) *ctx.statsOut = {float(ang[0]), float(ang[1]), float(ang[2])};
+    // Kept for the viewer's overlay and the Inspector, which ask for the matrix without pixels.
+    std::lock_guard<std::mutex> lock(detectedMutex_);
+    std::copy(ang, ang + 3, detected_);
+}
+
+perspective::Mat PerspectiveNode::matrix(int w, int h, const double* upright) const {
     using namespace perspective;
     w = std::max(w, 1), h = std::max(h, 1);
     const double cx = w * 0.5, cy = h * 0.5, f = std::hypot(cx, cy);
     double g[3];
-    guidedAngles(w, h, g);
+    if (upright)
+        std::copy(upright, upright + 3, g);
+    else if (uprightDetects(paramI(Upright)))
+        detectedAngles(g);
+    else
+        guidedAngles(w, h, g);
     // The sliders turn the camera further, on top of what the guides asked for. Vertical below
     // zero tilts the top towards the viewer (widens it), as Lightroom's slider does for
     // buildings leaning back; Horizontal above zero widens the right side; Rotate turns clockwise.
@@ -783,10 +808,12 @@ perspective::Mat PerspectiveNode::matrix(int w, int h) const {
     return build(hi);
 }
 
-void PerspectiveNode::evaluate(EvalContext&, const std::vector<Value>& in, std::vector<Value>& out) {
+void PerspectiveNode::evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) {
     ImagePtr src = toImage(in[0], 0, 0);
     if (!src) return;
-    const perspective::Mat M = matrix(src->w, src->h);
+    double up[3];
+    uprightAngles(ctx, src.get(), src->w, src->h, up);
+    const perspective::Mat M = matrix(src->w, src->h, up);
     if (M == perspective::Mat{1, 0, 0, 0, 1, 0, 0, 0, 1}) {
         out[0] = Value(src);
         return;
@@ -807,7 +834,20 @@ bool PerspectiveNode::gpuSupported(const EvalContext&, const std::vector<Value>&
 void PerspectiveNode::evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) {
     int w, h;
     in[0].size(w, h);
-    const perspective::Mat M = matrix(w, h);
+    // The detecting modes look at the pixels on the CPU (only for the preview: regions reuse its
+    // rotation).
+    ImagePtr src;
+    if (perspective::uprightDetects(paramI(perspective::Upright)) && !(ctx.roi && ctx.previewStats)) {
+        if (auto gi = std::get_if<GpuImagePtr>(&in[0].v))
+            src = gpu::download(**gi);
+        else if (auto gc = std::get_if<GpuChannelPtr>(&in[0].v))
+            src = toImage(Value(gpu::download(**gc)), 0, 0);
+        else
+            src = toImage(in[0], 0, 0);
+    }
+    double up[3];
+    uprightAngles(ctx, src.get(), w, h, up);
+    const perspective::Mat M = matrix(w, h, up);
     if (M == perspective::Mat{1, 0, 0, 0, 1, 0, 0, 0, 1}) {
         out[0] = in[0];
         return;
@@ -1000,6 +1040,7 @@ std::string LensProfileNode::signatureExtra() const { return profile.signature()
 
 void registerTransformNodes(NodeRegistry& r) {
     r.add<TransformNode>();
+    r.add<PanZoomNode>();
     r.add<FlipNode>();
     r.add<CropNode>();
     r.add<LensDistortionNode>();

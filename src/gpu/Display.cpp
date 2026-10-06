@@ -4,6 +4,7 @@
 #include <cmath>
 #include <string>
 
+#include "core/OutputSpace.h"
 #include "gpu/Device.h"
 #include "gpu/GL.h"
 #include "gpu/PointOp.h"
@@ -20,8 +21,9 @@ layout(binding = 0) uniform sampler2D uSrc;
 layout(rgba8, binding = 0) writeonly uniform image2D uOut;
 layout(std430, binding = 1) buffer Hist { uint hist[]; };
 uniform ivec2 uSize;
-uniform int uLinear, uView, uLook, uChannel, uClipping, uHistogram, uStep;
+uniform int uLinear, uView, uLook, uChannel, uClipping, uHistogram, uStep, uGamut;
 uniform float uExposure, uGamma;
+uniform float uGamutM[9];  // outspace::gamutMatrix, rows first
 
 const mat3 k709To2020 = mat3(vec3(0.6274039, 0.3292830, 0.0433131), vec3(0.0690973, 0.9195404, 0.0113623),
                              vec3(0.0163914, 0.0880133, 0.8955953));
@@ -98,6 +100,13 @@ void main() {
             if (mx == 255u) o = uvec3(255u, 0u, 0u);
             else if (mx == 0u) o = uvec3(0u, 90u, 255u);
         }
+        // outspace::outOfGamut.
+        if (uGamut != 0) {
+            vec3 s = t.rgb * uExposure;
+            for (int r = 0; r < 3; ++r)
+                if (uGamutM[r * 3] * s.r + uGamutM[r * 3 + 1] * s.g + uGamutM[r * 3 + 2] * s.b < -1e-4)
+                    o = uvec3(255u, 0u, 255u);
+        }
         // Exact bytes: unorm stores round v * 255 to the nearest integer.
         // Alpha as displayBytes stores it (channels are opaque), for the viewer's checkerboard.
         float a = uChannel != 0 ? 1.0 : (t.a >= 0.0 ? min(t.a, 1.0) : 0.0);
@@ -123,7 +132,8 @@ struct Buffer {
 
 }  // namespace
 
-DisplayResult display(const Value& scene, const ColorManagement& cm, bool clipping, bool histogram, bool keepTexture) {
+DisplayResult display(const Value& scene, const ColorManagement& cm, bool clipping, bool histogram, bool keepTexture,
+                      int gamut) {
     TexturePtr tex;
     bool channel = false;
     if (auto i = std::get_if<GpuImagePtr>(&scene.v); i && *i) tex = (*i)->texture();
@@ -156,6 +166,13 @@ DisplayResult display(const Value& scene, const ColorManagement& cm, bool clippi
     gl::Uniform2i(gl::GetUniformLocation(prog, "uSize"), out.w, out.h);
     i1("uLinear", cm.linear), i1("uView", cm.view), i1("uLook", cm.look), i1("uChannel", channel);
     i1("uClipping", clipping), i1("uHistogram", histogram);
+    const bool proof = gamut >= 0 && outspace::valid(gamut) && cm.linear && cm.view == ColorManagement::Standard && !channel;
+    i1("uGamut", proof);
+    if (proof) {
+        float m[9];
+        outspace::gamutMatrix(gamut, m);
+        gl::Uniform1fv(gl::GetUniformLocation(prog, "uGamutM"), 9, m);
+    }
     i1("uStep", std::max(1, int(n / 2000000)));
     f1("uExposure", std::exp2(cm.exposure)), f1("uGamma", cm.gamma);
     bindTexture(0, *tex);

@@ -3,6 +3,78 @@
 NodeLab uses [semantic versioning](https://semver.org): minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
+## 1.3.0 (2026-10-06)
+
+### New
+- Library: colour labels (6-9), title, caption and keywords in a Metadata panel, search, collections,
+  stacks (Ctrl+G, Ctrl+Shift+G, S), Find Duplicates (same file, or the same picture resized or rotated), and
+  Lightroom's Compare (C) and Survey (N) views.
+- **Pan and Zoom** (Transform): moves and zooms the picture inside its frame, transparent where it
+  doesn't reach; drag it in the viewer and Ctrl+wheel to zoom.
+- Exports write a library photo's title, caption, keywords, rating and label as XMP (PNG, JPEG,
+  TIFF, WebP, JPEG XL, AVIF).
+- **JPEG XL** (8 or 16 bit) and **AVIF** (8 or 10 bit) export, lossless or lossy, and **lossy
+  WebP**, through libjxl, libavif (with libaom) and libwebp. All three carry ICC profiles, EXIF
+  and XMP, and JPEG XL and AVIF can be Rec.2100 PQ HDR. In the Export window, File Output and
+  `--batch --jxl/--avif`; `--quality Q` makes them lossy from the command line.
+- Image Input and the library open WebP, JPEG XL and AVIF files, with their colour profiles and
+  orientation.
+- **Layer Stack** (Mix): any number of images layered on each other, Layer 0 at the bottom, each
+  with its own opacity (or a mask wired to it) and blend mode. Connecting the top layer adds
+  another; the Inspector reorders, removes and adds layers.
+- **HDR Merge** and **Panorama Merge** (Mix), Lightroom's Photo Merge: brackets merged into one
+  scene-linear image (Auto Align and Deghost), and overlapping photos stitched automatically
+  (Spherical, Cylindrical or Perspective, with gain compensation and Auto Crop).
+- **Vignette** (Filter), Lightroom's Post-Crop Vignetting: Highlight Priority, Color Priority and
+  Paint Overlay, with Midpoint, Roundness, Feather and Highlights.
+- **Defringe** (Filter), Lightroom's: purple and green fringes along high-contrast edges, with
+  hue ranges.
+- **Border** (Transform): a margin around the image, an aspect-ratio canvas and a frame line.
+- **History panel** (View > History, Lightroom's): every undo step named after what changed
+  (Add Curves, Basic: Exposure 0.50, Connect...); click one to go back or forward to it. The
+  history is saved with the project (as JSON patches between steps), so undo survives reopening.
+- **Multi-preset export** (darktable 5.2's): the Export window's Also export writes each image
+  with several presets from one render, each into a subfolder named after the preset.
+- **Watermark** (Transform): text in a choice of fonts or a logo, at one of nine anchors, with
+  opacity and a soft shadow; sized relative to the picture so every export size matches. It uses
+  the Windows fonts, and built-in Roboto and Cousine where those are missing.
+- **Tone Equalizer** (Color), darktable's: gains for nine exposure bands, read from an
+  edge-aware mask (Smoothing, Feathering, Mask Exposure and Contrast, Show Mask).
+- **Color Equalizer** (Color), darktable's: hue, saturation and brightness for eight Oklch hues,
+  with Smoothness.
+- **Film Negative** (Color), darktable's negadoctor: a scanned negative printed as positive, from
+  the film base colour, D Max, paper contrast, print exposure and black; colour or black and
+  white film.
+- **Capture Sharpening** (Filter), RawTherapee's: Richardson-Lucy deconvolution of the camera's
+  blur on luminance, with a contrast threshold.
+- **Diffuse or Sharpen** (Filter), darktable's (simplified): multiscale detail added or removed
+  over iterations, slowed across edges, with a noise threshold.
+- **Remove** (Filter): content-aware fill. A masked area is rebuilt from patches of the rest of
+  the photo (PatchMatch on an image pyramid), so texture continues across it.
+- **Detect Dust** in Spot Removal's Inspector: small soft dark spots on smooth areas become spots
+  with automatic sources, with a Sensitivity slider.
+- **Select People, Select Landscape and Select Objects** (Matte), Lightroom's AI masks: face
+  parts (skin, eyebrows, eyes, lips, mouth, hair, neck, clothes, accessories) from a SegFormer
+  face-parsing model, and landscape parts and kinds of objects from a SegFormer ADE20K scene
+  model. Both are downloaded on request; their licences are non-commercial.
+- **Feather and Edge** on every AI mask: a softer outline, and the outline moved out or in.
+- **Upright Auto, Level, Vertical and Full** in Perspective: straight lines found in the photo
+  (a line segment detector) are levelled or stood upright, with outliers ignored.
+- **Export colour spaces** (Lightroom's Color Space): Display P3, Adobe RGB (1998), ProPhoto RGB
+  and Rec.2020 with embedded ICC profiles, keeping colours sRGB clips; and **HDR PNG**
+  (Rec.2100 PQ with a cICP chunk), highlights above white kept up to 10,000 nits.
+- **Gamut warning** (soft proofing) in the Result toolbar: colours the export's colour space can't
+  hold show magenta.
+- **WebP export**, lossless, from NodeLab's own encoder (no new library), about a third smaller
+  than PNG. Also in File Output and `--batch --webp`.
+
+### Fixed
+- A cyan or green line along one edge of some RAWs (Canon EOS 70D and other sensors whose
+  outermost row or column reads junk), in previews and exports. Such lines are replaced by the
+  nearest line of the same Bayer colours, so the picture keeps its size.
+- `--render` says why an AI mask is empty (its model failed to load or run) instead of
+  saving a blank mask silently.
+
 ## 1.2.0 (2026-10-05)
 
 ### New

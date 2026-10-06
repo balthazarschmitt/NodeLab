@@ -1116,4 +1116,8 @@ void registerFilterNodes(NodeRegistry& r) {
     r.add<GlareNode>();
     r.add<SunBeamsNode>();
     r.add<GrainNode>();
+    registerEffectNodes(r);
+    registerWatermarkNodes(r);
+    registerSharpeningNodes(r);
+    registerRemoveNodes(r);
 }

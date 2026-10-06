@@ -27,6 +27,7 @@ void registerAllNodes() {
     registerColorNodes(r);
     registerDevelopNodes(r);
     registerMathNodes(r);
+    registerPhotoMergeNodes(r);
     registerConverterNodes(r);
     registerFilterNodes(r);
     registerTransformNodes(r);

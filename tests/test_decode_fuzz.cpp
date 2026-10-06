@@ -33,12 +33,13 @@ Image pattern(int w, int h) {
     return img;
 }
 
-Bytes encode(const Image& img, FileFormat format, int depth) {
+Bytes encode(const Image& img, FileFormat format, int depth, bool lossless = true) {
     const fs::path p = fs::temp_directory_path() / (std::string("nodelab_fuzz_src") + formatExtension(format));
     SaveOptions o;
     o.format = format;
     o.depth = depth;
     o.jpegQuality = 80;
+    o.lossless = lossless;
     std::string err;
     REQUIRE(writeImage(pathToU8(p), img, o, err));
     std::vector<char> f;
@@ -128,6 +129,14 @@ TEST_CASE("damaged TIFF and OpenEXR files load or fail cleanly") {
     loadDamaged(encode(pattern(29, 43), FileFormat::TIFF, 16), ".tif", 7, 200);
     loadDamaged(encode(pattern(47, 19), FileFormat::EXR, 16), ".exr", 8, 300);
     loadDamaged(encode(pattern(23, 37), FileFormat::EXR, 32), ".exr", 9, 200);
+}
+
+TEST_CASE("damaged WebP, JPEG XL and AVIF files load or fail cleanly") {
+    loadDamaged(encode(pattern(45, 27), FileFormat::WEBP, 8, false), ".webp", 10, 200);
+    loadDamaged(encode(pattern(39, 33), FileFormat::JXL, 8), ".jxl", 11, 200);
+    loadDamaged(encode(pattern(31, 25), FileFormat::JXL, 16, false), ".jxl", 12, 200);
+    loadDamaged(encode(pattern(35, 21), FileFormat::AVIF, 8, false), ".avif", 13, 150);
+    loadDamaged(encode(pattern(27, 29), FileFormat::AVIF, 16), ".avif", 14, 150);
 }
 
 TEST_CASE("damaged ICC profiles parse or fail cleanly") {

@@ -11,14 +11,17 @@ It's a single portable exe for 64-bit Windows 10/11 (OpenGL 3.0 or newer) and ne
 The zip also has the guide, the changelog and example projects. Help > Guide shows the same guide
 inside the app.
 
-The AI masks (Select Subject, Select Sky) download their models on first use, from the
-Inspector: about 240 MB for Subject and 190 MB for Sky, into `%APPDATA%\NodeLab\models`.
+The AI masks (Select Subject, Select Sky, Select People, Select Landscape, Select Objects)
+download their models on first use, from the Inspector: about 240 MB for Subject, 190 MB for Sky,
+340 MB for People and 110 MB for Landscape and Objects (one model), into
+`%APPDATA%\NodeLab\models`. The People and scene models' licences allow non-commercial use only.
 
 ## Build (Windows)
 
 Requires CMake ≥ 3.24 and a C++20 compiler. CLion's bundled MinGW toolchain works out of the box:
 open the folder in CLion, pick the `NodeLab` target, Run. Dependencies (GLFW, Dear ImGui,
-nlohmann/json, stb, tinyexpr, LibRaw, zlib-ng, doctest) are downloaded by CMake on first configure.
+nlohmann/json, stb, tinyexpr, LibRaw, zlib-ng, libwebp, libjxl, libavif with libaom, doctest) are
+downloaded by CMake on first configure. libaom's assembly needs NASM or YASM on the PATH.
 
 LibRaw (camera RAW decoding) is used under its CDDL 1.0 licence option
 (https://github.com/LibRaw/LibRaw/blob/master/LICENSE.CDDL). It is built with OpenMP and linked
@@ -50,9 +53,10 @@ running copy is renamed to `NodeLab.old-*.exe` and deleted by a later build once
 Version: `NodeLab.exe --version` (also in the window title, Help menu and the exe's Properties).
 See [CHANGELOG.md](CHANGELOG.md).
 
-Headless render: `NodeLab.exe --render project.nlproj out.png [--depth 16]` (the extension picks
-PNG, JPEG, TIFF or OpenEXR; `--depth 32` for full-float EXR; `--timings` prints evaluate and save times)
-Headless batch: `NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr] [--depth N] a.jpg b.jpg ...`
+Headless render: `NodeLab.exe --render project.nlproj out.png [--depth 16] [--quality Q]` (the extension picks
+PNG, JPEG, TIFF, OpenEXR, WebP, JPEG XL or AVIF; `--depth 32` for full-float EXR; `--quality` makes WebP, JPEG XL
+and AVIF lossy; `--timings` prints evaluate and save times)
+Headless batch: `NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr|--webp|--jxl|--avif] [--depth N] [--quality Q] a.jpg b.jpg ...`
 (each source goes into the project's first Image Input and is saved as `outDir\<name>_edit.<ext>`)
 Benchmark: `NodeLab.exe --benchmark project.nlproj [--full] [--runs N] [--sync]` (median ms per node)
 GPU compositing: `--device gpu|cpu` and `--precision half|full` for `--render` and `--benchmark`
@@ -119,27 +123,32 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Guide | Help > Guide or F1 (opens at the selected node's entry); also the Inspector's Guide button |
 | Zoom / pan images | Mouse wheel / drag; double-click resets. Both panes stay in sync and sharpen to full resolution when zoomed in |
 | Colour management | Color menu: View Transform (Standard, AgX, Raw), Look, view Exposure and Gamma, as in Blender's Render Properties. New projects are scene-linear; Convert Project to Scene-Linear upgrades a legacy one |
-| Histogram / clipping | Result toolbar, or H / J with the mouse over the Result: RGB histogram, and clipped highlights in red and crushed shadows in blue |
+| Histogram / clipping | Result toolbar, or H / J with the mouse over the Result: RGB histogram, and clipped highlights in red and crushed shadows in blue; Gamut shows colours outside the export colour space in magenta (soft proofing) |
 | Before / after | Result toolbar, or Y with the mouse over the Result: the original left of a draggable divider, the edit right; `\` shows the original alone |
 | Transparency | Images with alpha are drawn over a checkerboard |
 | On-image controls | Select a Crop, gradient, shape or Brush Mask node and edit it on the Result: drag handles; Crop shows the whole frame (drag outside to straighten); Brush paints, Alt erases, `[` `]` size; O toggles the red mask overlay, or with Crop cycles its guide overlay (Shift+O turns it); Perspective: drag to draw Guided Upright guides, Alt+click removes |
 | Loupe overlay | View > Loupe Overlay: a grid and draggable guide lines over the Result |
-| Spot removal | Select a Spot Removal node, click a blemish on the Result (the source is picked automatically, `/` finds another), or drag its source onto clean texture; drag a spot to move it, its edge to resize; Alt+click or Delete removes one |
+| Spot removal | Select a Spot Removal node, click a blemish on the Result (the source is picked automatically, `/` finds another), or drag its source onto clean texture; drag a spot to move it, its edge to resize; Alt+click or Delete removes one; Detect Dust (Inspector) adds spots for sensor dust |
 | Auto tone | Basic's Inspector → Auto sets Exposure, Contrast, Highlights, Shadows, Whites and Blacks from the image |
 | Auto save | Every 5 minutes by default (Edit > Preferences > Save & Load), once a project has been saved (library photos always) |
 | Add Mask | Result toolbar → Add Mask (Shift+M over the Result), or M linear, Shift+R radial, K brush (also Luminance Range and the AI masks Subject, Sky and Background): inserts a Basic labelled "Mask N" before the Output, driven by a new mask; the Inspector shows the mask with the Basic's sliders below it |
 | Import image | File > Import Image, or drop a file on the window |
 | Library | File > Open Folder (Ctrl+Shift+O), drop a folder on the window, or `NodeLab.exe <folder>`: a filmstrip of the folder's photos. Click or ←/→ to open one; its edit is saved automatically in `<photo>.nlproj` beside it. New photos start as Image Input → Denoise → Basic → Output |
-| Culling | In the Library: 0-5 rate, P pick, X reject, U unflag; Ctrl+click / Shift+click select several; the filter menu shows picks, stars, rejects or edited photos |
+| Culling | In the Library: 0-5 rate, P pick, X reject, U unflag, 6-9 colour labels; Ctrl+click / Shift+click select several; the filter menu shows picks, stars, rejects, labels, edited photos or duplicates |
+| Library metadata | The Library's Metadata button (or View > Metadata): title, caption, keywords and colour label of the selected photos; the Search box finds photos by name, title, caption or keyword. Exports carry them, with the rating, as XMP |
+| Collections and stacks | The Library's Collections menu: named lists of photos from any folders. Ctrl+G stacks the selected photos, S expands / collapses, Ctrl+Shift+G unstacks |
+| Find duplicates | The Library's Photo menu: groups copies and re-saved, resized or rotated versions of the same picture under the Duplicates filter |
+| Compare / Survey | C: two photos side by side, zoomed and panned together (←/→ next candidate, ↑ make select, ↓ swap). N: the selected photos tiled; / or the x removes one |
 | Library sort | The Library toolbar's Sort menu: file name, capture time, file type, rating, pick, edit time, camera, lens, ISO, focal length; A-Z / Z-A |
 | Virtual copies | Ctrl+' (or right-click a thumbnail): another edit of the same photo, with its own sidecar, rating and flag |
 | Library grid | G (or the Library's Grid button): the whole folder as cards; click the stars to rate, double-click / Enter / E opens a photo, Esc goes back; Ctrl+wheel resizes |
 | Copy / paste edit | Ctrl+Shift+C copies the open photo's edit, Ctrl+Shift+V pastes it onto the selected photos (each keeps its own file and rating) |
 | Export selected | Library → Export Selected... (or File menu): each selected photo exported with its own edit, using the Export window's format and size |
-| Export | File > Export (Ctrl+E) opens the Export window: renders in the background with a progress bar and Cancel. Format (PNG/TIFF 8 or 16 bit, JPEG + quality with EXIF, OpenEXR half/full float scene-linear), size (original, long edge, percent; Lanczos in linear light) |
+| Export | File > Export (Ctrl+E) opens the Export window: renders in the background with a progress bar and Cancel. Format (PNG/TIFF 8 or 16 bit, JPEG + quality with EXIF, WebP, JPEG XL 8/16 bit and AVIF 8/10 bit lossless or lossy, OpenEXR half/full float scene-linear), Color Space (sRGB, Display P3, Adobe RGB, ProPhoto, Rec.2020, Rec.2100 PQ HDR in PNG, JPEG XL and AVIF), size (original, long edge, percent; Lanczos in linear light) |
 | Batch | Export window → Batch: add files or a folder (or drop them on the window), pick the Image Input they feed and an output folder; each result is named by the File Naming template (`{name}_edit`, with tokens for sequence, capture date, camera, lens...) |
-| Export presets | Export window → Preset: Full-Size JPEG, Web JPEG, Email, PNG, 16-bit TIFF, OpenEXR, or Save... your own |
+| Export presets | Export window → Preset: Full-Size JPEG, Web JPEG, Email, PNG, 16-bit TIFF, OpenEXR, or Save... your own; Also export writes several presets from one render |
 | Snapshots | View > Snapshots: Create Snapshot keeps the whole edit (saved with the project); click one to restore it |
+| History | View > History: every undo step by name (Add Curves, Basic: Exposure 0.50...); click one to go back or forward to it; saved with the project |
 
 **Wire types**
 - **Image** (amber, square pins): full RGBA.
@@ -161,14 +170,14 @@ layout is saved per user in `%APPDATA%\NodeLab\layout.ini`.
 | Category | Nodes |
 |---|---|
 | Input / Output | Image Input, Output, Number |
-| Color | Basic (Lightroom's exposure, highlights/shadows, whites/blacks, texture, clarity, dehaze, vibrance), Color Mixer (8-band HSL), Color Grading (shadow/midtone/highlight/global wheels), Brightness / Contrast, Saturation, Hue Shift, Hue Correct (per-hue H/S/V curves), Exposure, Gamma, Levels, Curves, Color Balance (Lift/Gamma/Gain, ASC CDL), Tone Map, Convert Colorspace, Invert, Luminance, Split/Combine RGB, HSV, HSL, Lab, YCbCr, YUV |
-| Mix | Mix, Blend (19 modes), Alpha Over |
+| Color | Basic (Lightroom's exposure, highlights/shadows, whites/blacks, texture, clarity, dehaze, vibrance), Color Mixer (8-band HSL), Color Grading (shadow/midtone/highlight/global wheels), Tone Equalizer (darktable's: exposure bands on a guided mask), Color Equalizer (darktable's: hue/saturation/brightness per Oklch hue), Brightness / Contrast, Saturation, Hue Shift, Hue Correct (per-hue H/S/V curves), Exposure, Gamma, Levels, Curves, Color Balance (Lift/Gamma/Gain, ASC CDL), Tone Map, Convert Colorspace, Invert, Film Negative (darktable's negadoctor), Luminance, Split/Combine RGB, HSV, HSL, Lab, YCbCr, YUV |
+| Mix | Mix, Blend (19 modes), Alpha Over, Layer Stack (any number of layers, each with opacity, mask and blend mode), HDR Merge (aligned, deghosted brackets), Panorama Merge (spherical, cylindrical or perspective, with Auto Crop) |
 | Converter | Color Ramp, Color Key, Map Range, Math (21 ops), Clamp, Threshold, Normalize (min/max or percentiles), Float Curve, Set Alpha, Wavelength (nm to color), Blackbody (Kelvin to color), Expression, Image Expression |
-| Filter | Blur (pixels or Relative %), Directional Blur (+spin/zoom), Bilateral Blur (both with a Fast quality), Denoise (Luminance/Color, wavelets), Sharpen (Amount, Radius, Detail, Masking), Spot Removal (Heal / Clone, on the Result), Filter (Soften, Sharpen, Laplace, Sobel, Prewitt, Kirsch, Shadow), Dilate / Erode, Kuwahara, Pixelate, Posterize, Glare (Fog Glow, Streaks, Simple Star), Sun Beams, Grain (Amount, Size, Roughness, as Lightroom) |
-| Transform | Transform, Flip, Crop (straighten, aspect presets, on-image frame), Lens Correction (distortion, fringing, vignetting), Lens Profile (lensfun profiles picked from the photo's EXIF), Lens Distortion (with chromatic dispersion), Perspective (Lightroom's Transform: Guided Upright, Vertical/Horizontal), Displace, Map UV, Corner Pin |
-| Matte | Box Mask, Ellipse Mask, Radial Gradient, Linear Gradient, Brush Mask (painted on the Result, with Auto Mask), Range Mask (luminance or colour range), HSL Mask (hue, saturation and lightness qualifier), Select Subject (Accurate or Light model) and Select Sky (AI masks, models downloaded on first use), Channel Key, Luminance Key, Difference Key, Distance Key, Chroma Key, Color Spill, Double Edge Mask |
+| Filter | Blur (pixels or Relative %), Directional Blur (+spin/zoom), Bilateral Blur (both with a Fast quality), Denoise (Luminance/Color, wavelets), Sharpen (Amount, Radius, Detail, Masking), Capture Sharpening (Richardson-Lucy deconvolution), Diffuse or Sharpen (multiscale, edge-aware), Spot Removal (Heal / Clone, on the Result, Detect Dust), Remove (content-aware fill of a mask), Filter (Soften, Sharpen, Laplace, Sobel, Prewitt, Kirsch, Shadow), Dilate / Erode, Kuwahara, Pixelate, Posterize, Glare (Fog Glow, Streaks, Simple Star), Sun Beams, Grain (Amount, Size, Roughness, as Lightroom), Vignette (post-crop, three styles), Defringe (purple and green fringes) |
+| Transform | Transform, Pan and Zoom (drag and Ctrl+wheel in the viewer, transparent outside), Flip, Crop (straighten, aspect presets, on-image frame), Border (margin, aspect canvas, frame line), Watermark (text and logo, nine anchors, shadow), Lens Correction (distortion, fringing, vignetting), Lens Profile (lensfun profiles picked from the photo's EXIF), Lens Distortion (with chromatic dispersion), Perspective (Lightroom's Transform: Upright Auto/Level/Vertical/Full by line detection, Guided Upright, Vertical/Horizontal), Displace, Map UV, Corner Pin |
+| Matte | Box Mask, Ellipse Mask, Radial Gradient, Linear Gradient, Brush Mask (painted on the Result, with Auto Mask), Range Mask (luminance or colour range), HSL Mask (hue, saturation and lightness qualifier), Select Subject (Accurate or Light model), Select Sky, Select People (face parts), Select Landscape (sky, water, vegetation, mountains, ground, architecture) and Select Objects (people, animals, vehicles, ...): AI masks with Feather and Edge, models downloaded on first use, Channel Key, Luminance Key, Difference Key, Distance Key, Chroma Key, Color Spill, Double Edge Mask |
 | Texture | Noise, Voronoi, Gradient, Wave, Checker, White Noise |
-| Utility | Reroute, Switch, Split (compare), Image Info, File Output (PNG/JPEG/TIFF/OpenEXR; written on single Export / File > Write File Outputs / --render) |
+| Utility | Reroute, Switch, Split (compare), Image Info, File Output (PNG/JPEG/TIFF/OpenEXR/WebP/JPEG XL/AVIF; written on single Export / File > Write File Outputs / --render) |
 | Group | Groups (Ctrl+G) with Group Input / Group Output inside, and Value Input / Value Output for single sockets |
 
 Sizes in pixels (blur radius, offsets, glare size) refer to the full-resolution image; the preview
@@ -206,7 +215,10 @@ Adding a node: write a class with a `NODELAB_NODE({...})` descriptor and `evalua
 ## License
 
 NodeLab is released under the [MIT License](LICENSE). The release exe statically links GLFW (zlib),
-Dear ImGui (MIT), nlohmann/json (MIT), stb (public domain / MIT), tinyexpr (zlib), zlib-ng (zlib)
-and LibRaw (LGPL 2.1 / CDDL 1.0, used under CDDL). The AI masks download ONNX Runtime and DirectML
+Dear ImGui (MIT), nlohmann/json (MIT), stb (public domain / MIT), tinyexpr (zlib), zlib-ng (zlib),
+libwebp (BSD-3), libjxl with highway, brotli and skcms (BSD-3, Apache 2.0 / BSD-3, MIT, BSD-3),
+libavif (BSD-2), libaom (BSD-2 plus the Alliance for Open Media patent licence)
+and LibRaw (LGPL 2.1 / CDDL 1.0, used under CDDL). It embeds Dear ImGui's copies of the Roboto
+(Apache 2.0) and Cousine (SIL OFL 1.1) fonts for Watermark on systems without the Windows fonts. The AI masks download ONNX Runtime and DirectML
 (MIT) and their models (BiRefNet and U²-Net sky segmentation, MIT) on first use; they aren't
 part of the exe. `third_party/onnxruntime` has ONNX Runtime's C API headers (MIT).

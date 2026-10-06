@@ -800,10 +800,90 @@ public:
     }
 };
 
+// darktable's negadoctor: a scanned film negative made positive the way a darkroom print does it.
+// The scan's transmission becomes density above the film base (the orange mask's colour, which
+// is clear film), and the print exposes paper through that density: exposure grows by a power of
+// ten with density, and the paper's contrast sets how many stops the film's range spans.
+class FilmNegativeNode : public Node {
+public:
+    enum { Type = 0, FilmBase, Dmax, Offset, DensityCorrection, Contrast, PrintExposure, Black };
+    NODELAB_NODE({"color.film_negative", "Film Negative", "Color",
+                  {{"Image", PinType::Image}},
+                  {{"Image", PinType::Image}},
+                  {ParamDesc::Enum("Type", 0, {"Color", "Black & White"}), ParamDesc::Color("Film Base Color", 0.75f, 0.35f, 0.15f),
+                   ParamDesc::Float("D Max", 1.6f, 0.3f, 4.0f), ParamDesc::Float("Scan Offset", 0.0f, -0.5f, 0.5f),
+                   ParamDesc::ColorGamma("Density Correction", 1, 1, 1, 2), ParamDesc::Float("Contrast", 1.7f, 0.5f, 4.0f),
+                   ParamDesc::Float("Print Exposure", 0.0f, -4.0f, 4.0f), ParamDesc::Float("Black", 0.0f, -0.1f, 0.5f)}})
+
+    void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        ImagePtr src = toImage(in[0], 0, 0);
+        if (!src) return;
+        const bool lin = ctx.linear();
+        Coeffs k = coeffs(lin);
+        out[0] = Value(ImagePtr(mapImage(*src, [&](int, int, const float* s, float* d) {
+            float dens[3];
+            for (int c = 0; c < 3; ++c) {
+                const float t = lin ? s[c] : srgbToLinear(clamp01(s[c]));
+                dens[c] = std::log10(k.base[c] / std::max(t, 1e-6f)) * k.corr[c];
+            }
+            if (k.bw) dens[0] = dens[1] = dens[2] = luminance(dens[0], dens[1], dens[2]);
+            for (int c = 0; c < 3; ++c) {
+                // Above the brightest density (D Max) the print is white; Black lifts the paper's
+                // black point and rescales the rest.
+                float v = k.gain * std::pow(10.0f, (dens[c] + k.offset - k.dmax) * k.contrast);
+                v = (v - k.black) / (1.0f - k.black);
+                d[c] = lin ? clampColor(true, v) : clamp01(linearToSrgb(std::max(v, 0.0f)));
+            }
+            d[3] = s[3];
+        })));
+    }
+
+    bool gpuSupported(const EvalContext&, const std::vector<Value>& in) const override { return gpu::sizedValue(in[0]); }
+    void evaluateGpu(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override {
+        const bool lin = ctx.linear();
+        const Coeffs k = coeffs(lin);
+        gpu::PointOp op;
+        op.params = {k.base[0], k.base[1], k.base[2], k.corr[0], k.corr[1], k.corr[2], k.dmax, k.offset, k.contrast, k.gain, k.black};
+        op.functions = std::string("const bool BW = ") + (k.bw ? "true" : "false") + ";\nconst bool LIN = " + (lin ? "true" : "false") + ";\n";
+        op.body = R"(
+    vec4 s = img0(p);
+    vec3 t = LIN ? s.rgb : srgbToLinear(clamp01(s.rgb));
+    vec3 dens = log2(vec3(P[0], P[1], P[2]) / max(t, 1e-6)) * 0.30103 * vec3(P[3], P[4], P[5]);
+    if (BW) dens = vec3(luminance(dens));
+    vec3 v = P[9] * exp2((dens + P[7] - P[6]) * P[8] * 3.3219281);
+    v = (v - P[10]) / (1.0 - P[10]);
+    out0 = vec4(LIN ? max(v, 0.0) : clamp01(linearToSrgb(max(v, 0.0))), s.a);)";
+        gpu::runOver(ctx, *this, op, in, out);
+    }
+
+private:
+    struct Coeffs {
+        float base[3], corr[3], dmax, offset, contrast, gain, black;
+        bool bw;
+    };
+    Coeffs coeffs(bool lin) const {
+        Coeffs k;
+        paramC(FilmBase, k.base);
+        paramC(DensityCorrection, k.corr);
+        for (int c = 0; c < 3; ++c) {
+            // Colours are stored display-encoded in legacy projects; the scan is decoded to
+            // transmission, so the base must be too.
+            if (!lin) k.base[c] = srgbToLinear(clamp01(k.base[c]));
+            k.base[c] = std::max(k.base[c], 1e-6f);
+        }
+        k.dmax = paramF(Dmax), k.offset = paramF(Offset), k.contrast = paramF(Contrast);
+        k.gain = std::exp2(paramF(PrintExposure));
+        k.black = std::min(paramF(Black), 0.9f);
+        k.bw = paramI(Type) == 1;
+        return k;
+    }
+};
+
 }  // namespace
 
 void registerColorNodes(NodeRegistry& r) {
     r.add<BrightnessContrastNode>();
+    r.add<FilmNegativeNode>();
     r.add<SaturationNode>();
     r.add<HueShiftNode>();
     r.add<ExposureNode>();

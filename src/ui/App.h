@@ -74,6 +74,7 @@ private:
     // Library (File > Open Folder): photos edited in sidecar projects, saved automatically when
     // switching photos, as in Lightroom.
     void openFolder(const std::string& dirU8);
+    void openCollection(const std::string& name);  // a Library collection, instead of a folder
     void openLibraryPhoto(int index);  // asks about a non-library project's unsaved changes first
     void loadLibraryPhoto(int index);
     // The project is a library photo's sidecar.
@@ -120,6 +121,9 @@ private:
     void openExportWindow();
     void drawExportWindow();
     void exportPresetRow();
+    void alsoExportRow();
+    const ExportPreset* findExportPreset(const std::string& name) const;
+    void addAlsoPresets(std::vector<ExportItem>& items, const std::vector<NameSource>* names, const std::string& dirU8) const;
     void fileNaming(const std::string& exampleSource);
     void startExport(std::vector<ExportItem> items, int inputNode);
     void pollExport();
@@ -159,12 +163,19 @@ private:
     // Toolbar's Add Mask: a new Basic before the Output, driven by a new mask (one undo step).
     void addMask(int kind);
     void applyAutoTone(int nodeId);  // Basic's Auto button
+    // Spot Removal's Detect Dust (SpotRemovalNode::detectDustRequest).
+    void detectDust(SpotRemovalNode& node);
     // Spot Removal's automatic source (SpotRemovalNode::findSource) from the image arriving at it.
     void findSpotSource(SpotRemovalNode& node);
 
     void markChanged(bool eval);
     void resetHistory();
     bool commitHistory();
+    // The History steps as saved with the project (ui.history: JSON patches between neighbouring
+    // steps), and back. loadHistory runs after resetHistory, and keeps nothing unless the
+    // project's graph is the one the steps were saved against.
+    nlohmann::json historyJson() const;
+    void loadHistory(const nlohmann::json& ui);
     bool canUndo() const;
     void undo();
     void redo();
@@ -206,6 +217,8 @@ private:
     NodePath overlayPath_;      // node the overlay edits (crop mode / mask target follow it)
     bool maskWanted_ = false;   // a mask node is selected and the overlay is on
     bool maskOverlay_ = true, showHistogram_ = false, clipping_ = false;
+    // Soft proofing's gamut warning, against the export colour space.
+    bool gamutWarning_ = false;
     // Before / After in the Result viewer (Y splits, \ shows the before image whole).
     bool splitView_ = false, beforeFull_ = false, splitDrag_ = false;
     float splitPos_ = 0.5f;
@@ -244,6 +257,7 @@ private:
     char batchDir_[1024] = {};
     char nameTemplate_[256] = "{name}_edit";  // exportSettings_.nameTemplate while it's edited
     std::vector<ExportPreset> exportPresets_;  // the user's (preferences.json)
+    std::vector<std::string> alsoPresets_;     // presets every export also writes (by name)
     char presetName_[64] = {};
     int removeCopyIndex_ = -1;  // the library entry the Remove Virtual Copy dialog asks about
     std::string namingExampleKey_, namingExample_;
@@ -326,8 +340,18 @@ private:
     bool automated_ = false;
     std::string iniPath_;
 
-    std::vector<nlohmann::json> undo_, redo_;
+    // Undo steps, named for the History panel (graph/History.h, or historyName_).
+    struct HistoryStep {
+        nlohmann::json graph;
+        std::string name;
+    };
+    std::vector<HistoryStep> undo_, redo_;
     nlohmann::json committed_;  // graph as of the last snapshot
+    std::string committedName_ = "Open";  // the step that made it
+    std::string historyName_;  // names the next step instead of describeChange (Auto Tone, Restore Snapshot)
+    bool showHistory_ = false;
+    void drawHistoryWindow();
+    void stepHistory(int steps);  // negative: undo that many steps, positive: redo
     bool historyDirty_ = false;
 
     Pending pending_ = Pending::None;

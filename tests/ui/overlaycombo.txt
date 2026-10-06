@@ -11,9 +11,9 @@ move 147 18
 wait 2
 click 147 18
 wait 3
-move 198 344
+move 198 561
 wait 2
-click 198 344
+click 198 561
 wait 3
 settle
 shot build/smoke/oc1_overlay.png

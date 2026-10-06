@@ -4,6 +4,9 @@
 
 #include "gpu/Device.h"
 #include "gpu/Display.h"
+#include "core/OutputSpace.h"
+#include "core/Parallel.h"
+#include <cmath>
 
 DisplayWorker::DisplayWorker() : thread_([this] { run(); }) {}
 
@@ -35,12 +38,32 @@ bool DisplayWorker::busy() const {
     return !queue_.empty() || working_ > 0 || !done_.empty();
 }
 
+namespace {
+
+// Soft proofing's gamut warning on the CPU (gpu::display does the same): magenta where the
+// scene-linear colour falls outside the space.
+void markGamut(const Image& scene, const ColorManagement& cm, int space, std::vector<unsigned char>& bytes) {
+    float m[9];
+    outspace::gamutMatrix(space, m);
+    const float exposure = std::exp2(cm.exposure);
+    parallelFor(scene.h, [&](int y) {
+        for (int x = 0; x < scene.w; ++x) {
+            const size_t i = size_t(y) * scene.w + x;
+            const float* p = scene.pixel(i);
+            const float s[3] = {p[0] * exposure, p[1] * exposure, p[2] * exposure};
+            if (outspace::outOfGamut(m, s)) bytes[i * 4] = 255, bytes[i * 4 + 1] = 0, bytes[i * 4 + 2] = 255;
+        }
+    });
+}
+
+}  // namespace
+
 bool DisplayWorker::gpuDisplay(const Request& r, Result& out) {
     if (!gpu::available()) return false;
     try {
         gpu::Scope scope;
         gpu::DisplayResult d = gpu::display(r.gpuScene.empty() ? Value(r.scene) : r.gpuScene, r.cm, r.clipping,
-                                            r.histogram, r.keepTexture && gpu::sharesUiContext());
+                                            r.histogram, r.keepTexture && gpu::sharesUiContext(), r.gamut);
         if (d.w != out.w || d.h != out.h) return false;
         out.bytes = std::move(d.bytes);
         out.texture = std::move(d.texture);
@@ -88,6 +111,8 @@ void DisplayWorker::run() {
             } else if (r.scene) {
                 const ImagePtr display = colormgmt::displayImage(r.scene, r.cm);
                 out.bytes = displayBytes(*display, r.clipping);
+                if (r.gamut >= 0 && outspace::valid(r.gamut) && r.cm.linear && r.cm.view == ColorManagement::Standard)
+                    markGamut(*r.scene, r.cm, r.gamut, out.bytes);
                 if (r.histogram) out.histogram.compute(*display);
             }
         }

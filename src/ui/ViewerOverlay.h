@@ -28,6 +28,7 @@ public:
         mask_ = mask;
     }
     bool update(ImDrawList* dl, const ImVec2& imgMin, const ImVec2& imgMax, bool hovered, bool active) override;
+    bool wantsCtrlWheel() const override;
 
     // Lightroom's crop guide overlays, cycled with O (Shift+O turns the asymmetric ones).
     enum CropGuide { Grid = 0, Thirds, Diagonal, Triangle, GoldenRatio, GoldenSpiral, AspectRatios, kCropGuideCount };
@@ -53,6 +54,7 @@ private:
     bool updateBrush(ImDrawList* dl, const ImVec2& a, const ImVec2& b, bool hovered, bool active);
     bool updateSpots(ImDrawList* dl, const ImVec2& a, const ImVec2& b, bool hovered, bool active);
     bool updatePerspective(ImDrawList* dl, const ImVec2& a, const ImVec2& b, bool hovered, bool active);
+    bool updatePanZoom(ImDrawList* dl, const ImVec2& a, const ImVec2& b, bool hovered, bool active);
     void setParam(int i, float v);
 
     Node* node_ = nullptr;

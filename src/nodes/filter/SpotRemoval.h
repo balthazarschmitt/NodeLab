@@ -45,7 +45,16 @@ public:
     // another): the App evaluates the image arriving here and calls findSpotSource. Not saved.
     int findSource = -1;
     bool findAvoidCurrent = false;  // look away from the current source ("/")
+    // Lightroom's Visualize Spots, made automatic: the App runs detectDust on the image arriving
+    // here and adds a spot (with an automatic source) for each. Neither is saved.
+    bool detectDustRequest = false;
+    float dustSensitivity = 50.0f;
 };
+
+// Sensor dust: small, round, soft spots darker than a smooth background around them. `img` is
+// the whole image arriving at the node (larger finds smaller spots); sensitivity 0..100 lowers
+// the contrast a spot needs. The spots' sources are left on the spots themselves.
+std::vector<Spot> detectDust(const Image& img, bool linear, float sensitivity);
 
 // Lightroom's automatic source: the place whose surroundings best match the ring around spot
 // `index` (its texture for Heal, its colours too for Clone), clear of the spot itself, other spots

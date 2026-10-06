@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.24)
 # The app version. Bump it (and CHANGELOG.md) when a feature set lands; see CLAUDE.md.
-project(NodeLab VERSION 1.2.0 LANGUAGES C CXX)
+project(NodeLab VERSION 1.3.0 LANGUAGES C CXX)
+
+if(MINGW)
+    # GCC on 64-bit Windows can't keep the stack aligned to 32 bytes, so AVX code that spills a
+    # vector register (libjxl's highway, libaom) crashes on an aligned move. The assembler turns
+    # them into unaligned moves, which are as fast on aligned data.
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-Wa,-muse-unaligned-vector-move>)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -82,6 +89,63 @@ FetchContent_Declare(zlib
     GIT_SHALLOW TRUE)
 
 FetchContent_MakeAvailable(glfw json imgui stb tinyexpr tinyexr libraw zlib)
+
+# libwebp (BSD-3) for lossy WebP export and WebP import. Lossless export keeps NodeLab's own
+# encoder (WebpEncode.cpp), which is bit-exact and tested; libwebp adds the lossy mode.
+foreach(_opt ANIM_UTILS CWEBP DWEBP GIF2WEBP IMG2WEBP VWEBP WEBPINFO WEBPMUX EXTRAS)
+    set(WEBP_BUILD_${_opt} OFF CACHE BOOL "" FORCE)
+endforeach()
+set(WEBP_BUILD_LIBWEBPMUX OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(libwebp
+    GIT_REPOSITORY https://github.com/webmproject/libwebp.git
+    GIT_TAG v1.5.0
+    GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(libwebp)
+
+# libjxl (BSD-3) for JPEG XL export and import, with its bundled highway, brotli and skcms. Only
+# the libraries are built: no tools, jpegli, benchmarks or docs.
+foreach(_opt TOOLS JPEGLI JPEGLI_LIBJPEG BENCHMARK EXAMPLES DOXYGEN MANPAGES JNI SJPEG OPENEXR
+             VIEWERS PLUGINS FUZZERS DEVTOOLS TCMALLOC TRANSCODE_JPEG BOXES COVERAGE)
+    set(JPEGXL_ENABLE_${_opt} OFF CACHE BOOL "" FORCE)
+endforeach()
+set(JPEGXL_ENABLE_SKCMS ON CACHE BOOL "" FORCE)
+set(JPEGXL_BUNDLE_LIBPNG OFF CACHE BOOL "" FORCE)
+# Off: the libraries are static anyway (BUILD_SHARED_LIBS), and JPEGXL_STATIC would append
+# "-Wl,-Bdynamic" to every link line, undoing -static for libgomp and the C++ runtime.
+set(JPEGXL_STATIC OFF CACHE BOOL "" FORCE)
+set(JPEGXL_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+set(JPEGXL_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+set(HWY_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+set(HWY_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(HWY_ENABLE_CONTRIB OFF CACHE BOOL "" FORCE)
+set(HWY_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+set(BROTLI_DISABLE_TESTS ON CACHE BOOL "" FORCE)
+FetchContent_Declare(libjxl
+    GIT_REPOSITORY https://github.com/libjxl/libjxl.git
+    GIT_TAG v0.11.1
+    GIT_SHALLOW TRUE
+    GIT_SUBMODULES third_party/highway third_party/brotli third_party/skcms)
+FetchContent_MakeAvailable(libjxl)
+
+# libavif (BSD-2) for AVIF export and import, with libaom (BSD-2 + AOM patent licence) fetched
+# and built by libavif itself (LOCAL). libaom's x86 assembly needs NASM, which the toolchain has.
+set(AVIF_CODEC_AOM LOCAL CACHE STRING "" FORCE)
+set(AVIF_CODEC_AOM_ENCODE ON CACHE BOOL "" FORCE)
+set(AVIF_CODEC_AOM_DECODE ON CACHE BOOL "" FORCE)
+set(AVIF_LIBYUV OFF CACHE STRING "" FORCE)
+set(AVIF_LIBSHARPYUV OFF CACHE STRING "" FORCE)
+set(AVIF_LIBXML2 OFF CACHE STRING "" FORCE)
+set(AVIF_JPEG OFF CACHE STRING "" FORCE)
+set(AVIF_ZLIBPNG OFF CACHE STRING "" FORCE)
+set(AVIF_BUILD_APPS OFF CACHE BOOL "" FORCE)
+set(AVIF_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(AVIF_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(AVIF_ENABLE_WERROR OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(libavif
+    GIT_REPOSITORY https://github.com/AOMediaCodec/libavif.git
+    GIT_TAG v1.2.1
+    GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(libavif)
 
 find_package(OpenGL REQUIRED)
 
@@ -221,6 +285,20 @@ add_custom_command(OUTPUT ${NODELAB_GUIDE_CPP}
     DEPENDS ${CMAKE_SOURCE_DIR}/GUIDE.md ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
     COMMENT "Embedding GUIDE.md")
 
+# Fonts for Watermark when the system has none of its own (Dear ImGui's Roboto, Apache 2.0, and
+# Cousine, SIL OFL 1.1). EmbedText works on any bytes.
+set(NODELAB_FONTS_CPP ${CMAKE_BINARY_DIR}/generated/FontRoboto.cpp ${CMAKE_BINARY_DIR}/generated/FontCousine.cpp)
+add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/generated/FontRoboto.cpp
+    COMMAND ${CMAKE_COMMAND} -DIN=${imgui_SOURCE_DIR}/misc/fonts/Roboto-Medium.ttf
+        -DOUT=${CMAKE_BINARY_DIR}/generated/FontRoboto.cpp -DNAME=kFontRoboto -P ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
+    DEPENDS ${imgui_SOURCE_DIR}/misc/fonts/Roboto-Medium.ttf ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
+    COMMENT "Embedding Roboto")
+add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/generated/FontCousine.cpp
+    COMMAND ${CMAKE_COMMAND} -DIN=${imgui_SOURCE_DIR}/misc/fonts/Cousine-Regular.ttf
+        -DOUT=${CMAKE_BINARY_DIR}/generated/FontCousine.cpp -DNAME=kFontCousine -P ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
+    DEPENDS ${imgui_SOURCE_DIR}/misc/fonts/Cousine-Regular.ttf ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
+    COMMENT "Embedding Cousine")
+
 # Windows can't overwrite a running exe but can rename it; move the old one aside before linking
 # so a single build/ folder works while NodeLab is open.
 function(nodelab_allow_relink target)
@@ -232,6 +310,7 @@ endfunction()
 add_library(nodelab_core STATIC
     ${NODELAB_VERSION_CPP}
     ${NODELAB_GUIDE_CPP}
+    ${NODELAB_FONTS_CPP}
     src/core/Value.cpp
     src/gpu/GL.cpp
     src/gpu/Device.cpp
@@ -241,10 +320,12 @@ add_library(nodelab_core STATIC
     src/gpu/Display.cpp
     src/core/ColorManagement.cpp
     src/core/ColorScience.cpp
+    src/core/OutputSpace.cpp
     src/core/Parallel.cpp
     src/core/Curve.cpp
     src/core/Ramp.cpp
     src/graph/Graph.cpp
+    src/graph/History.cpp
     src/graph/Layout.cpp
     src/graph/Recipes.cpp
     src/graph/NodeMenu.cpp
@@ -252,6 +333,8 @@ add_library(nodelab_core STATIC
     src/graph/Evaluator.cpp
     src/io/ImageIO.cpp
     src/io/ImageWrite.cpp
+    src/io/WebpEncode.cpp
+    src/io/ImageCodecs.cpp
     src/io/Icc.cpp
     src/io/JpegDecode.cpp
     src/io/PngDecode.cpp
@@ -270,6 +353,7 @@ add_library(nodelab_core STATIC
     src/nodes/color/DevelopNodes.cpp
     src/nodes/color/AutoTone.cpp
     src/nodes/math/MathNodes.cpp
+    src/nodes/math/PhotoMerge.cpp
     src/nodes/converter/ConverterNodes.cpp
     src/nodes/converter/Expression.cpp
     src/nodes/group/GroupNodes.cpp
@@ -277,7 +361,12 @@ add_library(nodelab_core STATIC
     src/nodes/filter/FilterNodes.cpp
     src/nodes/filter/Denoise.cpp
     src/nodes/filter/SpotRemoval.cpp
+    src/nodes/filter/Effects.cpp
+    src/nodes/filter/Watermark.cpp
+    src/nodes/filter/Sharpening.cpp
+    src/nodes/filter/Remove.cpp
     src/nodes/transform/TransformNodes.cpp
+    src/nodes/transform/Upright.cpp
     src/nodes/matte/MatteNodes.cpp
     src/nodes/matte/AutoMask.cpp
     src/ml/Http.cpp
@@ -290,6 +379,7 @@ target_include_directories(nodelab_core PUBLIC src)
 target_include_directories(nodelab_core PRIVATE third_party/onnxruntime)
 add_dependencies(nodelab_core nodelab_version)
 target_link_libraries(nodelab_core PUBLIC nlohmann_json::nlohmann_json stb tinyexpr tinyexr libraw zlib glfw OpenGL::GL)
+target_link_libraries(nodelab_core PRIVATE webp jxl jxl_threads avif)
 if(WIN32)
     target_compile_definitions(nodelab_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
     # winhttp: AI model downloads (src/ml/Http.cpp); shell32: the Recycle Bin (src/io/Library.cpp)
@@ -341,7 +431,7 @@ if(NODELAB_BUILD_TESTS)
 
     enable_testing()
     add_executable(nodelab_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp tests/test_groups.cpp tests/test_nodes2.cpp tests/test_version.cpp tests/test_guide.cpp tests/test_layout.cpp tests/test_export.cpp tests/test_develop.cpp tests/test_ir_tools.cpp tests/test_expression_vm.cpp tests/test_parallel.cpp tests/test_colorpipe.cpp tests/test_develop_linear.cpp tests/test_raw_exif.cpp tests/test_image_write.cpp tests/test_roi.cpp tests/test_icc.cpp tests/test_gpu.cpp tests/test_denoise.cpp tests/test_masks.cpp tests/test_library.cpp tests/test_prefs.cpp tests/test_fuzz.cpp tests/test_jpeg_decode.cpp
-    tests/test_png_decode.cpp tests/test_decode_fuzz.cpp tests/test_node_menu.cpp tests/test_retouch.cpp tests/test_presets.cpp tests/test_automask.cpp tests/test_grain.cpp tests/test_golden.cpp tests/test_tiff_exr.cpp tests/test_perspective.cpp tests/test_lens_profile.cpp src/ui/Theme.cpp)
+    tests/test_png_decode.cpp tests/test_decode_fuzz.cpp tests/test_node_menu.cpp tests/test_retouch.cpp tests/test_presets.cpp tests/test_automask.cpp tests/test_grain.cpp tests/test_golden.cpp tests/test_tiff_exr.cpp tests/test_perspective.cpp tests/test_lens_profile.cpp tests/test_compose.cpp tests/test_develop_tools.cpp tests/test_webp.cpp tests/test_codecs.cpp tests/test_history.cpp tests/test_photomerge.cpp tests/test_library_meta.cpp src/ui/Theme.cpp)
     target_include_directories(nodelab_tests PRIVATE ${doctest_SOURCE_DIR})
     # Tests that load the shipped example projects find them here.
     target_compile_definitions(nodelab_tests PRIVATE NODELAB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

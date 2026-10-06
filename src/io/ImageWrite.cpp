@@ -12,8 +12,11 @@
 #include <stb_image_write.h>
 #include <zlib.h>
 
+#include "core/OutputSpace.h"
 #include "core/Parallel.h"
+#include "io/ImageCodecs.h"
 #include "io/Paths.h"
+#include "io/WebpEncode.h"
 #include "io/Tiff.h"
 
 namespace {
@@ -298,9 +301,33 @@ bool writePng(const std::string& pathU8, const Image& img, const SaveOptions& op
     // Bit depth, colour type RGB(A), deflate, adaptive filtering, no interlace.
     ihdr.insert(ihdr.end(), {uint8_t(sixteen ? 16 : 8), uint8_t(comp == 4 ? 6 : 2), 0, 0, 0});
     appendChunk(head, "IHDR", ihdr.data(), ihdr.size());
-    if (opt.srgb) {
+    if (opt.srgb && outspace::isHdr(opt.space)) {
+        // PNG's coding-independent code points (ITU-T H.273): BT.2020 primaries, the PQ
+        // transfer, RGB, full range. Browsers show such a PNG as HDR.
+        const uint8_t cicp[4] = {9, 16, 0, 1};
+        appendChunk(head, "cICP", cicp, 4);
+    } else if (opt.srgb && opt.space != outspace::sRGB) {
+        Bytes iccp;
+        const char* name = "ICC profile";
+        iccp.insert(iccp.end(), name, name + std::strlen(name) + 1);
+        iccp.push_back(0);  // deflate
+        const std::vector<uint8_t>& icc = iccProfile(opt.space);
+        const Bytes z = zlibBlock(icc.data(), icc.size());
+        iccp.insert(iccp.end(), z.begin(), z.end());
+        appendChunk(head, "iCCP", iccp.data(), iccp.size());
+    } else if (opt.srgb) {
         Bytes s = pngSrgbChunks();
         head.insert(head.end(), s.begin(), s.end());
+    }
+    if (!opt.xmp.empty()) {
+        // iTXt with Adobe's keyword, uncompressed, no language or translated keyword (XMP's
+        // PNG embedding).
+        Bytes itxt;
+        const char* key = "XML:com.adobe.xmp";
+        itxt.insert(itxt.end(), key, key + std::strlen(key) + 1);
+        itxt.insert(itxt.end(), {0, 0, 0, 0});
+        itxt.insert(itxt.end(), opt.xmp.begin(), opt.xmp.end());
+        appendChunk(head, "iTXt", itxt.data(), itxt.size());
     }
     const std::vector<Bytes> idat = idatParallel(filtered.data(), filtered.size());
     Bytes end;
@@ -401,13 +428,80 @@ bool writeJpeg(const std::string& pathU8, const Image& img, const SaveOptions& o
         segs.insert(segs.end(), payload.begin(), payload.end());
     };
     if (!opt.exif.empty()) segment(0xE1, "Exif\0\0", 6, opt.exif);
+    if (!opt.xmp.empty()) segment(0xE1, "http://ns.adobe.com/xap/1.0/", 29, Bytes(opt.xmp.begin(), opt.xmp.end()));
     if (opt.srgb) {
         Bytes icc = {1, 1};  // chunk 1 of 1
-        icc.insert(icc.end(), srgbIccProfile().begin(), srgbIccProfile().end());
+        icc.insert(icc.end(), iccProfile(opt.space).begin(), iccProfile(opt.space).end());
         segment(0xE2, "ICC_PROFILE\0", 12, icc);
     }
     jpg.insert(jpg.begin() + at, segs.begin(), segs.end());
     return writeFile(pathU8, jpg, err);
+}
+
+// ---------------------------------------------------------------- WebP
+
+bool writeWebp(const std::string& pathU8, const Image& img, const SaveOptions& opt, std::string& err) {
+    if (img.w > 16384 || img.h > 16384) {
+        err = "WebP images can be at most 16384 pixels on a side";
+        return false;
+    }
+    const bool alpha = !opaque(img);
+    std::vector<webp::Chunk> chunks;
+    if (opt.lossless) {
+        const std::vector<uint8_t> rgba = quantise<uint8_t>(img, 4, 255.0f);
+        chunks.push_back({"VP8L", webp::encodeLossless(rgba.data(), img.w, img.h, alpha)});
+    } else {
+        const int comp = alpha ? 4 : 3;
+        const std::vector<uint8_t> px = quantise<uint8_t>(img, comp, 255.0f);
+        if (!codecs::webpLossy({px.data(), img.w, img.h, comp, false}, opt.jpegQuality, chunks, err)) return false;
+    }
+    // Untagged WebP is sRGB; other spaces carry their profile.
+    const Bytes icc = opt.srgb && opt.space != 0 ? iccProfile(opt.space) : Bytes();
+    return writeFile(pathU8, webp::container(chunks, img.w, img.h, alpha, icc, opt.exif, Bytes(opt.xmp.begin(), opt.xmp.end())), err);
+}
+
+// ---------------------------------------------------------------- JPEG XL and AVIF
+
+// The tags both carry: a profile for spaces other than sRGB, CICP / a colour encoding for PQ.
+codecs::Tags codecTags(const SaveOptions& opt) {
+    codecs::Tags t;
+    t.pq = opt.srgb && outspace::isHdr(opt.space);
+    if (opt.srgb && !t.pq && opt.space != 0) t.icc = iccProfile(opt.space);
+    t.exif = opt.exif;
+    t.xmp = opt.xmp;
+    return t;
+}
+
+template <class Encode>
+bool writeCodec(const std::string& pathU8, const Image& img, const SaveOptions& opt, int bits16, std::string& err,
+                Encode&& encode) {
+    const int comp = opaque(img) ? 3 : 4;
+    const bool sixteen = opt.depth >= 16;
+    std::vector<uint16_t> px16;
+    std::vector<uint8_t> px8;
+    if (sixteen) px16 = quantise<uint16_t>(img, comp, float((1 << bits16) - 1));
+    else px8 = quantise<uint8_t>(img, comp, 255.0f);
+    const void* data = sixteen ? static_cast<const void*>(px16.data()) : static_cast<const void*>(px8.data());
+    Bytes file;
+    if (!encode(codecs::Pixels{data, img.w, img.h, comp, sixteen, bits16}, codecTags(opt), file)) return false;
+    return writeFile(pathU8, file, err);
+}
+
+bool writeJxl(const std::string& pathU8, const Image& img, const SaveOptions& opt, std::string& err) {
+    return writeCodec(pathU8, img, opt, 16, err, [&](const codecs::Pixels& px, const codecs::Tags& tags, Bytes& file) {
+        return codecs::encodeJxl(px, opt.jpegQuality, opt.lossless, tags, file, err);
+    });
+}
+
+bool writeAvif(const std::string& pathU8, const Image& img, const SaveOptions& opt, std::string& err) {
+    if (img.w > 65536 || img.h > 65536) {
+        err = "AVIF images can be at most 65536 pixels on a side";
+        return false;
+    }
+    // AVIF stores 10 bits: quantised straight to them, so values are rounded once.
+    return writeCodec(pathU8, img, opt, 10, err, [&](const codecs::Pixels& px, const codecs::Tags& tags, Bytes& file) {
+        return codecs::encodeAvif(px, opt.jpegQuality, opt.lossless, tags, file, err);
+    });
 }
 
 // ---------------------------------------------------------------- TIFF
@@ -483,7 +577,8 @@ bool writeTiff(const std::string& pathU8, const Image& img, const SaveOptions& o
     ifd.shorts(317, {2});                                 // Predictor: horizontal differencing
     if (comp == 4) ifd.shorts(338, {2});                  // ExtraSamples: unassociated alpha
     ifd.shorts(339, std::vector<uint32_t>(comp, 1));      // SampleFormat: unsigned integer
-    if (opt.srgb) ifd.undefined(34675, srgbIccProfile());  // InterColorProfile
+    if (opt.srgb) ifd.undefined(34675, iccProfile(opt.space));  // InterColorProfile
+    if (!opt.xmp.empty()) ifd.add(700, tiff::Byte, uint32_t(opt.xmp.size()), Bytes(opt.xmp.begin(), opt.xmp.end()));  // XMP
     Bytes dir;
     tiff::set32(head, 4, ifd.write(dir, pos));
     std::vector<Span> pieces = {{head.data(), head.size()}};
@@ -601,13 +696,18 @@ bool writeExr(const std::string& pathU8, const Image& img, const SaveOptions& op
 
 }  // namespace
 
-const char* const kSaveImageFilter = "PNG image|*.png|JPEG image|*.jpg|TIFF image|*.tif|OpenEXR image|*.exr";
+const char* const kSaveImageFilter =
+    "PNG image|*.png|JPEG image|*.jpg|TIFF image|*.tif|OpenEXR image|*.exr|WebP image|*.webp|"
+    "JPEG XL image|*.jxl|AVIF image|*.avif";
 
 const char* formatExtension(FileFormat f) {
     switch (f) {
         case FileFormat::JPEG: return ".jpg";
         case FileFormat::TIFF: return ".tif";
         case FileFormat::EXR: return ".exr";
+        case FileFormat::WEBP: return ".webp";
+        case FileFormat::JXL: return ".jxl";
+        case FileFormat::AVIF: return ".avif";
         default: return ".png";
     }
 }
@@ -618,12 +718,16 @@ FileFormat formatFromPath(const std::string& pathU8) {
     if (e == ".jpg" || e == ".jpeg") return FileFormat::JPEG;
     if (e == ".tif" || e == ".tiff") return FileFormat::TIFF;
     if (e == ".exr") return FileFormat::EXR;
+    if (e == ".webp") return FileFormat::WEBP;
+    if (e == ".jxl") return FileFormat::JXL;
+    if (e == ".avif") return FileFormat::AVIF;
     return FileFormat::PNG;
 }
 
 int formatDepth(FileFormat f, int depth) {
     switch (f) {
-        case FileFormat::JPEG: return 8;
+        case FileFormat::JPEG:
+        case FileFormat::WEBP: return 8;
         case FileFormat::EXR: return depth >= 32 ? 32 : 16;
         default: return depth >= 16 ? 16 : 8;
     }
@@ -640,6 +744,9 @@ bool writeImage(const std::string& pathU8, const Image& img, const SaveOptions& 
         case FileFormat::JPEG: return writeJpeg(pathU8, img, o, err);
         case FileFormat::TIFF: return writeTiff(pathU8, img, o, err);
         case FileFormat::EXR: return writeExr(pathU8, img, o, err);
+        case FileFormat::WEBP: return writeWebp(pathU8, img, o, err);
+        case FileFormat::JXL: return writeJxl(pathU8, img, o, err);
+        case FileFormat::AVIF: return writeAvif(pathU8, img, o, err);
         default: return writePng(pathU8, img, o, err);
     }
 }
@@ -666,8 +773,11 @@ uint16_t floatToHalf(float f) {
     return uint16_t(sign | h);
 }
 
-const std::vector<uint8_t>& srgbIccProfile() {
-    static const Bytes profile = [] {
+namespace {
+
+// An ICC v2 RGB display profile: primaries as D50 XYZ (columns), the tone curve as a table.
+Bytes buildIcc(const std::string& name, const outspace::Mat3& xyz50, double (*decode)(int, double), int space) {
+    {
         auto s15 = [](Bytes& o, double v) { be32(o, uint32_t(int32_t(std::lround(v * 65536.0)))); };
         auto xyz = [&](double X, double Y, double Z) {
             Bytes t = {'X', 'Y', 'Z', ' ', 0, 0, 0, 0};
@@ -677,7 +787,6 @@ const std::vector<uint8_t>& srgbIccProfile() {
             return t;
         };
         Bytes desc = {'d', 'e', 's', 'c', 0, 0, 0, 0};
-        const std::string name = "sRGB IEC61966-2.1";
         be32(desc, uint32_t(name.size() + 1));
         desc.insert(desc.end(), name.begin(), name.end());
         desc.push_back(0);
@@ -691,7 +800,7 @@ const std::vector<uint8_t>& srgbIccProfile() {
         be32(curv, kN);
         for (int i = 0; i < kN; ++i) {
             const double v = double(i) / (kN - 1);
-            const double lin = v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
+            const double lin = decode(space, v);
             be16(curv, uint32_t(std::lround(lin * 65535.0)));
         }
         // Rec.709 primaries adapted to the D50 profile connection space with Bradford.
@@ -703,9 +812,9 @@ const std::vector<uint8_t>& srgbIccProfile() {
             {"desc", desc},
             {"cprt", cprt},
             {"wtpt", xyz(0.9642, 1.0, 0.8249)},
-            {"rXYZ", xyz(0.4360747, 0.2225045, 0.0139322)},
-            {"gXYZ", xyz(0.3850649, 0.7168786, 0.0971045)},
-            {"bXYZ", xyz(0.1430804, 0.0606169, 0.7141733)},
+            {"rXYZ", xyz(xyz50[0][0], xyz50[1][0], xyz50[2][0])},
+            {"gXYZ", xyz(xyz50[0][1], xyz50[1][1], xyz50[2][1])},
+            {"bXYZ", xyz(xyz50[0][2], xyz50[1][2], xyz50[2][2])},
             {"rTRC", curv},
             {"gTRC", {}},  // share rTRC's data
             {"bTRC", {}},
@@ -744,6 +853,35 @@ const std::vector<uint8_t>& srgbIccProfile() {
         p.insert(p.end(), table.begin(), table.end());
         p.insert(p.end(), data.begin(), data.end());
         return p;
-    }();
+    }
+}
+
+double srgbDecode(int, double v) { return v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4); }
+
+}  // namespace
+
+const std::vector<uint8_t>& srgbIccProfile() {
+    // The published sRGB primaries (these exact values, so the profile stays byte for byte as
+    // earlier versions wrote it).
+    static const Bytes profile = buildIcc("sRGB IEC61966-2.1",
+                                          {{{0.4360747, 0.3850649, 0.1430804},
+                                            {0.2225045, 0.7168786, 0.0606169},
+                                            {0.0139322, 0.0971045, 0.7141733}}},
+                                          srgbDecode, 0);
     return profile;
+}
+
+const std::vector<uint8_t>& iccProfile(int space) {
+    if (!outspace::valid(space) || space == outspace::sRGB) return srgbIccProfile();
+    if (space == outspace::Rec2100PQ) space = outspace::Rec2020;
+    static const Bytes profiles[outspace::kCount] = {
+        {},
+        buildIcc("Display P3", outspace::toXyzD50(outspace::DisplayP3), outspace::decode, outspace::DisplayP3),
+        buildIcc("Adobe RGB (1998) compatible", outspace::toXyzD50(outspace::AdobeRGB), outspace::decode,
+                 outspace::AdobeRGB),
+        buildIcc("ProPhoto RGB", outspace::toXyzD50(outspace::ProPhoto), outspace::decode, outspace::ProPhoto),
+        buildIcc("Rec.2020", outspace::toXyzD50(outspace::Rec2020), outspace::decode, outspace::Rec2020),
+        {},
+    };
+    return profiles[space];
 }

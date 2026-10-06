@@ -21,6 +21,7 @@
 #include "io/Export.h"
 #include "io/ImageIO.h"
 #include "io/ImageWrite.h"
+#include "io/Library.h"
 #include "io/Paths.h"
 #include "io/Tiff.h"
 
@@ -576,7 +577,7 @@ TEST_CASE("export formats: settings, extensions and File Output params") {
     CHECK(t.depth == 32);
     CHECK(std::string(t.extension()) == ".exr");
     t.fromJson({{"format", 9}});
-    CHECK(t.format == 3);
+    CHECK(t.format == ExportSettings::AVIF);  // out of range: the last format
     CHECK(formatFromPath("a/b.TIFF") == FileFormat::TIFF);
     CHECK(formatFromPath("x.jpeg") == FileFormat::JPEG);
     CHECK(formatFromPath("x.exr") == FileFormat::EXR);
@@ -619,5 +620,57 @@ TEST_CASE("image files are replaced whole, through a temporary file") {
     // A folder that doesn't exist fails with an error, and leaves nothing behind.
     CHECK_FALSE(writeImage(pathToU8(dir / "missing" / "x.jpg"), big, o, err));
     CHECK(err == "could not write file");
+    fs::remove_all(dir);
+}
+
+TEST_CASE("Exports carry the library's title, caption, keywords and rating as XMP") {
+    library::Meta m;
+    m.title = "Harbour & <fog>";
+    m.caption = "Boats at \"dawn\"";
+    m.addKeyword("boats");
+    m.addKeyword("fog");
+    m.rating = 4;
+    m.label = library::Green;
+    const std::string xmp = library::xmpPacket(m);
+    CHECK(xmp.find("<rdf:li xml:lang=\"x-default\">Harbour &amp; &lt;fog&gt;</rdf:li>") != std::string::npos);
+    CHECK(xmp.find("Boats at &quot;dawn&quot;") != std::string::npos);
+    CHECK(xmp.find("<rdf:li>fog</rdf:li>") != std::string::npos);
+    CHECK(xmp.find("xmp:Rating=\"4\"") != std::string::npos);
+    CHECK(xmp.find("xmp:Label=\"Green\"") != std::string::npos);
+    CHECK(library::xmpPacket(library::Meta{}).empty());
+    library::Meta rejected;
+    rejected.flag = library::Rejected;
+    CHECK(library::xmpPacket(rejected).find("xmp:Rating=\"-1\"") != std::string::npos);
+
+    const fs::path dir = tempDir("nodelab_xmp");
+    std::string err;
+    for (const FileFormat f : {FileFormat::PNG, FileFormat::JPEG, FileFormat::TIFF, FileFormat::WEBP}) {
+        CAPTURE(int(f));
+        SaveOptions o;
+        o.format = f;
+        o.xmp = xmp;
+        const fs::path p = dir / (std::string("a") + formatExtension(f));
+        REQUIRE(writeImage(pathToU8(p), gradient(16, 12), o, err));
+        const Bytes b = readAll(p);
+        // Whole and uncompressed, where XMP readers look (as bytes: the packet's BOM is above 0x7F).
+        const Bytes packet(xmp.begin(), xmp.end());
+        CHECK(std::search(b.begin(), b.end(), packet.begin(), packet.end()) != b.end());
+        if (f == FileFormat::PNG) {
+            CHECK(contains(b, std::string("iTXtXML:com.adobe.xmp\0\0\0\0\0", 26)));
+            CHECK(pngChunksValid(b));
+        }
+        if (f == FileFormat::JPEG) CHECK(contains(b, std::string("http://ns.adobe.com/xap/1.0/\0", 29)));
+        if (f == FileFormat::WEBP) {
+            REQUIRE(b.size() > 30);
+            CHECK(le32(b, 4) + 8 == b.size());
+            CHECK(std::memcmp(&b[12], "VP8X", 4) == 0);
+            CHECK((b[20] & 0x04) != 0);  // the XMP flag
+            CHECK(contains(b, "XMP "));
+        } else {
+            auto back = loadImage(pathToU8(p), err);
+            REQUIRE(back);
+            CHECK(back->w == 16);
+        }
+    }
     fs::remove_all(dir);
 }

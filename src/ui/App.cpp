@@ -19,8 +19,10 @@
 
 #include "core/ColorManagement.h"
 #include "core/Guide.h"
+#include "core/OutputSpace.h"
 #include "core/Version.h"
 #include "gpu/Device.h"
+#include "graph/History.h"
 #include "graph/Recipes.h"
 #include "io/ImageIO.h"
 #include "io/ImageWrite.h"
@@ -128,6 +130,9 @@ void App::loadPreferences() {
                     p.settings.fromJson(e.value("settings", nlohmann::json::object()));
                     exportPresets_.push_back(std::move(p));
                 }
+        if (const auto ea = j.find("exportAlso"); ea != j.end() && ea->is_array())
+            for (const auto& e : *ea)
+                if (e.is_string()) alsoPresets_.push_back(e.get<std::string>());
         library_.sortBy = std::clamp(j.value("librarySort", 0), 0, LibraryPanel::kSortCount - 1);
         library_.sortDescending = j.value("librarySortDescending", false);
         overlay_.cropGuide = std::clamp(j.value("cropGuide", int(NodeOverlay::Thirds)), 0, NodeOverlay::kCropGuideCount - 1);
@@ -164,6 +169,7 @@ void App::savePreferences() const {
                         {"theme", theme::current().toJson()},
                         {"customThemes", custom},
                         {"exportPresets", presets},
+                        {"exportAlso", alsoPresets_},
                         {"librarySort", library_.sortBy},
                         {"librarySortDescending", library_.sortDescending},
                         {"cropGuide", overlay_.cropGuide},
@@ -197,7 +203,14 @@ int App::run(const RunOptions& opt) {
         }
     }
     automated_ = !opt.screenshot.empty() || script.active();
-    if (automated_) inspectorOverlay_ = false;
+    if (automated_) {
+        inspectorOverlay_ = false;
+        // Scripts may make collections: never in the user's own list.
+        const std::filesystem::path col = std::filesystem::temp_directory_path() / "nodelab_ui_collections.json";
+        std::error_code ec;
+        std::filesystem::remove(col, ec);  // each run starts with none
+        library::setCollectionsFile(pathToU8(col));
+    }
     if (!glfwInit()) {
         std::fprintf(stderr, "failed to init GLFW\n");
         return 1;
@@ -420,6 +433,8 @@ void App::drawFrame() {
     for (size_t i = 1; i < viewers_.size(); ++i) drawViewerWindow(*viewers_[i], false);
     if (library_.active() && showLibrary_) drawLibraryWindow();
     if (showSnapshots_) drawSnapshotsWindow();
+    if (showHistory_) drawHistoryWindow();
+    if (library_.active() && library_.showMetadata && !library_.grid) library_.drawMetadataWindow();
     if (library_.active() && library_.grid) drawLibraryGrid();
     gridShown_ = library_.active() && library_.grid;
     library_.poll();
@@ -908,6 +923,7 @@ void App::drawViewerWindow(Viewer& v, bool isMain) {
         finishPick(pick);
         if (ov && overlay_.takeChanged()) markChanged(true);
         if (auto* sr = dynamic_cast<SpotRemovalNode*>(ov); sr && sr->findSource >= 0) findSpotSource(*sr);
+        if (auto* sr = dynamic_cast<SpotRemovalNode*>(ov); sr && sr->detectDustRequest) detectDust(*sr);
         if (isMain && showHistogram_ && histogram_.valid) {
             // Top-right corner of the view, like Lightroom's histogram panel.
             const ImVec2 viewMax = ImGui::GetItemRectMax();
@@ -994,6 +1010,12 @@ void App::drawResultToolbar(Node* ov) {
     sameLineIfFits(checkboxWidth("Clipping"));
     clipToggled |= ImGui::Checkbox("Clipping", &clipping_);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show clipped highlights in red and crushed shadows in blue (J)");
+    sameLineIfFits(checkboxWidth("Gamut"));
+    clipToggled |= ImGui::Checkbox("Gamut", &gamutWarning_);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Soft proofing's gamut warning: colours the export colour space (%s) can't hold\n"
+                          "show magenta. Needs a scene-linear project with the Standard view.",
+                          outspace::kNames[std::clamp(exportSettings_.colorSpace, 0, int(outspace::kCount) - 1)]);
     sameLineIfFits(checkboxWidth("Before / After"));
     if (ImGui::Checkbox("Before / After", &splitView_)) beforeFull_ = false;
     if (ImGui::IsItemHovered())
@@ -1014,7 +1036,10 @@ void App::drawResultToolbar(Node* ov) {
                            : ov->info().type == perspective::kType
                                ? (ov->paramI(perspective::Upright) == perspective::UprightGuided
                                       ? "Drag along a line that should be straight to add a guide (up to 4); Alt+click removes one"
+                                      : perspective::uprightDetects(ov->paramI(perspective::Upright))
+                                      ? "Upright finds the lines itself; set it to Guided to draw them"
                                       : "Set Upright to Guided to draw guides")
+                           : ov->info().type == panzoom::kType ? "Drag to move the picture, Ctrl+wheel to zoom"
                            : dynamic_cast<BrushMaskNode*>(ov) ? "Paint to add, Alt+paint to erase, [ ] brush size"
                            : dynamic_cast<SpotRemovalNode*>(ov) ? "Click to add a spot, drag to move, Alt+click removes, [ ] size"
                                                               : "Drag the handles to shape the mask";
@@ -1060,7 +1085,55 @@ void App::applyAutoTone(int nodeId) {
     const float v[6] = {s.exposure, s.contrast, s.highlights, s.shadows, s.whites, s.blacks};
     for (int i = 0; i < 6; ++i) basic->params[autotone::kBasicParams[i]] = v[i];
     status_ = "Auto tone set on " + basic->title();
+    historyName_ = basic->title() + ": Auto";
     markChanged(true);
+}
+
+void App::detectDust(SpotRemovalNode& node) {
+    node.detectDustRequest = false;
+    const Link* in = currentGraph().inputLink(node.id, 0);
+    if (!in) {
+        status_ = "Detect Dust needs an image connected to the Spot Removal node";
+        return;
+    }
+    // Larger than the source search's image: dust is a few pixels across even at 2048.
+    ImagePtr img;
+    try {
+        Evaluator ev;
+        EvalContext ctx;
+        ctx.cache = &cache_;
+        ctx.proxyEdge = 2048;
+        ctx.interactive = true;
+        initContextSize(graph_, ctx);
+        NodePath path = groupPath_;
+        path.push_back(in->fromNode);
+        img = ev.evaluateDisplayPath(graph_, path, ctx, in->fromPin);
+    } catch (const std::exception& e) {
+        status_ = std::string("Detect Dust failed: ") + e.what();
+        return;
+    }
+    if (!img || img->empty()) return;
+    std::vector<Spot> found = ::detectDust(*img, graph_.colorManagement.linear, node.dustSensitivity);
+    int added = 0;
+    for (Spot s : found) {
+        // Skip spots already covered by one of the user's.
+        // (Radii are fractions of the long edge.)
+        const float longEdge = float(std::max(img->w, img->h));
+        bool covered = false;
+        for (const Spot& o : node.spots) {
+            const float dx = (s.x - o.x) * img->w / longEdge, dy = (s.y - o.y) * img->h / longEdge;
+            covered |= std::hypot(dx, dy) < o.radius + s.radius * 0.5f;
+        }
+        if (covered) continue;
+        s.heal = node.paramI(0) == 0;
+        s.feather = node.paramF(2), s.opacity = node.paramF(3);
+        node.spots.push_back(s);
+        if (!::findSpotSource(*img, node.spots, int(node.spots.size()) - 1, false)) node.spots.pop_back();
+        else ++added;
+    }
+    status_ = added ? "Detect Dust added " + std::to_string(added) + (added == 1 ? " spot" : " spots")
+                    : "Detect Dust found no spots (raise Sensitivity to find fainter ones)";
+    if (added) markChanged(true);
 }
 
 void App::findSpotSource(SpotRemovalNode& node) {
@@ -1297,8 +1370,15 @@ void App::drawMainMenu() {
         ImGui::MenuItem("Node Editor", nullptr, &showEditor_);
         ImGui::MenuItem("Inspector", nullptr, &showInspector_);
         ImGui::MenuItem("Library", nullptr, &showLibrary_, library_.active());
-        ImGui::MenuItem("Library Grid", "G", &library_.grid, library_.active());
+        if (ImGui::MenuItem("Library Grid", "G", library_.grid && library_.view == LibraryPanel::GridView, library_.active()))
+            library_.grid = !(library_.grid && library_.view == LibraryPanel::GridView), library_.view = LibraryPanel::GridView;
+        if (ImGui::MenuItem("Library Compare", "C", library_.grid && library_.view == LibraryPanel::CompareView, library_.active()))
+            library_.grid = true, library_.view = LibraryPanel::CompareView;
+        if (ImGui::MenuItem("Library Survey", "N", library_.grid && library_.view == LibraryPanel::SurveyView, library_.active()))
+            library_.grid = true, library_.view = LibraryPanel::SurveyView;
+        ImGui::MenuItem("Metadata", nullptr, &library_.showMetadata, library_.active());
         ImGui::MenuItem("Snapshots", nullptr, &showSnapshots_);
+        ImGui::MenuItem("History", nullptr, &showHistory_);
         // Lightroom's View > Loupe Overlay.
         if (ImGui::BeginMenu("Loupe Overlay")) {
             ImGui::MenuItem("Grid", nullptr, &loupe_.grid);
@@ -1398,11 +1478,15 @@ void App::handleShortcuts() {
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_I))
         if (auto p = openFileDialog("Import image", kImageFileFilter)) importImage(*p);
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_E)) openExportWindow();
-    // G: the Library's grid, as in Lightroom (the Node Editor keeps G for grabbing nodes).
+    // G, C and N: the Library's Grid, Compare and Survey views, as in Lightroom (the Node Editor
+    // keeps G for grabbing nodes).
     if (library_.active() && !library_.grid && !editorFocused_ && !eyedropper().active() && !io.KeyCtrl && !io.KeyAlt &&
-        !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_G, false) &&
-        !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
-        library_.grid = true;
+        !io.KeyShift && !io.WantTextInput && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+        const int views[] = {LibraryPanel::GridView, LibraryPanel::CompareView, LibraryPanel::SurveyView};
+        const ImGuiKey keys[] = {ImGuiKey_G, ImGuiKey_C, ImGuiKey_N};
+        for (int k = 0; k < 3; ++k)
+            if (ImGui::IsKeyPressed(keys[k], false)) library_.grid = true, library_.view = views[k];
+    }
     if (eyedropper().active() && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) eyedropper().cancel();
     if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) {
         // F1 opens the guide at the selected node's entry, like context help.
@@ -1543,20 +1627,94 @@ void App::resetHistory() {
     undo_.clear();
     redo_.clear();
     committed_ = graph_.toJson();
+    committedName_ = "Open";
+    historyName_.clear();
     historyDirty_ = false;
 }
 
 bool App::commitHistory() {
     nlohmann::json cur = graph_.toJson();
+    std::string name = std::exchange(historyName_, {});
     if (cur == committed_) return false;
-    undo_.push_back(std::move(committed_));
+    if (name.empty()) name = describeChange(committed_, cur);
+    undo_.push_back({std::move(committed_), std::move(committedName_)});
     if (undo_.size() > 200) undo_.erase(undo_.begin());
     committed_ = std::move(cur);
+    committedName_ = std::move(name);
     redo_.clear();
     return true;
 }
 
 bool App::canUndo() const { return !undo_.empty() || historyDirty_; }
+
+namespace {
+// FNV-1a of the graph's JSON text: whether a project still holds the graph its History was saved
+// against (a stable hash, unlike std::hash).
+std::string graphHash(const nlohmann::json& g) {
+    uint64_t h = 1469598103934665603ull;
+    for (const unsigned char c : g.dump()) h = (h ^ c) * 1099511628211ull;
+    char s[17];
+    std::snprintf(s, sizeof s, "%016llx", static_cast<unsigned long long>(h));
+    return s;
+}
+}  // namespace
+
+nlohmann::json App::historyJson() const {
+    // A change not yet a step (saved mid-edit) is saved as one, as the next commit would make it.
+    nlohmann::json cur = graph_.toJson();
+    std::vector<const HistoryStep*> older;  // newest first
+    HistoryStep pending;
+    std::string curName = committedName_;
+    if (cur != committed_) {
+        pending = {committed_, committedName_};
+        older.push_back(&pending);
+        curName = describeChange(committed_, cur);
+    }
+    if (older.empty() && undo_.empty() && redo_.empty()) return nullptr;
+    for (auto it = undo_.rbegin(); it != undo_.rend(); ++it) older.push_back(&*it);
+    // Each step as the patch from its newer neighbour: a step usually changes one param.
+    auto chain = [&](const std::vector<const HistoryStep*>& steps) {
+        nlohmann::json out = nlohmann::json::array();
+        const nlohmann::json* prev = &cur;
+        for (const HistoryStep* s : steps) {
+            out.push_back({{"name", s->name}, {"patch", nlohmann::json::diff(*prev, s->graph)}});
+            prev = &s->graph;
+        }
+        return out;
+    };
+    std::vector<const HistoryStep*> newer;  // nearest first
+    if (cur == committed_)
+        for (auto it = redo_.rbegin(); it != redo_.rend(); ++it) newer.push_back(&*it);
+    return {{"graph", graphHash(cur)}, {"current", curName}, {"undo", chain(older)}, {"redo", chain(newer)}};
+}
+
+void App::loadHistory(const nlohmann::json& ui) {
+    const auto h = ui.find("history");
+    if (h == ui.end() || !h->is_object() || h->value("graph", std::string()) != graphHash(committed_)) return;
+    try {
+        auto rebuild = [&](const char* key) {
+            std::vector<HistoryStep> steps;  // nearest first
+            const auto a = h->find(key);
+            if (a == h->end() || !a->is_array()) return steps;
+            nlohmann::json g = committed_;
+            for (const auto& s : *a) {
+                if (!s.is_object() || !s.contains("patch") || !s["patch"].is_array()) break;
+                g = g.patch(s["patch"]);
+                steps.push_back({g, s.value("name", std::string("Edit"))});
+                if (steps.size() >= 200) break;
+            }
+            std::reverse(steps.begin(), steps.end());  // as the stacks keep them: nearest last
+            return steps;
+        };
+        std::vector<HistoryStep> undo = rebuild("undo"), redo = rebuild("redo");
+        undo_ = std::move(undo);
+        redo_ = std::move(redo);
+        committedName_ = h->value("current", committedName_);
+    } catch (const std::exception&) {
+        undo_.clear();  // a damaged History is dropped; the edit itself loaded
+        redo_.clear();
+    }
+}
 
 void App::restoreSnapshot(const nlohmann::json& j) {
     try {
@@ -1579,20 +1737,77 @@ void App::restoreSnapshot(const nlohmann::json& j) {
 void App::undo() {
     commitHistory();  // include any not-yet-snapshotted change so it is what gets undone
     if (undo_.empty()) return;
-    redo_.push_back(std::move(committed_));
-    committed_ = std::move(undo_.back());
-    undo_.pop_back();
-    restoreSnapshot(committed_);
-    status_ = "Undo";
+    const std::string name = committedName_;
+    stepHistory(-1);
+    status_ = "Undo " + name;
 }
 
 void App::redo() {
     if (redo_.empty()) return;
-    undo_.push_back(std::move(committed_));
-    committed_ = std::move(redo_.back());
-    redo_.pop_back();
-    restoreSnapshot(committed_);
-    status_ = "Redo";
+    stepHistory(1);
+    status_ = "Redo " + committedName_;
+}
+
+void App::stepHistory(int steps) {
+    bool moved = false;
+    for (; steps < 0 && !undo_.empty(); ++steps, moved = true) {
+        redo_.push_back({std::move(committed_), std::move(committedName_)});
+        committed_ = std::move(undo_.back().graph);
+        committedName_ = std::move(undo_.back().name);
+        undo_.pop_back();
+    }
+    for (; steps > 0 && !redo_.empty(); --steps, moved = true) {
+        undo_.push_back({std::move(committed_), std::move(committedName_)});
+        committed_ = std::move(redo_.back().graph);
+        committedName_ = std::move(redo_.back().name);
+        redo_.pop_back();
+    }
+    // One restore however far it went.
+    if (moved) restoreSnapshot(committed_);
+}
+
+// Lightroom's History panel: every undo step by name, newest at the top. Clicking a step goes
+// back (or forward) to it; an edit made from there drops the steps above, as undo does.
+void App::drawHistoryWindow() {
+    ImGui::SetNextWindowSize(ImVec2(300, 360), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("History", &showHistory_)) {
+        ImGui::End();
+        return;
+    }
+    ImGui::BeginDisabled(undo_.empty() && redo_.empty());
+    if (ImGui::Button("Clear History")) {
+        undo_.clear();
+        redo_.clear();
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Forget the steps (the edit stays as it is). History is saved with the project.");
+    ImGui::Separator();
+    int jump = 0;
+    if (ImGui::BeginChild("##steps")) {
+        // Redo steps above the current one, greyed out: the furthest first.
+        const int total = int(undo_.size()) + 1 + int(redo_.size());
+        for (int row = 0; row < total; ++row) {
+            // row 0 is the newest step; offset is its distance from the current one.
+            const int offset = int(redo_.size()) - row;
+            const std::string& name = offset > 0 ? redo_[size_t(row)].name
+                                      : offset == 0 ? committedName_
+                                                    : undo_[undo_.size() - size_t(-offset)].name;
+            ImGui::PushID(row);
+            if (offset > 0) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            if (ImGui::Selectable(name.c_str(), offset == 0) && offset != 0) jump = offset;
+            if (offset > 0) ImGui::PopStyleColor();
+            if (offset == 0 && ImGui::IsWindowAppearing()) ImGui::SetScrollHereY();
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
+    ImGui::End();
+    // A change still being made (a drag) becomes a step first, which moves every row: skip the click.
+    if (jump && !commitHistory()) {
+        stepHistory(jump);
+        status_ = "History: " + committedName_;
+    }
 }
 
 // ---------------------------------------------------------------- unsaved-changes flow
@@ -1719,6 +1934,7 @@ bool App::openProject(const std::string& path) {
     selected_ = 0;
     applyUiState(ui);
     resetHistory();
+    loadHistory(ui);
     modified_ = false;
     evalDirty_ = true;
     status_ = "Opened " + pathToU8(u8ToPath(path).filename());
@@ -1758,6 +1974,13 @@ void App::openFolder(const std::string& dirU8) {
     status_ = "Library: " + std::to_string(library_.size()) + " photos in " + pathToU8(u8ToPath(dirU8).filename());
     // Start on the first photo, unless a project with unsaved changes is open.
     if (!modified_ && library_.current() < 0) loadLibraryPhoto(0);
+}
+
+void App::openCollection(const std::string& name) {
+    if (!library_.openCollection(name)) return;  // its status says why
+    showLibrary_ = true;
+    library_.setCurrentProject(projectPath_);
+    status_ = "Collection " + name + ": " + std::to_string(library_.size()) + " photos";
 }
 
 bool App::libraryPhotoOpen() const {
@@ -1908,20 +2131,24 @@ void App::exportSelected() {
     for (int i : sel) names.push_back({library_.photo(i), 0, library_.copyOf(i)});
     const std::vector<std::string> outputs = batchOutputPaths(names, batchDir_, exportSettings_);
     std::vector<ExportItem> items;
+    std::vector<NameSource> kept;
     std::string err;
     for (size_t k = 0; k < sel.size(); ++k) {
         const int i = sel[k];
         ExportItem it;
         it.source = library_.photo(i);
         it.output = outputs[k];
+        it.xmp = library::xmpPacket(library_.meta(i));
         it.graph = i == library_.current() && libraryPhotoOpen() ? graph_.toJson() : library::graphFor(it.source, err, library_.copyOf(i));
         if (it.graph.is_null()) {
             status_ = "Can't export " + it.source + ": " + err;
             continue;
         }
         items.push_back(std::move(it));
+        kept.push_back(names[k]);
     }
     if (items.empty()) return;
+    addAlsoPresets(items, &kept, batchDir_);
     exportLog_.clear();
     exporter_.start(nullptr, std::move(items), 0, exportSettings_, gpuDevice_ && gpu::available());
     showExport_ = true;
@@ -1999,6 +2226,8 @@ void App::handleLibraryActions(const LibraryPanel::Actions& a) {
         if (ImGui::Button("Cancel", ImVec2(120, 0)) || !valid) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
+    if (!a.openCollection.empty()) openCollection(a.openCollection);
+    if (!a.openFolder.empty()) openFolder(a.openFolder);
     if (a.copy) copyEdit();
     if (a.paste) pasteEdit();
     if (a.exportSelected) exportSelected();
@@ -2440,6 +2669,69 @@ void App::exportPresetRow() {
     }
 }
 
+// A user preset wins over a built-in one of the same name.
+const ExportPreset* App::findExportPreset(const std::string& name) const {
+    for (const ExportPreset& p : exportPresets_)
+        if (p.name == name) return &p;
+    for (const ExportPreset& p : builtInExportPresets())
+        if (p.name == name) return &p;
+    return nullptr;
+}
+
+// darktable's multi-preset export: each checked preset also writes every item, from the same
+// render, into a subfolder named after it (next to the single export's file, or in the batch's
+// output folder, named by the preset's own template).
+void App::addAlsoPresets(std::vector<ExportItem>& items, const std::vector<NameSource>* names,
+                         const std::string& dirU8) const {
+    for (const std::string& name : alsoPresets_) {
+        const ExportPreset* p = findExportPreset(name);
+        if (!p) continue;
+        const std::string folder = presetFolder(dirU8, p->name);
+        if (names) {
+            const std::vector<std::string> outs = batchOutputPaths(*names, folder, p->settings);
+            for (size_t k = 0; k < items.size() && k < outs.size(); ++k) items[k].extras.push_back({outs[k], p->settings});
+        } else {
+            for (ExportItem& it : items) {
+                auto path = u8ToPath(folder) / u8ToPath(it.output).filename();
+                path.replace_extension(p->settings.extension());
+                it.extras.push_back({pathToU8(path), p->settings});
+            }
+        }
+    }
+}
+
+void App::alsoExportRow() {
+    // Presets that were deleted or renamed drop out of the list.
+    std::erase_if(alsoPresets_, [&](const std::string& n) { return !findExportPreset(n); });
+    std::string preview = "None";
+    if (alsoPresets_.size() == 1) preview = alsoPresets_[0];
+    else if (alsoPresets_.size() > 1) preview = std::to_string(alsoPresets_.size()) + " presets";
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Also export");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::BeginCombo("##alsoExport", preview.c_str())) {
+        auto item = [&](const std::string& name) {
+            const auto at = std::find(alsoPresets_.begin(), alsoPresets_.end(), name);
+            bool on = at != alsoPresets_.end();
+            if (ImGui::Checkbox(name.c_str(), &on)) {
+                if (on) alsoPresets_.push_back(name);
+                else alsoPresets_.erase(at);
+                savePreferences();
+            }
+        };
+        for (const ExportPreset& p : builtInExportPresets())
+            if (std::none_of(exportPresets_.begin(), exportPresets_.end(), [&](const ExportPreset& q) { return q.name == p.name; }))
+                item(p.name);
+        if (!exportPresets_.empty()) ImGui::SeparatorText("User Presets");
+        for (const ExportPreset& p : exportPresets_) item(p.name);
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Write each image with these presets too, from the same render (darktable's multi-preset\n"
+                          "export). Each preset's files go into a subfolder named after it.");
+}
+
 // Lightroom's File Naming: a template with tokens, a menu to insert them and an example name.
 void App::fileNaming(const std::string& exampleSource) {
     ImGui::TextUnformatted("File naming");
@@ -2503,6 +2795,7 @@ void App::drawExportWindow() {
 
     ImGui::BeginDisabled(busy);
     exportPresetRow();
+    alsoExportRow();
     int tab = -1;
     if (ImGui::BeginTabBar("##exportTabs")) {
         if (ImGui::BeginTabItem("Single")) {
@@ -2585,21 +2878,44 @@ void App::drawExportWindow() {
     ImGui::SeparatorText("Format");
     ImGui::SetNextItemWidth(160);
     // The path field follows the format, so what it shows is the file that gets written.
-    if (ImGui::Combo("##format", &es.format, "PNG\0JPEG\0TIFF\0OpenEXR\0") && exportPath_[0])
+    if (ImGui::Combo("##format", &es.format, "PNG\0JPEG\0TIFF\0OpenEXR\0WebP\0JPEG XL\0AVIF\0") && exportPath_[0])
         std::snprintf(exportPath_, sizeof(exportPath_), "%s", withExt(exportPath_).c_str());
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("PNG, JPEG and TIFF are display images (view transform applied, tagged sRGB).\n"
+        ImGui::SetTooltip("PNG, JPEG, TIFF, WebP, JPEG XL and AVIF are display images (view transform applied,\n"
+                          "tagged with their colour space). WebP is 8 bit; JPEG XL and AVIF are the smallest\n"
+                          "files for their quality, but older programs can't open them.\n"
                           "OpenEXR keeps the scene-linear values, as Blender does.");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    if (es.format == ExportSettings::JPEG) {
+    const FileFormat ff = FileFormat(es.format);
+    if (ff != FileFormat::JPEG && ff != FileFormat::WEBP) {
+        // Blender's Color Depth: 8/16 bits for PNG, TIFF and JPEG XL, 8/10 for AVIF, half or full
+        // float for OpenEXR.
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        const bool exr = ff == FileFormat::EXR;
+        int hi = formatDepth(ff, es.depth) > (exr ? 16 : 8) ? 1 : 0;
+        const char* items = exr ? "Float (Half)\0Float (Full)\0" : ff == FileFormat::AVIF ? "8 bit\00010 bit\0" : "8 bit\00016 bit\0";
+        if (ImGui::Combo("##depth", &hi, items)) es.depth = exr ? (hi ? 32 : 16) : (hi ? 16 : 8);
+    }
+    if (hasLossless(ff)) {
+        ImGui::Checkbox("Lossless", &es.lossless);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Keep every value exactly. Lossy files are several times smaller,\n"
+                              "and at quality 90 or more hard to tell from the original.");
+        if (!es.lossless) ImGui::SameLine();
+    }
+    if (hasQuality(ff) && !(hasLossless(ff) && es.lossless)) {
+        ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::SliderInt("##quality", &es.jpegQuality, 1, 100, "Quality %d");
-    } else {
-        // Blender's Color Depth: 8/16 bits for PNG and TIFF, half or full float for OpenEXR.
-        const bool exr = es.format == ExportSettings::EXR;
-        int hi = formatDepth(FileFormat(es.format), es.depth) > (exr ? 16 : 8) ? 1 : 0;
-        if (ImGui::Combo("##depth", &hi, exr ? "Float (Half)\0Float (Full)\0" : "8 bit\00016 bit\0"))
-            es.depth = exr ? (hi ? 32 : 16) : (hi ? 16 : 8);
+    }
+    // Lightroom's Color Space. OpenEXR is always scene-linear Rec.709.
+    if (es.format != ExportSettings::EXR) {
+        ImGui::SetNextItemWidth(160);
+        ImGui::Combo("Color Space", &es.colorSpace, outspace::kNames, outspace::kCount);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("The space the file is written in, with its ICC profile.\n"
+                              "Wider spaces keep colours sRGB clips (with the Standard view).\n"
+                              "Rec.2100 PQ is HDR, with highlights above white kept: 16-bit PNG\n"
+                              "or JPEG XL, 10-bit AVIF (other formats get Rec.2020).");
     }
     ImGui::SetNextItemWidth(160);
     ImGui::Combo("##size", &es.sizeMode, "Original size\0Long edge\0Percent\0");
@@ -2643,7 +2959,12 @@ void App::drawExportWindow() {
         if (tab == 0) {
             if (!exportPath_[0]) why = "Choose a file";
             else if (!graph_.firstOfType(OutputNode::staticInfo().type)) why = "Add an Output node";
-            else items.push_back({"", withExt(exportPath_)});
+            else {
+                items.push_back({"", withExt(exportPath_)});
+                // A library photo's title, caption, keywords and rating go into the file.
+                if (libraryPhotoOpen()) items[0].xmp = library::xmpPacket(library_.meta(library_.current()));
+                addAlsoPresets(items, nullptr, pathToU8(u8ToPath(items[0].output).parent_path()));
+            }
         } else if (tab == 1) {
             input = batchInput_;
             ExportSettings tmp = es;
@@ -2656,7 +2977,13 @@ void App::drawExportWindow() {
                 std::vector<NameSource> names;
                 for (const std::string& src : batchSources_) names.push_back({src});
                 const std::vector<std::string> outs = batchOutputPaths(names, batchDir_, tmp);
-                for (size_t k = 0; k < batchSources_.size(); ++k) items.push_back({batchSources_[k], outs[k]});
+                for (size_t k = 0; k < batchSources_.size(); ++k) {
+                    items.push_back({batchSources_[k], outs[k]});
+                    // Sources with a library sidecar carry its metadata.
+                    library::Meta m;
+                    if (library::readMeta(batchSources_[k], m)) items.back().xmp = library::xmpPacket(m);
+                }
+                addAlsoPresets(items, &names, batchDir_);
             }
         }
         ImGui::BeginDisabled(!why.empty());
@@ -2714,6 +3041,7 @@ void App::restoreSnapshot(int i) {
     if (!pathValid(previewPath_)) previewPath_.clear();
     markChanged(true);
     status_ = "Restored the snapshot " + snapshots_[size_t(i)].name;
+    historyName_ = "Snapshot: " + snapshots_[size_t(i)].name;
 }
 
 void App::drawSnapshotsWindow() {
@@ -2863,6 +3191,9 @@ void App::requestDisplay(int slot, const ImagePtr& scene, bool clipping, bool hi
     r.scene = scene;
     r.cm = graph_.colorManagement;
     r.clipping = clipping;
+    // Soft proofing marks the Result viewer, as the clipping warning does.
+    const bool result = slot == mainSlot(*viewers_[0]) || slot == detailSlot(*viewers_[0]);
+    r.gamut = result && gamutWarning_ && !tint ? exportSettings_.colorSpace : -1;
     r.histogram = histogram;
     r.tint = tint;
     r.gpu = gpuDevice_ && gpu::available();
@@ -3037,8 +3368,10 @@ nlohmann::json App::uiState() const {
             {"viewers", viewers},
             {"histogram", showHistogram_},
             {"clipping", clipping_},
+            {"gamutWarning", gamutWarning_},
             {"maskOverlay", maskOverlay_},
             {"library", libraryPhotoOpen() ? library_.meta(library_.current()).toJson() : nlohmann::json()},
+            {"history", historyJson()},
             {"snapshots", [&] {
                  nlohmann::json a = nlohmann::json::array();
                  for (const Snapshot& sn : snapshots_) a.push_back({{"name", sn.name}, {"graph", sn.graph}});
@@ -3072,6 +3405,7 @@ void App::applyUiState(const nlohmann::json& j) {
         if (auto gv = j.find("graphView"); gv != j.end()) editor_.setViewState(*gv);
         showHistogram_ = j.value("histogram", showHistogram_);
         clipping_ = j.value("clipping", clipping_);
+        gamutWarning_ = j.value("gamutWarning", false);
         maskOverlay_ = j.value("maskOverlay", maskOverlay_);
         if (auto p = j.find("preview"); p != j.end()) {
             // Older projects stored a plain node id.

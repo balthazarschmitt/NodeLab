@@ -168,6 +168,7 @@ int Graph::connect(int fromNode, int fromPin, int toNode, int toPin, std::string
     std::erase_if(links_, [&](const Link& l) { return l.toNode == toNode && l.toPin == toPin; });
     Link l{nextId_++, fromNode, fromPin, toNode, toPin};
     links_.push_back(l);
+    b->linksChanged(*this);
     return l.id;
 }
 

@@ -10,6 +10,7 @@
 #include "io/ImageWrite.h"
 #include "io/Paths.h"
 #include "nodes/group/GroupNodes.h"
+#include "nodes/math/LayerStack.h"
 #include "ui/ColorDisplay.h"
 #include "ui/Eyedropper.h"
 #include "ui/FileDialog.h"
@@ -279,6 +280,51 @@ bool drawGroupInterface(GroupNode& group, Graph& outer) {
     return changed;
 }
 
+// Layer Stack's layers, top first as in Photoshop's Layers panel: mode, reorder, remove, add.
+// The opacities are params (their sliders show on the node's pins too).
+static bool drawLayerStack(LayerStackNode& ls, Graph& g, const std::function<bool(int)>& row) {
+    bool changed = false;
+    ImGui::TextDisabled("Layer 0 is the bottom. Connecting the top layer adds another.");
+    for (int i = ls.layers() - 1; i >= 0; --i) {
+        ImGui::PushID(i);
+        ImGui::SeparatorText(("Layer " + std::to_string(i) + (ls.layerUsed(g, i) ? "" : " (empty)")).c_str());
+        row(i * LayerStackNode::kStride);
+        row(i * LayerStackNode::kStride + 1);
+        ImGui::BeginDisabled(i == ls.layers() - 1);
+        if (ImGui::ArrowButton("##up", ImGuiDir_Up)) {
+            ls.moveLayer(g, i, +1);
+            changed = true;
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(i == 0);
+        if (ImGui::ArrowButton("##down", ImGuiDir_Down)) {
+            ls.moveLayer(g, i, -1);
+            changed = true;
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(ls.layers() <= LayerStackNode::kMinLayers);
+        if (ImGui::SmallButton("Remove")) {
+            ls.removeLayer(g, i);
+            changed = true;
+            ImGui::EndDisabled();
+            ImGui::PopID();
+            break;
+        }
+        ImGui::EndDisabled();
+        ImGui::PopID();
+    }
+    ImGui::Spacing();
+    ImGui::BeginDisabled(ls.layers() >= LayerStackNode::kMaxLayers);
+    if (ImGui::Button("Add Layer")) {
+        ls.addLayer(g);
+        changed = true;
+    }
+    ImGui::EndDisabled();
+    return changed;
+}
+
 bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerParent) {
     Node* n = g.find(selectedNode);
     if (n) {
@@ -386,7 +432,8 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
         changed |= c;
         return c;
     };
-    if (!drawNodeInspector(*n, row, changed, &g))
+    if (auto* ls = dynamic_cast<LayerStackNode*>(n)) changed |= drawLayerStack(*ls, g, row);
+    else if (!drawNodeInspector(*n, row, changed, &g))
         for (int i = 0; i < int(info.params.size()); ++i) row(i);
     ImGui::PopID();
     return changed;

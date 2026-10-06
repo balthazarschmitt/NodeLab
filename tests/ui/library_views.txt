@@ -1,0 +1,62 @@
+# Library views and metadata: copy a_scene.png, b_photo.jpg, a copy of it named
+# "c_photo copy.jpg" and the two CR3s (see library.txt) to build\smoke\libmeta, then
+#   NodeLab.exe build\smoke\libmeta --script tests\ui\library_views.txt
+# Grid with labels; Compare (C) of the first two, zoomed; Survey (N); a stack (Ctrl+G);
+# the Metadata sidebar.
+settle
+wait 20
+settle
+move 800 500
+key g
+settle
+wait 30
+settle
+click 110 180
+key 6
+ctrl on
+click 307 180
+ctrl off
+key 8
+shot build/smoke/libv1_grid.png
+key c
+settle
+wait 40
+settle
+shot build/smoke/libv2_compare.png
+move 400 400
+wheel 3
+wait 5
+key right
+settle
+wait 40
+settle
+shot build/smoke/libv3_compare_zoom.png
+key n
+settle
+wait 40
+settle
+shot build/smoke/libv4_survey.png
+key g
+wait 5
+ctrl on
+key g
+ctrl off
+wait 5
+shot build/smoke/libv5_stack.png
+# Metadata sidebar: a title and two keywords on the stack's top photo
+click 1070 63
+wait 5
+click 110 220
+wait 3
+click 1437 473
+text harbour, fog
+key enter
+click 1465 229
+text Morning
+click 800 700
+wait 3
+click 750 63
+text fog
+wait 3
+shot build/smoke/libv6_meta.png
+quit

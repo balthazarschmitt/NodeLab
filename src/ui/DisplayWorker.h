@@ -33,6 +33,7 @@ public:
         bool keepTexture = false;
         ColorManagement cm;
         bool clipping = false;
+        int gamut = -1;  // soft proofing: mark colours outside this outspace::Space
         bool histogram = false;
         bool tint = false;  // a mask: a flat colour whose opacity follows the red channel
         float tintColor[4] = {1.0f, 0.25f, 0.2f, 0.45f};

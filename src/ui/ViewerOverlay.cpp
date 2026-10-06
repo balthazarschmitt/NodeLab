@@ -172,8 +172,11 @@ const char* NodeOverlay::cropGuideName(int g) {
 
 bool NodeOverlay::supports(const Node& n) {
     const std::string& t = n.info().type;
-    return t == crop::kType || t == perspective::kType || isMask(n) || dynamic_cast<const SpotRemovalNode*>(&n);
+    return t == crop::kType || t == perspective::kType || t == panzoom::kType || isMask(n) ||
+           dynamic_cast<const SpotRemovalNode*>(&n);
 }
+
+bool NodeOverlay::wantsCtrlWheel() const { return node_ && node_->info().type == panzoom::kType; }
 
 bool NodeOverlay::isMask(const Node& n) {
     const std::string& t = n.info().type;
@@ -196,11 +199,47 @@ bool NodeOverlay::update(ImDrawList* dl, const ImVec2& a, const ImVec2& b, bool 
     const std::string& t = node_->info().type;
     if (t == crop::kType) return updateCrop(dl, a, b, hovered, active);
     if (t == perspective::kType) return updatePerspective(dl, a, b, hovered, active);
+    if (t == panzoom::kType) return updatePanZoom(dl, a, b, hovered, active);
     if (t == kLinear) return updateLinear(dl, a, b, hovered, active);
     if (t == kRadial || t == kBox || t == kEllipse) return updateShape(dl, a, b, hovered, active);
     if (dynamic_cast<BrushMaskNode*>(node_)) return updateBrush(dl, a, b, hovered, active);
     if (dynamic_cast<SpotRemovalNode*>(node_)) return updateSpots(dl, a, b, hovered, active);
     return false;
+}
+
+// ---------------------------------------------------------------- pan and zoom
+
+// Drag anywhere on the image to move it, Ctrl+wheel to zoom about the frame's centre. The moved
+// picture's outline is drawn, as it can sit partly outside the frame.
+bool NodeOverlay::updatePanZoom(ImDrawList* dl, const ImVec2& a, const ImVec2& b, bool hovered, bool active) {
+    const float W = b.x - a.x, H = b.y - a.y;
+    const ImGuiIO& io = ImGui::GetIO();
+    const ImVec2 m = io.MousePos;
+    const float z = std::max(node_->paramF(panzoom::Zoom), 1e-3f);
+    const ImVec2 c((a.x + b.x) * 0.5f + node_->paramF(panzoom::X) * W, (a.y + b.y) * 0.5f + node_->paramF(panzoom::Y) * H);
+    const ImVec2 p0(c.x - W * z * 0.5f, c.y - H * z * 0.5f), p1(c.x + W * z * 0.5f, c.y + H * z * 0.5f);
+    dl->AddRect(ImVec2(p0.x - 1, p0.y - 1), ImVec2(p1.x + 1, p1.y + 1), IM_COL32(0, 0, 0, 120), 0, 0, 3.0f);
+    dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 200), 0, 0, 1.0f);
+    const bool inside = m.x >= a.x && m.x <= b.x && m.y >= a.y && m.y <= b.y;
+    if (hovered && inside && io.KeyCtrl && io.MouseWheel != 0.0f) {
+        setParam(panzoom::Zoom, z * std::pow(1.1f, io.MouseWheel));
+        // Zoom about the frame's centre: the offset scales with the picture.
+        const float k = node_->paramF(panzoom::Zoom) / z;
+        setParam(panzoom::X, node_->paramF(panzoom::X) * k);
+        setParam(panzoom::Y, node_->paramF(panzoom::Y) * k);
+    }
+    if (hovered && inside && drag_ < 0) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    const float mu = (m.x - a.x) / W, mv = (m.y - a.y) / H;
+    if (hovered && inside && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        drag_ = 0;
+        grab_[0] = node_->paramF(panzoom::X), grab_[1] = node_->paramF(panzoom::Y);
+        grabX_ = mu, grabY_ = mv;
+    }
+    if (drag_ < 0 || !active) return hovered && inside;
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    setParam(panzoom::X, grab_[0] + mu - grabX_);
+    setParam(panzoom::Y, grab_[1] + mv - grabY_);
+    return true;
 }
 
 // ---------------------------------------------------------------- crop

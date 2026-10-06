@@ -345,7 +345,7 @@ void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const 
     ImGuiIO& io = ImGui::GetIO();
     const bool picking = pick && pick->image && !pick->image->empty();
     if (ImGui::IsItemHovered()) {
-        if (io.MouseWheel != 0.0f) {
+        if (io.MouseWheel != 0.0f && !(io.KeyCtrl && overlay && overlay->wantsCtrlWheel())) {
             // Zoom around the cursor: keep the image point under the mouse fixed.
             float scaleOld = fit * view.zoom;
             float newZoom = std::clamp(view.zoom * std::pow(1.15f, io.MouseWheel), 0.1f, 64.0f);

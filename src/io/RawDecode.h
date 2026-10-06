@@ -1,5 +1,7 @@
 #pragma once
 // Camera RAW decoding through LibRaw.
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -19,6 +21,14 @@ bool isRawPath(const std::string& pathU8);
 // half-resolution preview. fullW/fullH receive the full-resolution upright size.
 std::shared_ptr<Image> load(const std::string& pathU8, std::string& err, int highlights, bool halfSize,
                             int* fullW = nullptr, int* fullH = nullptr);
+
+// Some sensors' outermost visible rows or columns hold junk (the Canon EOS 70D's last row reads
+// near white), which demosaicing smears into a cyan, green or magenta line along that edge of the
+// picture. Lightroom crops them; this replaces each junk line, up to two deep per edge, with the
+// nearest line of the same Bayer colours, so the size stays and existing edits keep their places.
+// raw is the CFA mosaic (pitch in pixels) and left/top/width/height its visible area; black and
+// white are the raw levels. Returns how many lines it replaced.
+int repairEdgeLines(uint16_t* raw, size_t pitch, int left, int top, int width, int height, int black, int white);
 
 // The camera's embedded JPEG preview, upright and display-encoded (as the camera rendered it):
 // the smallest one whose long edge is at least minEdge, else the largest. Much faster than a

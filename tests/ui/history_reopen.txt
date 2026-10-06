@@ -1,0 +1,12 @@
+# See history_save.txt. The reopened project lists Open, Add Gamma and Gamma 1.85 in View > History;
+# clicking Open goes back to before the Gamma.
+settle
+click 146 18
+wait 3
+click 155 369
+wait 5
+shot build/smoke/hist_reopened.png
+click 95 226
+settle
+shot build/smoke/hist_undone.png
+quit

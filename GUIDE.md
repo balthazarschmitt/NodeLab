@@ -125,13 +125,17 @@ The "before" is what the Original panel shows: the first Image Input.
 
 ### Histogram and Clipping
 
-The Result panel's toolbar has two toggles (hover the Result panel to use the keys):
+The Result panel's toolbar has these toggles (hover the Result panel to use the keys):
 
 - **Histogram (H):** red, green, blue and luminance distribution of the result, drawn in the
   top-right corner. Dark tones are on the left, bright tones on the right.
 - **Clipping (J):** paints pure-white or channel-clipped pixels red and pure-black pixels blue, like
   Lightroom's clipping warnings. The triangles in the histogram's corners light up when something
   clips; click one to toggle the warning.
+- **Gamut:** soft proofing's gamut warning. Colours the export's **Color Space** (see Exporting)
+  can't hold turn magenta, so with sRGB you see which colours an sRGB file would clip, and with
+  Display P3 or Adobe RGB how much more a wider space keeps. It needs a scene-linear project with
+  the Standard view (other views already map everything into sRGB).
 
 ### On-image Controls
 
@@ -364,8 +368,9 @@ value while nothing is connected.
 - Loads an image file: PNG, JPEG, BMP or TGA (8 or 16 bits per channel), **TIFF** (8 or 16-bit,
   or 16/32-bit float; uncompressed, LZW, Deflate or PackBits, as scanners and other editors write
   them), **OpenEXR** (the RGBA, or the first layer with colour, as Blender's multilayer files
-  have), or a camera **RAW** file (CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2, PEF and most others,
-  decoded by LibRaw). NodeLab's own TIFF and EXR exports open again this way.
+  have), **WebP**, **JPEG XL** or **AVIF** (with their colour profiles and orientation), or a
+  camera **RAW** file (CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2, PEF and most others, decoded by
+  LibRaw). NodeLab's own TIFF, EXR, WebP, JPEG XL and AVIF exports open again this way.
 - Output: Image.
 - **Color Space** (as in Blender) says how the file's values are decoded in a scene-linear
   project: **sRGB** (photos and most images) converts to linear light; **Linear Rec.709** and
@@ -475,6 +480,23 @@ Blender. Invert, Posterize and the curve-based nodes still work on 0..1.
 - Photographic negative: 1 - value per channel.
 - Factor blends between original and inverted, useful for partial solarisation looks.
 
+**Film Negative**
+- darktable's negadoctor: makes a scanned or camera-copied film negative positive the way a
+  darkroom print does, which a plain Invert can't (the film's orange mask and its log response
+  leave an Invert muddy and blue).
+- **Film Base Color:** the colour of clear film (the unexposed border between frames, or the
+  rebate). Pick it from the image with the eyedropper; it prints black and removes the mask's cast.
+- **D Max:** the density of the brightest part of the scene above the base; raise it until the
+  highlights stop clipping. **Scan Offset** shifts every density (like exposing the scan more or
+  less). **Density Correction** scales each channel's density, to neutralise a cast in the
+  highlights.
+- **Contrast** is the paper grade: how many stops the film's range spans. **Print Exposure**
+  brightens or darkens in stops, and **Black** sets the paper's black (raise it for deeper blacks,
+  lower it below zero to lift them).
+- **Type:** Black & White uses one density for all channels, for black and white film.
+- Put it straight after the Image Input of the scan, before any other colour work. In legacy
+  projects the scan is decoded to linear light first.
+
 **Split RGB / Combine RGB**
 - Split takes an image apart into R, G, B and A channels. Combine builds an image from four
   channels (unconnected ones use their slider). Like Blender, Combine does not clamp, so it can
@@ -570,6 +592,32 @@ Blender. Invert, Posterize and the curve-based nodes still work on 0..1.
 - In scene-linear projects the ranges are chosen by Oklab lightness and the tint is added in
   Oklab, so blacks stay neutral and brightness is kept.
 
+**Tone Equalizer**
+- darktable's tone equalizer: brightens or darkens parts of the image by how exposed they are,
+  without flattening them. Nine sliders set a gain in stops (-2..2) for each exposure from -8 EV
+  (deep shadows) to 0 EV (white); the curve through them is smooth, and a slider's value is the
+  exact gain at its exposure.
+- Each pixel reads its exposure from a mask: the image's brightness smoothed within regions but
+  not across edges (a guided filter), so a whole face or sky moves together and keeps its local
+  contrast. **Show Mask** displays it (dark is -8 EV, white 0 EV).
+- **Smoothing:** the mask's blur radius in % of the image's long edge (0 uses each pixel's own
+  brightness, like a curve). **Feathering:** how closely the mask follows edges; raise it if halos
+  appear around high-contrast edges.
+- **Mask Exposure** shifts the mask, and **Mask Contrast** spreads it around -4 EV, so its tones
+  cover the sliders you want to use.
+- **Uses:** lift the shadows of a backlit portrait (-6 and -5 EV up) while holding the sky (-1
+  and 0 EV down), a gentle HDR look.
+
+**Color Equalizer**
+- darktable's color equalizer: **Hue** (degrees), **Saturation** and **Brightness** for eight hues
+  (Red, Orange, Yellow, Green, Cyan, Blue, Lavender and Magenta) on Oklch's perceptual hue circle.
+- Each colour takes a blend of the hues near it; **Smoothness** widens the blend (higher is
+  softer transitions, lower targets a hue more precisely). Greys and nearly grey colours are left
+  alone, and Brightness moves perceptual lightness rather than exposure, so a colour keeps its
+  saturation.
+- Compared with Color Mixer: the hues are placed where colours are perceptually distinct
+  (including skin's orange and a lavender between blue and magenta), and the blend is smoother.
+
 **Tone Map**
 - Compresses very bright values (for example after Exposure, Glare or Add blends) back into 0..1
   smoothly instead of clipping.
@@ -612,6 +660,55 @@ Blender. Invert, Posterize and the curve-based nodes still work on 0..1.
 - Premultiplied: turn on if the foreground's colours are already multiplied by alpha (for
   example the Image output of a keyer).
 - Factor fades the foreground.
+
+**Layer Stack**
+- Photoshop's layers in one node: any number of images stacked on each other. **Layer 0** is the
+  bottom and each higher layer is drawn over everything below it. On the node, the pins run from
+  Layer 0 down to the top layer.
+- Connecting the top layer adds an empty one above it, so there's always a pin for the next image.
+- Each layer has an **Opacity** (0 shows the layers below, 1 covers them where the layer is
+  opaque); its slider is on the layer's pin, and wiring a mask into the pin gives the layer a
+  layer mask. The layer's own alpha counts too, so transparent parts of a layer always show
+  through.
+- Each layer has a blend **Mode** (in the Inspector): Normal, or Blend's modes (Multiply, Screen,
+  Overlay, Soft Light, Color, Value...), blended with everything below it.
+  The bottom layer's mode doesn't matter.
+- The Inspector lists the layers top first, as Photoshop's Layers panel does: move a layer up or
+  down (its wires go with it), remove it, or **Add Layer**.
+- The bottom connected layer sets the size; other sizes are stretched to it, as in Mix.
+
+**HDR Merge**
+- Lightroom's Photo Merge > HDR: bracketed exposures of the same scene merged into one image with
+  the range of all of them. Connect the brackets in any order; as on Layer Stack, connecting the
+  last pin adds another.
+- The result is at the middle exposure's brightness (by mean brightness), with the highlights
+  from the darker frames and the shadows from the brighter ones. Each frame counts most where it
+  is well exposed and not at all where it is clipped.
+- It is scene-linear and goes above 1: follow it with Basic (Exposure, Highlights), Tone Map or
+  the view transform to bring the range into the display's. Use it in a scene-linear project;
+  legacy projects get sRGB-encoded values back.
+- **Auto Align** finds each frame's shift from the middle one (median threshold bitmaps, which
+  look the same at any exposure), for handheld brackets. It shifts but doesn't rotate.
+- **Deghost** leaves a frame out where it disagrees with the middle one (something moved between
+  shots: people, leaves, water). Low, Medium and High catch smaller and smaller differences.
+- The first connected image sets the size.
+- **Uses:** high-contrast scenes (interiors with windows, sunsets) shot as brackets.
+
+**Panorama Merge**
+- Lightroom's Photo Merge > Panorama: overlapping photos stitched into one. Connect them in any
+  order: their overlaps are found from the pictures (corner features matched between every
+  pair), and the photo with the most matches is the centre.
+- **Projection:** **Spherical** (wide and tall panoramas; straight lines bend), **Cylindrical**
+  (wide panoramas; verticals stay straight), **Perspective** (straight lines stay straight, but
+  the edges stretch, so it suits only a few photos; flat subjects such as a wall or a document).
+- Brightness differences between the photos are evened out, and the seams are feathered.
+- Areas no photo covers are transparent. **Auto Crop** cuts the result to the largest rectangle
+  with no empty areas (Lightroom's Auto Crop); otherwise crop it yourself, or fill the gaps with
+  Remove.
+- Photos that match nothing are left out; if nothing matches, the first photo comes out as it is.
+- Shoot with about a third of each photo overlapping the next, the same exposure and focal
+  length, turning around the lens rather than walking. The matching runs on pictures scaled to
+  800 pixels, so the proxy and the export stitch the same way.
 
 ### Converter
 
@@ -757,6 +854,30 @@ Sizes are in full-resolution pixels.
   edges, which keeps noise from being sharpened. Feed a mask through Mix to limit it to a region.
 - Like Lightroom's, judge it at 100%: the preview's proxy scales the radius down with the image.
 
+**Capture Sharpening**
+- RawTherapee's Capture Sharpening: undoes the slight blur every camera adds (lens, sensor
+  filter, demosaicing) by deconvolution, which restores detail rather than adding contrast to
+  edges as Sharpen does. Put it first, right after the Image Input of a RAW, before Denoise.
+- **Radius:** the size of that blur, in full-resolution pixels (0.6 to 0.9 for most cameras;
+  more for soft lenses). Too much gives haloes and a brittle look.
+- **Iterations:** how far the deconvolution goes (20 is plenty; more for a larger radius).
+- **Contrast Threshold:** areas flatter than this (sky, skin, noise) are left alone.
+- **Amount:** blends it in; connect a mask to limit it to a region.
+- It only shows at 100% and above: at the proxy's size the blur is below a pixel and the node
+  passes the image through. It runs on the CPU.
+
+**Diffuse or Sharpen**
+- darktable's diffuse or sharpen, simplified: over a few **Iterations**, the image's detail at
+  scales around **Radius** (full-resolution pixels; **Radius Span** widens the range of scales in
+  octaves) is added back (positive **Amount**) or taken away (negative).
+- Positive amounts sharpen, deblur a soft lens (Radius 1-4), or add local contrast and "clarity"
+  (Radius 16-64). Negative amounts diffuse: a soft bloom or a surface blur (Radius 4-32).
+- **Edge Sensitivity** slows the change down across strong edges: it keeps sharpening from making
+  haloes and keeps edges crisp while diffusing (a smoothing that preserves edges). **Noise
+  Threshold** stops the finest, faintest detail (noise) from being sharpened.
+- More iterations make it smoother and stronger at the same Amount, and slower: it runs on the
+  CPU, and large radii read far around each pixel.
+
 **Spot Removal**
 - Lightroom's Spot Removal: removes dust spots, blemishes and small distractions by covering
   each with pixels from somewhere else in the photo. Select the node and work on the Result panel.
@@ -772,8 +893,26 @@ Sizes are in full-resolution pixels.
   spot, so the patch blends in; **Clone** copies the source exactly (better next to hard edges).
 - **Size** (a share of the image's long edge), **Feather** (how soft the edge is) and **Opacity**
   apply to the selected spot and to new ones.
+- **Detect Dust** (in the Inspector) looks for sensor dust: small, round, soft spots a little
+  darker than a smooth background such as sky. Each one it finds becomes a spot with an
+  automatic source; spots already covered are skipped. Raise **Sensitivity** to find fainter
+  dust, lower it if it marks real detail. Check the results, as Lightroom's Visualize Spots asks
+  you to, and Alt+click any that aren't dust.
 - Spots are kept in image-relative positions, so they stay in place at any preview size and in
   the export. Put the node early, before Basic and other adjustments.
+
+**Remove**
+- Content-aware fill (Lightroom's Remove without Generative AI, Photoshop's Content-Aware Fill):
+  the area a **Mask** covers is rebuilt from patches of the rest of the photo, so texture such as
+  grass, water or a wall carries on across it. For objects bigger than Spot Removal's circles:
+  people in the background, signs, power lines.
+- Paint the area with a **Brush Mask** (or any mask) and wire it to the Mask pin. Cover the whole
+  object, shadow included.
+- **Grow** (pixels) widens the area so the object's outline goes too. At 0 a soft mask edge
+  blends the fill into the original.
+- It works best with plenty of similar texture around the area; it can't invent what isn't
+  anywhere in the photo (a face, the rest of a building). The result is the same every time.
+  Large areas at full resolution take a few seconds.
 
 **Filter**
 - Classic 3x3 kernels:
@@ -825,6 +964,32 @@ Sizes are in full-resolution pixels.
 - **Seed:** another pattern of the same grain.
 - Put it near the end of the graph, after sharpening and resizing would soften it.
 
+**Vignette**
+- Lightroom's Effects > Post-Crop Vignetting: darkens (negative **Amount**) or lightens
+  (positive) towards the edges of the image it gets. After a Crop it follows the crop, unlike the
+  Lens Correction's vignetting, which is measured on the whole frame. Amount -100 is two stops
+  darker at the edges. Connect a mask to the Amount pin to vary it.
+- **Style:** **Highlight Priority** works like exposure and keeps bright parts from clipping when
+  lightening; **Color Priority** is a plain exposure change, which keeps the colours exactly;
+  **Paint Overlay** blends towards black or white, as Lightroom's original vignette did.
+- **Midpoint** sets how far in from the edges it reaches; **Roundness** goes from a rounded
+  rectangle (-100) through an ellipse that fits the frame (0) to a circle (100); **Feather** sets
+  how soft its edge is.
+- **Highlights** (when darkening): bright parts such as lamps and sky keep their brightness in the
+  darkened corners.
+
+**Defringe**
+- Lightroom's Lens Corrections > Defringe: removes purple and green fringes (longitudinal
+  chromatic aberration) along high-contrast edges, such as branches against the sky or out of
+  focus highlights. Pixels near an edge whose hue is in the range lose their colour, keeping their
+  brightness.
+- **Purple Amount** and **Green Amount** (0..20) set the strength and how far from the edge it
+  reaches (up to 4 pixels). **Hue Low** and **High** narrow the hues it removes: the purple range
+  goes from blue (0) to magenta (100), the green one from yellow-green to cyan-green. Narrow them
+  if it removes colour from purple or green objects too.
+- Lens Correction's and Lens Profile's chromatic aberration fix the other kind of fringe: red and
+  cyan or blue and yellow edges that grow towards the corners.
+
 ### Transform
 
 These move pixels around. Pixels pulled from outside the image are transparent, unless noted
@@ -834,6 +999,16 @@ otherwise.
 - Moves (X/Y in pixels), rotates (Angle) and scales (Scale) the image around its centre.
 - Wrap tiles the image instead of leaving transparent edges; it is good for seamless offsets and
   glitch shifts.
+
+**Pan and Zoom**
+- Moves and zooms the picture inside its own frame, for framing by eye. The output keeps the
+  input's size, and wherever the moved picture doesn't reach is fully transparent.
+- **Zoom** scales about the frame's centre (2 is twice as big); **X** and **Y** move it by
+  fractions of the width and height (0.5 moves it half the frame right or down), so the preview
+  matches the export.
+- With the node selected, drag anywhere on the image in the viewer to move it, and Ctrl+wheel to
+  zoom. The moved picture's outline is drawn over the viewer.
+- **Interpolation:** Bilinear for smooth results, Nearest for hard pixels when zooming far in.
 
 **Flip**
 - Mirrors horizontally, vertically or both.
@@ -847,6 +1022,30 @@ otherwise.
 - **Aspect** locks the crop to a ratio (Original, 1:1, 4:5, 2:3, 16:9 and more). The rectangle
   shrinks around its centre to fit.
 - Select the node to edit the crop on the Result panel (see On-image Controls).
+
+**Border**
+- Puts a coloured margin around the image, as darktable's framing or a print border: the output
+  is bigger than the input. Sizes are percentages of the image's long edge.
+- **Size:** the margin on every side. **Bottom:** extra margin below, for a gallery or instant
+  photo look.
+- **Aspect** grows the canvas (never cropping the picture) to a ratio, such as 1:1 for social
+  media or 4:5 for a print, with the picture centred.
+- **Color:** the margin's colour; transparent parts of the picture show it too. **Line Size** and
+  **Line Color** draw a thin frame line around the picture.
+
+**Watermark**
+- Lightroom's export watermark: a line of text or a logo, drawn over the picture.
+- **Text** (empty for none) in **Font** Sans, Sans Bold, Serif or Monospace, using the Windows
+  fonts (Segoe UI or Arial, Georgia or Times, Consolas or Courier). Without them it uses the
+  built-in Roboto (Cousine for Monospace).
+- **Size** is the line height as a percentage of the picture's short edge, so it looks the same
+  at any export size. A **Logo** image connected to its pin is drawn instead of the text, two and
+  a half times the text's height, keeping its transparency.
+- **Anchor** picks one of nine positions (corners, edges, centre); **Inset X/Y** move it in from
+  the edges, as percentages of the short edge.
+- **Opacity**, **Color**, and **Shadow** (a soft dark shadow that keeps light text readable on
+  bright areas).
+- Put it after Border to sign the margin, or last before File Output.
 
 **Lens Distortion**
 - Distortion: positive for barrel (bulging), negative for pincushion.
@@ -888,6 +1087,12 @@ otherwise.
   guides along a building's sides straighten it; add two along a roof line or the horizon to level
   it as well. Drag a guide's ends to adjust it; Alt+click a guide to remove it. Off ignores the
   guides (they're kept).
+- **Upright: Level, Vertical, Full, Auto.** NodeLab finds straight edges in the photo itself (those
+  within 20 degrees of vertical or horizontal) and turns the camera to straighten them, ignoring
+  lines that disagree with the rest, such as a sloping roof. **Level** only rotates, to level the
+  horizon; **Vertical** also stands converging verticals up; **Full** corrects both ways;
+  **Auto** is a gentler Full (the sideways correction at half strength, at most 20 degrees). The
+  sliders apply on top. Turn on Constrain Crop to hide the empty corners.
 - **Vertical** below zero widens the top, for buildings leaning back when shot looking up; above
   zero widens the bottom. **Horizontal** does the same sideways (positive widens the right side).
 - **Rotate** turns the image clockwise (positive), up to 10 degrees. **Aspect** stretches it
@@ -998,6 +1203,9 @@ with the matte applied as alpha.
   `NodeLab.exe --install-model subject-light` downloads it from the command line.
 - Run it on the photo itself, before colour swaps or heavy grading: the model was trained on
   ordinary photos. For an infrared edit, wire the image from before the channel swap.
+- **Feather** (all AI masks) softens the mask's outline, up to 3% of the long edge at 100.
+  **Edge** (Lightroom's Shift Edge) grows the mask outwards (above 0) or shrinks it inwards
+  (below 0), by up to 2% of the long edge, for a halo the model left or a background it took.
 
 **Select Sky**
 - Lightroom's Select Sky: an AI model (a U²-Net trained on skies) masks the sky, up to the
@@ -1006,6 +1214,43 @@ with the matte applied as alpha.
   edges at full resolution, **Invert** for everything but the sky, and an optional **Mask**.
 - It runs in a second or two on the CPU. Typical use: Add Mask > Sky, then lower the Basic's
   Exposure or Highlights, or raise Dehaze, for the sky only.
+
+**Select People**
+- Lightroom's Select People for portraits: an AI face-parsing model (SegFormer, trained on
+  CelebAMask-HQ) masks parts of a face. Tick the parts to include: **Face Skin** (with nose and
+  ears), **Eyebrows**, **Eyes**, **Lips**, **Mouth** (inside, teeth), **Hair**, **Neck**,
+  **Clothes** and **Accessories** (glasses, hat, earrings, necklace).
+- Typical use: Face Skin into a Basic with a little negative Texture for softer skin, Eyes for a
+  touch of Exposure and Clarity, Lips for Saturation.
+- The model was trained on close-up faces, so it works when a face fills much of the frame (a
+  head-and-shoulders portrait). For a full-length or group shot, crop to the face first or use
+  **Select Subject**. It doesn't tell people apart: wire a shape mask to **Mask** to keep one.
+- Like the other AI masks it is a one-time download (about 340 MB) with the same caching,
+  **Refine Edges**, **Invert**, **Feather** and **Edge**. It takes a few seconds on the CPU.
+  Changing which parts are ticked runs the model again (each choice is cached).
+  `NodeLab.exe --install-model face` downloads it from the command line.
+- The model's licence (NVIDIA's for SegFormer, and the CelebAMask-HQ data's) allows
+  non-commercial use only.
+
+**Select Landscape**
+- Lightroom's Select Landscape: an AI scene model (SegFormer-B2, trained on ADE20K's 150 kinds of
+  things and places) masks parts of a scene. Tick **Sky**, **Water** (sea, lakes, rivers,
+  waterfalls), **Vegetation** (trees, grass, plants, fields), **Mountains** (and hills),
+  **Natural Ground** (earth, rock, sand), **Architecture** (buildings, walls, bridges, fences)
+  and **Artificial Ground** (roads, paths, floors, stairs). Snow has no class of its own in the
+  model; try Natural Ground or Mountains, or a Range Mask on bright areas.
+- A one-time download of about 110 MB (shared with **Select Objects**), a second or two on the
+  CPU. Otherwise as **Select Subject**: caching, **Refine Edges**, **Invert**, **Feather**,
+  **Edge** and an optional **Mask**. `NodeLab.exe --install-model scene` downloads it.
+- The model's licence (NVIDIA's for SegFormer) allows non-commercial use only.
+
+**Select Objects**
+- Masks kinds of objects with the same scene model as **Select Landscape**: **People**,
+  **Animals**, **Vehicles**, **Furniture**, **Signs and Poles**, **Lights**, **Screens** and
+  **Potted Plants and Flowers**. Lightroom's Select Objects asks you to brush over one object;
+  here, wire a Brush Mask (or a Box or Ellipse Mask) to **Mask** to keep only the one you want.
+- Useful with **Remove**: Select Objects with Signs and Poles, a Box Mask around the sign, and
+  Remove fills it in.
 
 **Channel Key**
 - Keys on a single channel: Red, Green, Blue, Hue, Saturation, Value, Y (luma), Cb or Cr.
@@ -1097,12 +1342,13 @@ Coordinates are relative to the image, so textures look the same in the preview 
 - Outputs the image's Width, Height and Aspect ratio as Numbers.
 
 **File Output**
-- Saves whatever is connected to a file (PNG, JPEG, TIFF or OpenEXR) at full resolution when you
+- Saves whatever is connected to a file (PNG, JPEG, TIFF, OpenEXR, WebP, JPEG XL or AVIF) at full resolution when you
   export a single image or choose File > Write File Outputs, or when rendering from the command
   line. Batch exports skip it, because every image would overwrite the same file.
 - **Format** follows the file type picked in Browse. Only the chosen format's setting is shown:
-  **Color Depth** (8 or 16 bit) for PNG and TIFF, **EXR Depth** (Float (Half) or Float (Full))
-  for OpenEXR, and **Quality** for JPEG. See Exporting for what each format stores.
+  **Color Depth** (8 or 16 bit; 16 means 10 for AVIF) for PNG, TIFF, JPEG XL and AVIF, **EXR
+  Depth** (Float (Half) or Float (Full)) for OpenEXR, **Lossless** for WebP, JPEG XL and AVIF,
+  and **Quality** for JPEG and the lossy ones. See Exporting for what each format stores.
 - Use several to export multiple versions (for example colour and black-and-white) in one go.
   Enabled switches one off without deleting it.
 
@@ -1210,6 +1456,11 @@ progress, and **Cancel** stops it.
   **Email (1000 px)**, **Full-Size PNG**, **16-bit TIFF** or **OpenEXR (Half Float)** to set the
   format, size, sharpening and naming in one go. **Save...** keeps the current settings as your
   own preset (in the preferences, so every project has it); **Delete** removes one of yours.
+- **Also export** (darktable's multi-preset export): tick presets to write each image with them
+  too, from the same render, so a full-size TIFF and a web JPEG come out of one export. Each
+  preset's files go into a subfolder named after it (next to the single export's file, or in the
+  batch's output folder), named by that preset's own template. It applies to Export Selected in
+  the Library as well, and is remembered in the preferences.
 - **File Naming** (Lightroom's filename templates), for batches and Export Selected: text with
   tokens in braces, which the **Insert** menu adds, and an example name below it. `{name}` is the
   source's file name, `{folder}` its folder, `{seq}` the position in the export (`{seq:3}` pads it
@@ -1219,15 +1470,41 @@ progress, and **Cancel** stops it.
   `{name}_edit`. Two photos that would get the same name get " (2)", " (3)" added, so no export
   overwrites another, and an export never overwrites its source.
 - **Format:**
-  - **PNG** and **TIFF** (8 or 16 bit) and **JPEG** (with a quality setting) are display images:
-    the view transform is applied, as in the viewer, and they are tagged sRGB (PNG's sRGB chunk,
-    an embedded sRGB ICC profile in JPEG and TIFF), so other apps show the same colours.
+  - **PNG** and **TIFF** (8 or 16 bit), **JPEG** (with a quality setting), **WebP** (8 bit),
+    **JPEG XL** (8 or 16 bit) and **AVIF** (8 or 10 bit) are display images: the view transform
+    is applied, as in the viewer, and they are tagged with their colour space (PNG's sRGB chunk
+    or an ICC profile, an embedded ICC profile in the others, or AVIF's colour tag for sRGB), so
+    other apps show the same colours.
   - 16 bit keeps smooth gradients for further editing elsewhere; 8 bit is for sharing.
+  - **WebP**, **JPEG XL** and **AVIF** are **Lossless** (every pixel kept exactly) or, with
+    Lossless unticked, lossy at a **Quality** like JPEG's.
+    - Lossless WebP is usually about a third smaller than PNG; lossy WebP is the web's
+      everyday format, smaller than JPEG at the same quality.
+    - **JPEG XL** gives the smallest files for its quality, keeps 16 bit, and can be lossless
+      far smaller than PNG or TIFF. Lightroom, Photoshop, macOS, iOS and Safari read it; Chrome
+      and Windows Photos need an extension.
+    - **AVIF** is what browsers and phones prefer for small HDR and wide-gamut pictures; its
+      lossless mode is larger than JPEG XL's. Quality 90 and above keeps full colour
+      resolution; below it, colour is stored at half resolution, as JPEG does.
+    - JPEG XL is slow to encode at 16 bit and large sizes: allow a few seconds per photo.
+  - **Color Space** (Lightroom's): **sRGB** for the web and anything unsure; **Display P3** for
+    Apple devices and modern phones and screens; **Adobe RGB (1998)** for print workflows;
+    **ProPhoto RGB** (use 16 bit) to hand the widest colours to another editor; **Rec.2020**.
+    In a scene-linear project with the Standard view, the wider spaces keep the saturated
+    colours sRGB would clip. Other views and legacy projects make sRGB colours, which are
+    converted unchanged. Use **Gamut** in the Result toolbar to see what a space clips.
+  - **Rec.2100 PQ (HDR)** writes an HDR PNG (16 bit, with the cICP chunk that browsers and HDR
+    displays read), JPEG XL (16 bit) or AVIF (10 bit): scene-linear white is shown at 203 nits
+    and brighter values stay brighter, up to 10,000 nits, instead of clipping. Exposure applies;
+    the view transform doesn't. Other formats get Rec.2020 instead.
   - **OpenEXR** (Float (Half) or Float (Full)) keeps the scene-linear values without the view
     transform, as Blender does, including values above 1. Use it to hand the image to another
     compositor or grading tool. Half is about a third the size of Full and is plenty for photos.
-  - **JPEG** keeps the source photo's EXIF data (camera, lens, exposure, date), from JPEG and
-    camera RAW sources. The orientation is reset, because the pixels are already upright.
+  - **JPEG**, **WebP**, **JPEG XL** and **AVIF** keep the source photo's EXIF data (camera, lens,
+    exposure, date), from JPEG and camera RAW sources. The orientation is reset, because the pixels are already upright.
+  - A library photo's title, caption, keywords, rating and colour label are written as XMP into
+    PNG, JPEG, TIFF, WebP, JPEG XL and AVIF files (not EXR), where Lightroom, Bridge and file
+    browsers read them.
   - Alpha is dropped when the image is fully opaque.
 - **Size:** Original, **Long edge** (pixels), or **Percent**. Exports are only ever made smaller,
   with a sharp Lanczos filter in linear light (the same as Blender's and darktable's high-quality
@@ -1237,9 +1514,10 @@ progress, and **Cancel** stops it.
   final pixel size; use Screen for web and phone images and the paper options for prints.
 
 The settings and folders are saved with the project. From the command line,
-`NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr] [--depth N] a.jpg b.jpg ...`
+`NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr|--webp|--jxl|--avif] [--depth N] [--quality Q] a.jpg b.jpg ...`
 does the same batch without the window, and `NodeLab.exe --render project.nlproj out.tif
-[--depth 16]` renders one image (the extension picks the format; `--depth 32` for full-float EXR).
+[--depth 16] [--quality Q]` renders one image (the extension picks the format; `--depth 32` for
+full-float EXR; `--quality` makes WebP, JPEG XL and AVIF lossy at that quality).
 Add `--device gpu` to render on the graphics card (`--precision half` for speed, full by default).
 
 ## Snapshots
@@ -1251,7 +1529,21 @@ back to or compare.
 - Click a snapshot to **Restore** it (it can be undone with Ctrl+Z). Right-click for **Rename**,
   **Update with Current Settings** and **Delete**.
 - Snapshots are saved with the project (and with a library photo's sidecar), so they survive
-  closing NodeLab. Undo history doesn't, so take a snapshot before trying something drastic.
+  closing NodeLab, as is the History below; a snapshot is a state you name and keep on purpose.
+
+## History
+
+**View > History** opens Lightroom's History panel: every undo step by name, the newest at the
+top, such as **Add Curves**, **Basic: Exposure 0.50**, **Connect** or **Mute Blur**. A change
+inside a group is named after the group (**Look: Add Invert**).
+
+- Click a step to go back to it; the later steps stay in the list, greyed, until you change
+  something (as with Ctrl+Z and Ctrl+Y), and clicking one goes forward again.
+- The history (up to 200 steps) is saved with the project and with a library photo's sidecar,
+  as darktable keeps its history stack, so Ctrl+Z still works after reopening. Each step is
+  stored as the change from the next one, so it adds little to the file. If the project was
+  changed outside NodeLab (or by a version that saves it differently), the old steps are dropped.
+- **Clear History** forgets the steps and keeps the edit (saved at the next save).
 
 ## Preferences
 
@@ -1292,11 +1584,40 @@ The Library panel along the bottom shows the folder's photos.
   - **0-5** rate the selected photos (shown as dots under the thumbnail).
   - **P** picks (a white flag), **X** rejects (a red cross, and the thumbnail dims), **U**
     clears the flag.
-  - Rating a photo writes its sidecar, so ratings stay with the folder.
+  - **6-9** give the **colour labels** Red, Yellow, Green and Blue (a bar along the bottom of the
+    thumbnail); the same key again removes it. Purple is in right-click > Color Label.
+  - Rating a photo writes its sidecar, so ratings, flags, labels and keywords stay with the folder.
 - **Selecting:** Ctrl+click adds or removes a photo, Shift+click selects a range. Selected
   photos have a blue border.
 - **Filter:** the menu shows All Photos, Picked, everything but rejects, Rejected, photos with at
-  least N stars, or Edited photos. ← / → skip photos the filter hides.
+  least N stars, Edited photos, one colour label, or Duplicates. ← / → skip photos the filter hides.
+- **Search** (the box on the Library toolbar): shows the photos whose file name, title, caption or
+  keywords contain every word typed, ignoring case.
+- **Metadata** (the toolbar's **Metadata** button, or View > Metadata), as Lightroom's Metadata and
+  Keywording panels: the colour label, **Title**, **Caption** and **Keywords** of the selected
+  photos, and the camera's details for one photo.
+  - With several photos selected, a field they don't share shows "(mixed)"; typing replaces it in
+    all of them. A text field applies when you leave it (Enter, Tab or a click elsewhere).
+  - Type keywords separated by commas and press Enter to add them. Click a keyword's button to
+    remove it from the selection (the number is how many of the selected photos have it).
+  - **Keyword List** has every keyword in the folder with its count: click one to add it.
+  - In the Library views it is a sidebar on the right; over the editor it is a window.
+- **Collections** (the toolbar's **Collections** menu, as Lightroom's): named lists of photos from
+  any folders, kept in `%APPDATA%\NodeLab\collections.json`.
+  - Type a name and press Enter to make a collection of the selected photos, or **Add to
+    Collection** (also on the right-click menu) to add them to one.
+  - Click a collection to show its photos instead of the folder's; edits, ratings and Export
+    work as usual. **Back to Folder** returns. Photos moved or deleted since are left out.
+  - **Remove Selected from This Collection** and **Delete This Collection** never touch the files.
+- **Stacks** (Lightroom's): **Ctrl+G** (or Photo > Group into Stack) groups the selected photos,
+  such as a burst or the frames of a panorama, into one stack shown as its first photo, with the
+  count in a badge. **S** expands or collapses it (the others show "2/5" and so on);
+  **Ctrl+Shift+G** unstacks. A stack is kept in each photo's sidecar and stays together when
+  sorting.
+- **Find Duplicates** (the toolbar's **Photo** menu): looks for photos that are the same file
+  copied, or the same picture re-saved, resized, re-encoded or turned by 90° or 180° (a 64-bit
+  picture hash of a small preview). It runs in the background; the groups then show under the **Duplicates** filter with
+  an orange "Group N" badge. **Clear Duplicate Groups** forgets them. Nothing is deleted.
 - **Copy Edit / Paste Edit** (Ctrl+Shift+C / Ctrl+Shift+V): copy the open photo's whole node
   tree, select other photos, and paste. Each one gets the tree with its own photo in the Image
   Input, and keeps its own rating and flag. Pasting onto the open photo can be undone.
@@ -1325,6 +1646,19 @@ The Library panel along the bottom shows the folder's photos.
     **Escape** or **Loupe** goes back without opening one.
   - **Size** (or Ctrl+wheel) changes the card size. The filter, Copy / Paste Edit and Export
     Selected work as in the filmstrip.
+- **Compare view (C):** two photos side by side, as Lightroom's Compare: the **Select** (the first
+  selected photo) and the **Candidate** (the second selected one, or the next photo).
+  - ← / → change the Candidate; **↑** (or **Make Select**) makes it the Select and brings the
+    next photo in as the Candidate; **↓** (or **Swap**) swaps them.
+  - The wheel zooms both photos together and dragging pans them, to compare focus; **Fit** goes
+    back. Click a photo to make it active (white border): 0-5, P, X, U and 6-9 rate it.
+  - Double-click, Enter or E opens the active photo; Escape or G goes back to the grid.
+- **Survey view (N):** the selected photos tiled as large as they fit, as Lightroom's Survey, to
+  narrow a selection down. Click one (or ← / →) to make it active and rate it; the **x** on a
+  photo (or **/**) takes it out of the selection. Double-click, Enter or E opens one; Escape or G
+  goes back to the grid.
+- The views share the buttons **Grid**, **Compare**, **Survey** and **Loupe** (back to the editor),
+  and View > Library Grid / Compare / Survey.
 - **Thumbnails** load in the background: a RAW's embedded preview, or the photo itself. An edited
   photo (a blue corner) shows its edit, rendered once and kept in the sidecar.
 

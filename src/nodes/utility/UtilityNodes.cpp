@@ -430,23 +430,30 @@ public:
     NODELAB_NODE({"util.file_output", "File Output", "Utility",
                   {{"Image", PinType::Image}},
                   {},
-                  {ParamDesc::SavePath("File"), ParamDesc::Enum("Format", 0, {"PNG", "JPEG", "TIFF", "OpenEXR"}),
+                  {ParamDesc::SavePath("File"),
+                   ParamDesc::Enum("Format", 0, {"PNG", "JPEG", "TIFF", "OpenEXR", "WebP", "JPEG XL", "AVIF"}),
                    ParamDesc::Bool("Enabled", true), ParamDesc::Enum("Color Depth", 0, {"8", "16"}),
-                   ParamDesc::Enum("EXR Depth", 0, {"Float (Half)", "Float (Full)"}), ParamDesc::Int("Quality", 95, 1, 100)}})
+                   ParamDesc::Enum("EXR Depth", 0, {"Float (Half)", "Float (Full)"}), ParamDesc::Int("Quality", 95, 1, 100),
+                   // Appended after Quality, so older projects keep their params' places; WebP
+                   // was always lossless before.
+                   ParamDesc::Bool("Lossless", true)}})
     // Sink: files are written by File > Export (full resolution), not during previews.
     void evaluate(EvalContext&, const std::vector<Value>&, std::vector<Value>&) override {}
     // Like Blender's File Output, show only the chosen format's settings.
     bool paramHidden(int i) const override {
         const auto f = FileFormat(paramI(1));
-        return (i == 3 && f != FileFormat::PNG && f != FileFormat::TIFF) || (i == 4 && f != FileFormat::EXR) ||
-               (i == 5 && f != FileFormat::JPEG);
+        // AVIF's 16 means 10 bits.
+        const bool depth = f == FileFormat::PNG || f == FileFormat::TIFF || f == FileFormat::JXL || f == FileFormat::AVIF;
+        return (i == 3 && !depth) || (i == 4 && f != FileFormat::EXR) ||
+               (i == 5 && !(hasQuality(f) && !(hasLossless(f) && paramB(6)))) || (i == 6 && !hasLossless(f));
     }
     SaveOptions saveOptions(const Graph& g, int w, int h) const {
         SaveOptions o;
-        o.format = FileFormat(std::clamp(paramI(1), 0, 3));
+        o.format = FileFormat(std::clamp(paramI(1), 0, kFileFormatCount - 1));
         o.depth = o.format == FileFormat::EXR ? (paramI(4) == 1 ? 32 : 16) : (paramI(3) == 1 ? 16 : 8);
         o.jpegQuality = paramI(5);
-        if (o.format == FileFormat::JPEG) o.exif = exif::exportBlock(metadataSource(g), w, h);
+        o.lossless = paramB(6);
+        if (hasQuality(o.format)) o.exif = exif::exportBlock(metadataSource(g), w, h);
         return o;
     }
 };
@@ -473,7 +480,7 @@ std::vector<std::string> writeFileOutputs(const Graph& g, Evaluator& ev, EvalCon
         }
         // Make the extension match the chosen format.
         auto p = u8ToPath(path);
-        p.replace_extension(formatExtension(FileFormat(std::clamp(n->paramI(1), 0, 3))));
+        p.replace_extension(formatExtension(FileFormat(std::clamp(n->paramI(1), 0, kFileFormatCount - 1))));
         path = pathToU8(p);
         try {
             ImagePtr img;

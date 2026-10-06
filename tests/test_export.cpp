@@ -267,3 +267,41 @@ TEST_CASE("Photo info comes from EXIF, and names exports") {
     CHECK_FALSE(exif::readInfo(png, info));
     fs::remove_all(dir);
 }
+
+TEST_CASE("Multi-preset export writes every preset's file from one render, in its own folder") {
+    const fs::path dir = fs::temp_directory_path() / "nodelab_multi_preset";
+    fs::remove_all(dir);
+    fs::create_directories(dir / "out");
+    const std::string a = writeSource(dir, "a.png", 1.0f, 40, 20);
+
+    Graph g;
+    Node* in = g.addNode("io.image_input");
+    Node* out = g.addNode("io.output");
+    g.connect(in->id, 0, out->id, 0);
+
+    ExportSettings s;  // full-size PNG
+    ExportSettings small;
+    small.format = ExportSettings::JPEG;
+    small.sizeMode = ExportSettings::LongEdge, small.longEdge = 20;
+    small.nameTemplate = "{name}";
+    const std::string outDir = pathToU8(dir / "out");
+    const std::string smallDir = presetFolder(outDir, "Web: small?");
+    CHECK(u8ToPath(smallDir).filename() == "Web_ small_");  // a safe folder name
+    ExportItem item{a, batchOutputPath(a, outDir, s)};
+    item.extras.push_back({batchOutputPath(a, smallDir, small), small});
+    Exporter ex;
+    ex.start(g.toJson(), {item}, in->id, s);
+    ex.wait();
+    CHECK(ex.progress().failed == 0);
+    CHECK(ex.takeLog().size() == 2);
+
+    std::string err;
+    auto full = loadImage(pathToU8(dir / "out" / "a_edit.png"), err);
+    auto jpg = loadImage(pathToU8(dir / "out" / "Web_ small_" / "a.jpg"), err);  // its folder is made
+    REQUIRE(full);
+    REQUIRE(jpg);
+    CHECK(full->w == 40);
+    CHECK(jpg->w == 20);
+    CHECK(jpg->h == 10);
+    fs::remove_all(dir);
+}

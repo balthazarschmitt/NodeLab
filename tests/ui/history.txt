@@ -1,0 +1,40 @@
+# build\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\history.txt
+# The History panel's named steps, and the Export window's Also export row.
+settle
+move 740 350
+shift on
+key a
+shift off
+wait 3
+text gamma
+wait 2
+key enter
+settle
+ctrl on
+key e
+ctrl off
+wait 5
+shot build/smoke/h1_export.png
+# the Also export list: tick Email (1000 px)
+click 1030 222
+wait 3
+click 682 345
+wait 3
+shot build/smoke/h2_also.png
+click 800 720
+wait 3
+click 1040 137
+wait 3
+# change the Gamma, then View > History
+drag 530 720 600 720
+settle
+click 146 18
+wait 3
+click 155 369
+wait 5
+shot build/smoke/h3_history.png
+# back to the opened project: the Gamma node goes, and comes back greyed in the list
+click 95 226
+settle
+shot build/smoke/h4_back.png
+quit
