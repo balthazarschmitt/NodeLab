@@ -1,30 +1,33 @@
 # build\NodeLab.exe tests\ui\curves.nlproj --script tests\ui\curves.txt
-# Select Curves; the whole curve must fit in the default Inspector without scrolling.
+# Select Curves, scroll the Inspector down to the curve, and edit it.
 settle
-click 720 100
+click "node:Curves"
+wait 5
+moveat "Inspector/Factor" 0.5 0.5
+wheel -10
 wait 5
 shot build/smoke/c1_selected.png
 # add a point mid-curve and drag it up (lighten), then add one low and drag down (S-curve)
-move 650 787
+moveat "Inspector/curve" 0.364 0.516
 wait 2
 down 0
 wait 2
-move 640 770
+moveat "Inspector/curve" 0.346 0.37
 wait 2
-move 630 750
+moveat "Inspector/curve" 0.328 0.222
 wait 3
 shot build/smoke/c2_drag.png
 up 0
 wait 3
-drag 520 832 520 845
+dragat "Inspector/curve" 0.132 0.873 0 13
 wait 3
 settle
 wait 40
 shot build/smoke/c3_scurve.png
 # switch to R: other channels show faintly; the tooltip appears only after resting
-click 670 701
+click "Inspector/R"
 wait 3
-move 800 800
+moveat "Inspector/curve" 0.6 0.6
 wait 60
 shot build/smoke/c4_red.png
 quit

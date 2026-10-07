@@ -91,6 +91,11 @@ build\nodelab_tests.exe
   the CPU device; add `--device gpu` to check the GPU path (evaluation and the viewer's display).
 - **Scripted UI tests:** `NodeLab.exe tests\ui\interact.nlproj --script tests\ui\<name>.txt`.
   - Script commands are documented in `src/ui/UiScript.h`.
+  - Prefer named targets over coordinates: `click "Inspector/Factor"`, `click "node:Curves"`,
+    `drag "node:Invert.Factor" -50 0`, `moveat`/`clickat`/`dragat "T" fx fy` for a point inside an
+    item, `expect "T"`. `items <filter>` lists what a frame offers. `ui/UiItems.cpp` records items
+    through ImGui's test-engine hooks (ItemInfo for labelled ones, ItemAdd's ID hash for combos,
+    colour buttons and `#CLOSE`); canvas nodes report themselves from `NodeEditor::drawNode`.
   - Input goes straight into ImGui and the real mouse is ignored.
   - Scripts save screenshots with `shot build/smoke/<file>.png`; read them to verify.
   - Coordinates assume the automated 1600x900 window, the default docked layout, and
@@ -119,6 +124,9 @@ src/io        image load (stb; PngDecode with zlib-ng and JpegDecode, a parallel
               with rating/flag/thumbnail in `ui.library`, default graph, paste edit, thumbnails),
               Presets (`.nlpreset` node snippets in %APPDATA%\NodeLab\presets)
 src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (custom canvas), Inspector,
+              Style (metrics on a 4 px grid, fonts, Resolution Scale), Widgets (IconButton, Toggle,
+              Segmented, SectionHeader, Tooltip), Icons.h (Lucide code points, generated with
+              tools/lucide_icons.py from third_party/lucide), UiItems (named items for scripts),
               GuideWindow (renders the embedded GUIDE.md), Eyedropper (pick state), Theme (preset
               and custom colour themes: NodeEditor and ImageView draw themeable colours with
               theme::col), Preferences window and layout presets (in App),

@@ -11,6 +11,17 @@
 #include <imgui.h>
 
 #include "io/Paths.h"
+#include "ui/UiItems.h"
+
+// Reads a double-quoted target. Returns false (leaving the stream) when the next token isn't quoted.
+static bool readTarget(std::istringstream& in, std::string& out) {
+    in >> std::ws;
+    if (in.peek() != '"') return false;
+    in.get();
+    out.clear();
+    for (int c; (c = in.get()) != EOF && c != '"';) out += char(c);
+    return true;
+}
 
 bool UiScript::load(const std::string& path, std::string& err) {
     std::ifstream f(u8ToPath(path));
@@ -18,11 +29,22 @@ bool UiScript::load(const std::string& path, std::string& err) {
         err = "cannot open script";
         return false;
     }
+    int lineNo = 0;
     auto push = [&](std::string op, float a = 0, float b = 0, std::string s = {}) {
-        steps_.push_back({std::move(op), a, b, std::move(s)});
+        steps_.push_back({std::move(op), a, b, std::move(s), lineNo});
+    };
+    // Press, optionally move, release: shared by the numeric and named click/drag forms.
+    auto press = [&](float bt) {
+        push("wait", 2);
+        push("down", bt);
+        push("wait", 2);
+    };
+    auto release = [&](float bt) {
+        push("wait", 2);
+        push("up", bt);
+        push("wait", 2);
     };
     std::string line;
-    int lineNo = 0;
     while (std::getline(f, line)) {
         ++lineNo;
         if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -35,6 +57,29 @@ bool UiScript::load(const std::string& path, std::string& err) {
             push("wait", n);
         } else if (op == "settle" || op == "quit") {
             push(op);
+        } else if (std::string t, u; (op == "click" || op == "clickat" || op == "move" || op == "moveat" ||
+                                       op == "drag" || op == "dragat" || op == "dragto" || op == "expect") &&
+                                      readTarget(in, t)) {
+            float fx = 0.5f, fy = 0.5f, dx = 0, dy = 0, bt = 0;
+            if (op == "clickat" || op == "moveat" || op == "dragat") in >> fx >> fy;
+            if (op == "drag" || op == "dragat") in >> dx >> dy;
+            if (op == "dragto" && !readTarget(in, u)) {
+                err = "line " + std::to_string(lineNo) + ": dragto needs two quoted targets";
+                return false;
+            }
+            in >> bt;
+            if (op == "expect") {
+                push("find", 0, 0, t);
+                continue;
+            }
+            push("moveto", fx, fy, t);
+            if (op == "move" || op == "moveat") continue;
+            press(bt);
+            if (op == "drag" || op == "dragat")
+                for (int i = 1; i <= 12; ++i) push("moveby", dx * i / 12.0f, dy * i / 12.0f);
+            if (op == "dragto")
+                for (int i = 1; i <= 12; ++i) push("movetoward", i / 12.0f, 0, u);
+            release(bt);
         } else if (op == "move") {
             float x, y;
             in >> x >> y;
@@ -51,24 +96,18 @@ bool UiScript::load(const std::string& path, std::string& err) {
             float x, y, bt = 0;
             in >> x >> y >> bt;
             push("move", x, y);
-            push("wait", 2);
-            push("down", bt);
-            push("wait", 2);
+            press(bt);
             push("up", bt);
             push("wait", 2);
         } else if (op == "drag") {
             float x0, y0, x1, y1, bt = 0;
             in >> x0 >> y0 >> x1 >> y1 >> bt;
             push("move", x0, y0);
-            push("wait", 2);
-            push("down", bt);
-            push("wait", 2);
+            press(bt);
             for (int i = 1; i <= 12; ++i) push("move", x0 + (x1 - x0) * i / 12.0f, y0 + (y1 - y0) * i / 12.0f);
-            push("wait", 2);
-            push("up", bt);
-            push("wait", 2);
+            release(bt);
         } else if (op == "text" || op == "shot" || op == "key" || op == "ctrl" || op == "alt" || op == "shift" ||
-                   op == "time") {
+                   op == "time" || op == "items") {
             std::string rest;
             std::getline(in >> std::ws, rest);
             push(op, 0, 0, rest);
@@ -119,6 +158,32 @@ std::string UiScript::step(bool evalIdle, bool& quit) {
         settled_ = 0;
     } else if (s.op == "wait") {
         wait_ = int(s.a) - 1;
+    } else if (s.op == "moveto" || s.op == "movetoward" || s.op == "find") {
+        // Named targets come from the last frame; give a window or popup a moment to appear.
+        const uiitems::Item* it = uiitems::find(s.s);
+        if (!it) {
+            if (++searching_ < 200) return {};
+            std::fprintf(stderr, "script line %d: no item \"%s\"\n", s.line, s.s.c_str());
+            searching_ = 0;
+            failed_ = quit = true;
+            return {};
+        }
+        searching_ = 0;
+        if (s.op == "moveto") {
+            ax_ = it->min.x + (it->max.x - it->min.x) * s.a;
+            ay_ = it->min.y + (it->max.y - it->min.y) * s.b;
+            io.AddMousePosEvent(ax_, ay_);
+        } else if (s.op == "movetoward") {
+            const float cx = (it->min.x + it->max.x) * 0.5f, cy = (it->min.y + it->max.y) * 0.5f;
+            io.AddMousePosEvent(ax_ + (cx - ax_) * s.a, ay_ + (cy - ay_) * s.a);
+        }
+    } else if (s.op == "items") {
+        for (const uiitems::Item& it : uiitems::all())
+            if (s.s.empty() || it.window.find(s.s) != std::string::npos || it.name.find(s.s) != std::string::npos)
+                std::fprintf(stderr, "  %s/%s  (%.0f,%.0f)-(%.0f,%.0f)%s%s\n", it.window.c_str(), it.name.c_str(), it.min.x,
+                             it.min.y, it.max.x, it.max.y, it.id.empty() ? "" : "  ##", it.id.c_str());
+    } else if (s.op == "moveby") {
+        io.AddMousePosEvent(ax_ + s.a, ay_ + s.b);
     } else if (s.op == "move") {
         io.AddMousePosEvent(s.a, s.b);
     } else if (s.op == "down" || s.op == "up") {

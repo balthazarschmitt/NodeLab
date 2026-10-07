@@ -156,11 +156,14 @@ add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/imgui_demo.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+    src/ui/UiItems.cpp)
 target_include_directories(imgui PUBLIC
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends)
-target_compile_definitions(imgui PUBLIC IMGUI_DEFINE_MATH_OPERATORS)
+target_include_directories(imgui PRIVATE src)
+# The test-engine hooks (without the test engine) let UI scripts find items by label: see UiItems.h.
+target_compile_definitions(imgui PUBLIC IMGUI_DEFINE_MATH_OPERATORS IMGUI_ENABLE_TEST_ENGINE)
 target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
 
 add_library(tinyexpr STATIC ${tinyexpr_SOURCE_DIR}/tinyexpr.c)
@@ -298,6 +301,13 @@ add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/generated/FontCousine.cpp
         -DOUT=${CMAKE_BINARY_DIR}/generated/FontCousine.cpp -DNAME=kFontCousine -P ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
     DEPENDS ${imgui_SOURCE_DIR}/misc/fonts/Cousine-Regular.ttf ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
     COMMENT "Embedding Cousine")
+# The interface's icons: a Lucide subset (ISC), made by tools/lucide_icons.py.
+set(NODELAB_ICONS_CPP ${CMAKE_BINARY_DIR}/generated/FontLucide.cpp)
+add_custom_command(OUTPUT ${NODELAB_ICONS_CPP}
+    COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_SOURCE_DIR}/third_party/lucide/lucide-nodelab.ttf
+        -DOUT=${NODELAB_ICONS_CPP} -DNAME=kFontLucide -P ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
+    DEPENDS ${CMAKE_SOURCE_DIR}/third_party/lucide/lucide-nodelab.ttf ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
+    COMMENT "Embedding Lucide icons")
 
 # Windows can't overwrite a running exe but can rename it; move the old one aside before linking
 # so a single build/ folder works while NodeLab is open.
@@ -400,6 +410,9 @@ add_executable(NodeLab
     src/ui/Theme.cpp
     src/ui/FileDialog.cpp
     src/ui/UiScript.cpp
+    src/ui/Style.cpp
+    src/ui/Widgets.cpp
+    ${NODELAB_ICONS_CPP}
     src/ui/ParamWidgets.cpp
     src/ui/SliderTrack.cpp
     src/ui/ViewerOverlay.cpp

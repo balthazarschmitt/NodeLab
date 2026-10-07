@@ -1,0 +1,17 @@
+# build\NodeLab.exe tests\ui\develop.nlproj --script tests\ui\named.txt
+# Named script targets (UiItems): nodes on the canvas, menus, Inspector widgets.
+settle
+click "node:Color Mixer"
+settle
+shot build/smoke/named1_mixer.png
+click "node:Basic"
+settle
+expect "Inspector/Temperature"
+drag "Inspector/Temperature" 40 0
+settle
+shot build/smoke/named2_temp.png
+click "File"
+expect "Export..."
+shot build/smoke/named3_menu.png
+key escape
+quit

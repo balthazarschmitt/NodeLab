@@ -3,32 +3,34 @@
 # Changes Invert's Factor and resets it from the node menu, switches the Inspector to the
 # overlay in Edit > Preferences, picks the Blender theme, then drags the overlay's slider.
 settle
-drag 740 423 690 423
+drag "node:Invert.Factor" -50 0
 settle
-click 700 344 1
 wait 5
-click 783 520
+click "node:Invert" 1
+wait 5
+click "Reset to Defaults"
 wait 5
 shot build/smoke/prefs_reset.png
-click 75 10
+click "Edit"
 wait 3
-click 124 641
+click "Preferences..."
 wait 5
-click 553 386
+expect "Preferences/Resolution Scale"
+click "Preferences/Overlay"
 wait 5
-click 380 177
+click "Preferences/Themes"
 wait 3
-click 680 138
+click "Preferences/Theme"
 wait 3
-click 600 210
+click "Blender"
 wait 3
 shot build/smoke/prefs_theme.png
-click 1255 92
+click "Preferences/#CLOSE"
 wait 5
 settle
-click 700 344
+click "node:Invert"
 wait 5
-drag 900 148 800 148
+drag "Inspector/Factor" -100 0
 wheel 3
 settle
 shot build/smoke/prefs_overlay.png

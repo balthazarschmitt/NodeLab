@@ -117,7 +117,7 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Inspector | Floats in the Node Editor's corner while a node is selected; Preferences > Interface (or View > Inspector Overlay) makes it a panel |
 | Edit a value | Double-click a slider (or click a node's value box) to type; Backspace over it, or right-click, resets it |
 | Reset to defaults | Right-click a node → Reset to Defaults (keeps its file) |
-| Preferences | Edit > Preferences: layout, Inspector, themes (NodeLab Dark, Blender, Darkroom, Midnight, High Contrast, Light, or your own colours), viewer background, compositor device, new projects' view transform |
+| Preferences | Edit > Preferences: layout, Inspector, Resolution Scale, themes (Studio, Classic, Blender, Darkroom, Midnight, High Contrast, Light, or your own colours), viewer background, compositor device, new projects' view transform |
 | Extra viewers | Right-click a node → Open in New Viewer (or View > New Viewer) to watch an intermediate result; the viewer's drop-down switches node, "Sync view" pans with the other panes |
 | Eyedropper | "Pick" next to a colour setting (or Pick from Image in the node's colour popup), then click a pixel or drag a rectangle on any image panel for the area's average; right-click / Esc cancels |
 | Guide | Help > Guide or F1 (opens at the selected node's entry); also the Inspector's Guide button |

@@ -12,6 +12,14 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
   Blackbody's Temperature shows the colour at each temperature. In the Inspector and on nodes,
   with notches at the top and bottom edges marking the value, clear of its text.
 - **Segoe UI Variable** (Windows 11's interface font) replaces Segoe UI where it's installed.
+- **Studio theme**, the new default: quiet greys, neutral grey controls with the accent kept for
+  selection and state, and tabs that merge with their panel. The previous look is kept as
+  **Classic**; preferences that chose "NodeLab Dark" now open in Studio.
+- **Resolution Scale** in Preferences > Interface (80-150%), as in Blender: text and controls
+  scale together, on top of Windows' display scaling.
+- **Icons**: Lucide's icon set (ISC licence) is merged into the interface font.
+- **Scripted UI tests click by name** (`click "Inspector/Factor"`, `click "node:Curves"`,
+  `node:Title.Field`) through ImGui's test-engine hooks, so layout changes don't break them.
 
 ### Changed
 - **Exports keep the photo's name**: the File Naming template defaults to `{name}` instead of

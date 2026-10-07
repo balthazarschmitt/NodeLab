@@ -12,8 +12,10 @@
 namespace theme {
 
 // Key interface colours. A preset leaves a key unset to keep the base style's colours for it
-// (so the default theme is exactly ImGui's dark style).
-enum UiKey { Background, TitleBar, Frame, Text, Accent, Border, kUiKeys };
+// (so Classic is exactly ImGui's dark style). With Control set, buttons, list highlights and tabs
+// are neutral greys from it and the accent marks only state (checks, selection, primary buttons);
+// without it they are tinted with the accent, as before.
+enum UiKey { Background, TitleBar, Frame, Text, Accent, Border, Control, kUiKeys };
 
 // Colours drawn directly (Node Editor, image panels).
 enum Col {
@@ -34,10 +36,12 @@ struct Theme {
     ImU32 col[kCols] = {};
 
     nlohmann::json toJson() const;
-    static Theme fromJson(const nlohmann::json& j);  // missing entries come from NodeLab Dark
+    // Missing entries come from Classic. A theme saved under a built-in preset's name loads that
+    // preset as it is now, so built-in themes follow the app's updates.
+    static Theme fromJson(const nlohmann::json& j);
 };
 
-const std::vector<Theme>& presets();  // [0] is the default, NodeLab Dark
+const std::vector<Theme>& presets();  // [0] is the default, Studio
 
 // The theme in use. apply() sets ImGui's colours from it (call after changing it).
 Theme& current();

@@ -23,6 +23,7 @@
 #include "ui/FileDialog.h"
 #include "ui/GuideWindow.h"
 #include "ui/SliderTrack.h"
+#include "ui/UiItems.h"
 #include "ui/Theme.h"
 
 namespace {
@@ -645,6 +646,23 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
         if (n.muted) title += "  (muted)";
         dl->AddText(ImGui::GetFont(), fs, ImVec2(L.min.x + (bar ? 14 : 8) * z, L.min.y + (L.titleH - fs) * 0.5f),
                     n.muted ? IM_COL32(200, 170, 170, 255) : theme::col(theme::TitleText), title.c_str(), nullptr, 0.0f, &clip);
+    }
+    if (uiitems::recording()) {
+        // Script targets: "node:Title" is the title bar, "node:Title>Pin" an output, "node:Title<Pin" an
+        // input, "node:Title.Field" an input's inline value or a param row on the body.
+        const std::string name = "node:" + (n.label.empty() ? info.displayName : n.label);
+        uiitems::add(name.c_str(), L.min, ImVec2(L.max.x, L.min.y + L.titleH));
+        for (size_t i = 0; i < info.inputs.size() && i < L.valueBoxes.size(); ++i)
+            if (L.valueBoxes[i].GetWidth() > 0)
+                uiitems::add((name + "." + info.inputs[i].name).c_str(), L.valueBoxes[i].Min, L.valueBoxes[i].Max);
+        for (size_t i = 0; i < info.params.size() && i < L.paramBoxes.size(); ++i)
+            if (L.paramBoxes[i].GetWidth() > 0)
+                uiitems::add((name + "." + info.params[i].name).c_str(), L.paramBoxes[i].Min, L.paramBoxes[i].Max);
+        const float pr = std::max(3.0f, kPinR * z);
+        for (size_t i = 0; i < info.outputs.size() && i < L.outPins.size(); ++i)
+            uiitems::add((name + ">" + info.outputs[i].name).c_str(), L.outPins[i] - ImVec2(pr, pr), L.outPins[i] + ImVec2(pr, pr));
+        for (size_t i = 0; i < info.inputs.size() && i < L.inPins.size(); ++i)
+            uiitems::add((name + "<" + info.inputs[i].name).c_str(), L.inPins[i] - ImVec2(pr, pr), L.inPins[i] + ImVec2(pr, pr));
     }
     if (n.muted && !bar && !L.inPins.empty() && !L.outPins.empty()) {
         // Red pass-through line like Blender's muted nodes.

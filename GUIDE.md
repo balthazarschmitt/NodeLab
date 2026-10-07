@@ -1553,9 +1553,11 @@ inside a group is named after the group (**Look: Add Invert**).
 **Edit > Preferences** holds the settings that belong to you rather than to a project. They are
 saved straight away, in `%APPDATA%\NodeLab\preferences.json`.
 
-- **Interface:** the layout preset, whether the Inspector is an overlay or a panel, and node
-  timings.
-- **Themes:** NodeLab Dark (the default), Blender, Darkroom (neutral greys that don't tint how a
+- **Interface:** **Resolution Scale** (as in Blender: text and controls from 80% to 150%, on top
+  of Windows' own display scaling), the layout preset, whether the Inspector is an overlay or a
+  panel, and node timings.
+- **Themes:** Studio (the default: quiet greys, grey controls, the accent kept for state),
+  Classic (NodeLab's look before 1.4), Blender, Darkroom (neutral greys that don't tint how a
   photo is judged), Midnight, High Contrast and Light. Every colour can be changed: the interface's
   background, title bars, widgets, text, accent and borders, and the Node Editor's canvas, nodes,
   fields, wires and the header colour of each node category. Editing a built-in theme makes a

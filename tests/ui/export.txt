@@ -3,7 +3,7 @@
 settle
 shot build/smoke/e1_titles.png
 # add a node right on top of Invert: Invert gets pushed clear
-move 740 350
+move "node:Invert"
 shift on
 key a
 shift off
@@ -14,7 +14,7 @@ key enter
 settle
 shot build/smoke/e2_add_spaced.png
 # swap the new node for Brightness/Contrast (click it first: selects it and focuses the editor)
-click 700 351
+click "node:Gamma"
 wait 3
 shift on
 key s
@@ -39,17 +39,17 @@ ctrl off
 wait 5
 shot build/smoke/e5_export.png
 # export into build/smoke instead of the suggested path next to the project
-click 750 323
+click "Export/exportPath"
 wait 2
 ctrl on
 key a
 ctrl off
 text build/smoke/e_export.png
 wait 2
-click 631 563
+click "Export/Export"
 wait 40
 shot build/smoke/e6_exported.png
-click 650 222
+click "Export/Batch"
 wait 5
 shot build/smoke/e7_batch.png
 quit

@@ -5,8 +5,8 @@
 namespace theme {
 namespace {
 
-constexpr const char* kUiNames[kUiKeys] = {"Background", "Title Bar", "Widget", "Text", "Accent", "Border"};
-constexpr const char* kUiIds[kUiKeys] = {"background", "titleBar", "widget", "text", "accent", "border"};
+constexpr const char* kUiNames[kUiKeys] = {"Background", "Title Bar", "Widget", "Text", "Accent", "Border", "Button"};
+constexpr const char* kUiIds[kUiKeys] = {"background", "titleBar", "widget", "text", "accent", "border", "control"};
 
 constexpr const char* kColNames[kCols] = {
     "Canvas", "Grid", "Node Body", "Node Outline", "Selection", "Node Title Text", "Socket Label",
@@ -42,10 +42,10 @@ void setUi(Theme& t, UiKey k, ImVec4 v) {
     t.ui[k] = v;
 }
 
-// NodeLab's own colours, as they were before themes (the default theme reproduces them exactly).
-Theme nodeLabDark() {
+// NodeLab's colours before 1.4 (ImGui's dark style), kept as the Classic preset.
+Theme classic() {
     Theme t;
-    t.name = "NodeLab Dark";
+    t.name = "Classic";
     ImU32* c = t.col;
     c[Canvas] = IM_COL32(30, 30, 36, 255);
     c[Grid] = IM_COL32(44, 44, 52, 255);
@@ -83,12 +83,62 @@ Theme nodeLabDark() {
     return t;
 }
 
+// The default since 1.4: Blender-like neutral greys, an amber accent kept for state and the main
+// action, and node colours muted so the photo is the brightest thing on screen.
+Theme studio() {
+    Theme t = classic();
+    t.name = "Studio";
+    setUi(t, Background, rgb(40, 40, 40));
+    setUi(t, TitleBar, rgb(29, 29, 29));
+    setUi(t, Frame, rgb(58, 58, 58));
+    setUi(t, Text, rgb(228, 228, 228));
+    setUi(t, Accent, rgb(232, 145, 58));
+    setUi(t, Border, rgb(22, 22, 22));
+    setUi(t, Control, rgb(70, 70, 70));
+    ImU32* c = t.col;
+    c[Canvas] = IM_COL32(29, 29, 29, 255);
+    c[Grid] = IM_COL32(40, 40, 40, 255);
+    c[NodeBody] = IM_COL32(48, 48, 48, 245);
+    c[NodeOutline] = IM_COL32(16, 16, 16, 255);
+    c[Selection] = IM_COL32(240, 162, 79, 255);
+    c[TitleText] = IM_COL32(240, 240, 240, 255);
+    c[LabelText] = IM_COL32(214, 214, 214, 255);
+    c[Field] = IM_COL32(58, 58, 58, 255);
+    c[FieldHover] = IM_COL32(68, 68, 68, 255);
+    c[FieldText] = IM_COL32(200, 200, 200, 255);
+    c[FieldValue] = IM_COL32(242, 242, 242, 255);
+    c[Button] = IM_COL32(70, 70, 70, 255);
+    c[ButtonHover] = IM_COL32(84, 84, 84, 255);
+    c[SliderFill] = IM_COL32(74, 90, 120, 255);
+    c[SliderFillHover] = IM_COL32(88, 106, 140, 255);
+    c[CheckFill] = IM_COL32(232, 145, 58, 255);
+    c[WireImage] = IM_COL32(216, 194, 90, 255);
+    c[WireChannel] = IM_COL32(160, 160, 160, 255);
+    c[WireNumber] = IM_COL32(108, 143, 216, 255);
+    c[PreviewTitle] = IM_COL32(196, 112, 36, 255);
+    c[MutedTitle] = IM_COL32(88, 60, 60, 255);
+    c[CatInputOutput] = IM_COL32(52, 110, 80, 255);
+    c[CatColor] = IM_COL32(64, 92, 150, 255);
+    c[CatMix] = IM_COL32(134, 90, 54, 255);
+    c[CatConverter] = IM_COL32(40, 104, 120, 255);
+    c[CatFilter] = IM_COL32(124, 72, 64, 255);
+    c[CatTransform] = IM_COL32(112, 98, 52, 255);
+    c[CatMatte] = IM_COL32(100, 76, 146, 255);
+    c[CatTexture] = IM_COL32(128, 76, 108, 255);
+    c[CatUtility] = IM_COL32(74, 74, 74, 255);
+    c[CatGroup] = IM_COL32(54, 112, 64, 255);
+    c[CatOther] = IM_COL32(80, 80, 80, 255);
+    c[ImageBackground] = IM_COL32(32, 32, 32, 255);
+    return t;
+}
+
 std::vector<Theme> makePresets() {
     std::vector<Theme> out;
-    out.push_back(nodeLabDark());
+    out.push_back(studio());
+    out.push_back(classic());
 
     {  // Blender's default theme: neutral greys, blue accent, its node header colours.
-        Theme t = nodeLabDark();
+        Theme t = classic();
         t.name = "Blender";
         setUi(t, Background, rgb(48, 48, 48));
         setUi(t, TitleBar, rgb(36, 36, 36));
@@ -130,7 +180,7 @@ std::vector<Theme> makePresets() {
         out.push_back(t);
     }
     {  // Lightroom's Develop module: neutral greys that don't tint how a photo is judged.
-        Theme t = nodeLabDark();
+        Theme t = classic();
         t.name = "Darkroom";
         setUi(t, Background, rgb(38, 38, 38));
         setUi(t, TitleBar, rgb(52, 52, 52));
@@ -162,7 +212,7 @@ std::vector<Theme> makePresets() {
         out.push_back(t);
     }
     {  // Deep blues.
-        Theme t = nodeLabDark();
+        Theme t = classic();
         t.name = "Midnight";
         setUi(t, Background, rgb(18, 20, 31));
         setUi(t, TitleBar, rgb(32, 40, 72));
@@ -197,7 +247,7 @@ std::vector<Theme> makePresets() {
         out.push_back(t);
     }
     {  // Black and white with a yellow accent, for legibility.
-        Theme t = nodeLabDark();
+        Theme t = classic();
         t.name = "High Contrast";
         setUi(t, Background, rgb(0, 0, 0));
         setUi(t, TitleBar, rgb(40, 40, 40));
@@ -229,7 +279,7 @@ std::vector<Theme> makePresets() {
         out.push_back(t);
     }
     {  // Light: ImGui's light style, light nodes on a light canvas; images stay on mid grey.
-        Theme t = nodeLabDark();
+        Theme t = classic();
         t.name = "Light";
         t.light = true;
         setUi(t, Background, rgb(236, 236, 240));
@@ -276,7 +326,7 @@ std::vector<Theme> makePresets() {
 }
 
 Theme& currentStorage() {
-    static Theme t = nodeLabDark();
+    static Theme t = studio();
     return t;
 }
 
@@ -318,6 +368,7 @@ ImVec4 uiValue(const Theme& t, int k) {
         case Text: return c[ImGuiCol_Text];
         case Accent: return c[ImGuiCol_ButtonHovered];
         case Border: return alpha(c[ImGuiCol_Border], 1.0f);
+        case Control: return alpha(c[ImGuiCol_Button], 1.0f);
     }
     return ImVec4(1, 1, 1, 1);
 }
@@ -385,8 +436,40 @@ void apply() {
         c[ImGuiCol_TableBorderStrong] = t.ui[Border];
         c[ImGuiCol_TableBorderLight] = alpha(t.ui[Border], 0.6f);
     }
-    // Tabs follow from the header and title colours, as ImGui's own styles derive them.
-    if (t.uiSet[Accent] || t.uiSet[TitleBar] || t.uiSet[Background]) {
+    if (t.uiSet[Control]) {
+        // Neutral controls: grey buttons and highlights; the accent stays for state.
+        const ImVec4 k = t.ui[Control];
+        const ImVec4 a = uiValue(t, Accent);
+        const float s = dark ? 1.0f : -1.0f;
+        c[ImGuiCol_Button] = k;
+        c[ImGuiCol_ButtonHovered] = shade(k, 0.08f * s);
+        c[ImGuiCol_ButtonActive] = shade(k, 0.16f * s);
+        c[ImGuiCol_Header] = alpha(a, 0.28f);
+        c[ImGuiCol_HeaderHovered] = shade(k, 0.04f * s);
+        c[ImGuiCol_HeaderActive] = alpha(a, 0.42f);
+        c[ImGuiCol_SliderGrab] = shade(k, 0.22f * s);
+        c[ImGuiCol_SliderGrabActive] = shade(k, 0.32f * s);
+        // The selected tab merges with its panel; the others sit on the title bar.
+        const ImVec4 title = uiValue(t, TitleBar);
+        c[ImGuiCol_TitleBg] = title;
+        c[ImGuiCol_TitleBgActive] = title;
+        c[ImGuiCol_Tab] = title;
+        c[ImGuiCol_TabHovered] = shade(bg, 0.05f * s);
+        c[ImGuiCol_TabSelected] = bg;
+        c[ImGuiCol_TabSelectedOverline] = a;
+        c[ImGuiCol_TabDimmed] = title;
+        c[ImGuiCol_TabDimmedSelected] = bg;
+        c[ImGuiCol_TabDimmedSelectedOverline] = alpha(a, 0.0f);
+        c[ImGuiCol_DockingEmptyBg] = title;
+        c[ImGuiCol_MenuBarBg] = title;
+        c[ImGuiCol_Separator] = alpha(shade(bg, -0.45f * s), 1.0f);
+        c[ImGuiCol_SeparatorHovered] = alpha(a, 0.6f);
+        c[ImGuiCol_PopupBg] = alpha(shade(bg, 0.02f * s), 0.98f);
+        c[ImGuiCol_ChildBg] = ImVec4(0, 0, 0, 0);
+        c[ImGuiCol_TableHeaderBg] = shade(bg, 0.05f * s);
+        c[ImGuiCol_TableRowBgAlt] = alpha(shade(bg, 0.03f * s), 1.0f);
+    } else if (t.uiSet[Accent] || t.uiSet[TitleBar] || t.uiSet[Background]) {
+        // Tabs follow from the header and title colours, as ImGui's own styles derive them.
         c[ImGuiCol_TabHovered] = c[ImGuiCol_HeaderHovered];
         c[ImGuiCol_Tab] = lerp(c[ImGuiCol_Header], c[ImGuiCol_TitleBgActive], 0.80f);
         c[ImGuiCol_TabSelected] = lerp(c[ImGuiCol_HeaderActive], c[ImGuiCol_TitleBgActive], 0.60f);
@@ -423,9 +506,13 @@ nlohmann::json Theme::toJson() const {
 }
 
 Theme Theme::fromJson(const nlohmann::json& j) {
-    Theme t = nodeLabDark();
+    Theme t = classic();
     if (!j.is_object()) return t;
     t.name = j.value("name", std::string("Custom"));
+    // "NodeLab Dark" was the default before Studio, saved whether or not anyone chose it.
+    if (t.name == "NodeLab Dark") return studio();
+    for (const Theme& p : presets())
+        if (p.name == t.name) return p;
     t.light = j.value("light", false);
     if (const auto u = j.find("ui"); u != j.end() && u->is_object())
         for (int k = 0; k < kUiKeys; ++k)

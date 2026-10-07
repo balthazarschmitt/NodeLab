@@ -63,7 +63,7 @@ void colorMixer(Node& n, const ParamRow& row) {
     static const float kHues[8] = {0, 30, 60, 120, 180, 225, 270, 315};
     static const char* kWhat[3] = {"Hue", "Saturation", "Luminance"};
     row(0);
-    if (!ImGui::BeginTabBar("##mixer")) return;
+    if (!ImGui::BeginTabBar("##mixer", ImGuiTabBarFlags_DrawSelectedOverline)) return;
     for (int t = 0; t < 4; ++t) {
         if (!ImGui::BeginTabItem(t < 3 ? kWhat[t] : "All")) continue;
         for (int group = 0; group < 3; ++group) {

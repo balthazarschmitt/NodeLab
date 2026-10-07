@@ -44,7 +44,9 @@
 #include "nodes/filter/SpotRemoval.h"
 #include "ui/Inspector.h"
 #include "ui/NodeInspectors.h"
+#include "ui/Style.h"
 #include "ui/SystemStats.h"
+#include "ui/UiItems.h"
 #include "ui/UiScript.h"
 
 namespace fs = std::filesystem;
@@ -140,6 +142,7 @@ void App::loadPreferences() {
         loupe_.grid = j.value("loupeGrid", false);
         loupe_.guides = j.value("loupeGuides", false);
         loupe_.gridSize = std::clamp(j.value("loupeGridSize", 50.0f), 8.0f, 400.0f);
+        style::setUiScale(j.value("uiScale", 1.0f));
     } catch (const std::exception&) {
         // A damaged file keeps the defaults; it is rewritten on the next change.
     }
@@ -176,7 +179,8 @@ void App::savePreferences() const {
                         {"cropGuideTurn", overlay_.cropGuideTurn},
                         {"loupeGrid", loupe_.grid},
                         {"loupeGuides", loupe_.guides},
-                        {"loupeGridSize", loupe_.gridSize}}
+                        {"loupeGridSize", loupe_.gridSize},
+                        {"uiScale", style::uiScale()}}
              .dump(2);
     f.close();
     std::error_code ec;
@@ -255,46 +259,13 @@ int App::run(const RunOptions& opt) {
     }
     resetLayout_ = !haveLayout;
 
-    float xscale = 1.0f, yscale = 1.0f;
-    glfwGetWindowContentScale(window_, &xscale, &yscale);
-    const float dpi = std::max(1.0f, xscale);
-
     theme::apply();  // the default theme; loadPreferences applies the user's
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 0.0f;
-    style.FrameRounding = 3.0f;
-    style.TabRounding = 3.0f;
-    style.ScaleAllSizes(dpi);
-
-    // Segoe UI Variable (Windows 11's UI font), or Segoe UI where it's missing (Windows 10). It's
-    // a variable font and ImGui's rasterizer reads only its default instance, Text Regular, which
-    // is the one Windows uses for UI text.
-    const char* uiFont = "C:/Windows/Fonts/SegUIVar.ttf";
-    if (!fs::exists(uiFont)) uiFont = "C:/Windows/Fonts/segoeui.ttf";
-    if (fs::exists(uiFont)) io.Fonts->AddFontFromFileTTF(uiFont, 17.0f * dpi);
-    else io.FontGlobalScale = dpi;
-    // Extra faces for the guide: bold, headings and code. Glyphs cover the guide's own text.
-    {
-        static ImVector<ImWchar> ranges;
-        ImFontGlyphRangesBuilder rb;
-        rb.AddRanges(io.Fonts->GetGlyphRangesDefault());
-        const std::string_view guide = guideMarkdown();
-        rb.AddText(guide.data(), guide.data() + guide.size());
-        rb.BuildRanges(&ranges);
-        auto load = [&](const char* file, float size) -> ImFont* {
-            return fs::exists(file) ? io.Fonts->AddFontFromFileTTF(file, size * dpi, nullptr, ranges.Data) : nullptr;
-        };
-        GuideFonts gf;
-        gf.bold = load("C:/Windows/Fonts/segoeuib.ttf", 17.0f);
-        gf.h1 = load("C:/Windows/Fonts/segoeuib.ttf", 30.0f);
-        gf.h2 = load("C:/Windows/Fonts/segoeuib.ttf", 24.0f);
-        gf.h3 = load("C:/Windows/Fonts/segoeuib.ttf", 20.0f);
-        gf.code = load("C:/Windows/Fonts/consola.ttf", 16.0f);
-        setGuideFonts(gf);
-    }
+    // Fonts and sizes are built before the first frame (style::build), once preferences have set
+    // the UI scale.
 
     // While a script runs, OS input is not forwarded to ImGui so the real mouse can't interfere.
     ImGui_ImplGlfw_InitForOpenGL(window_, !script.active());
+    uiitems::setRecording(script.active());
     ImGui_ImplOpenGL3_Init("#version 130");
     if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
         ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
@@ -368,11 +339,20 @@ int App::run(const RunOptions& opt) {
     while (!quit_) {
         glfwWaitEventsTimeout(eval_->busy() || display_.busy() || evalDirty_ || automated_ ? 0.01 : 0.05);
 
+        if (style::fontsDirty()) {
+            float xscale = 1.0f, yscale = 1.0f;
+            glfwGetWindowContentScale(window_, &xscale, &yscale);
+            style::build(xscale);
+            ImGui_ImplOpenGL3_DestroyFontsTexture();  // NewFrame uploads the new atlas
+        }
         inFrame_ = true;
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         std::string shotPath;
-        if (script.active()) shotPath = script.step(idle(), quit_);
+        if (script.active()) {
+            uiitems::endFrame();
+            shotPath = script.step(idle(), quit_);
+        }
         ImGui::NewFrame();
         drawFrame();
         ImGui::Render();
@@ -410,7 +390,7 @@ int App::run(const RunOptions& opt) {
     ImGui::DestroyContext();
     glfwDestroyWindow(window_);
     glfwTerminate();
-    return 0;
+    return script.failed() ? 1 : 0;
 }
 
 void App::drawFrame() {
@@ -803,9 +783,22 @@ void App::drawInspectorOverlay() {
     if (ImGui::Begin("Inspector##overlay", nullptr, flags)) {
         // Clicking the editor raises it over everything docked; keep the overlay on top. Not
         // while a popup is open, though: raising the overlay would cover its own dropdown lists
-        // (a combo's items opened behind it and couldn't be clicked).
-        if (!ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
-            ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+        // (a combo's items opened behind it and couldn't be clicked). Floating windows
+        // (Preferences, the Guide, viewers) stay in front of it, as they are of the editor.
+        if (!ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+            ImGuiWindow* self = ImGui::GetCurrentWindow();
+            ImGuiWindow* floating = nullptr;
+            constexpr ImGuiWindowFlags kNotFloating = ImGuiWindowFlags_ChildWindow | ImGuiWindowFlags_Popup |
+                                                      ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_NoBringToFrontOnFocus;
+            for (ImGuiWindow* w : GImGui->Windows)
+                if (w != self && (w->Active || w->WasActive) && !w->Hidden && !(w->Flags & kNotFloating) &&
+                    !w->DockIsActive && w->Viewport == self->Viewport) {
+                    floating = w;  // the lowest one: the overlay goes just behind it
+                    break;
+                }
+            if (floating) ImGui::BringWindowToDisplayBehind(self, floating);
+            else ImGui::BringWindowToDisplayFront(self);
+        }
         drawInspectorContents();
     }
     ImGui::End();
@@ -2438,6 +2431,22 @@ void App::drawPreferencesWindow() {
     const float combo = fs * 12;
     switch (prefsSection_) {
         case 0: {  // Interface
+            ImGui::SeparatorText("Display");
+            // Blender's Resolution Scale: text and widgets, on top of the monitor's own scaling.
+            char current[16];
+            std::snprintf(current, sizeof current, "%d%%", int(std::lround(style::uiScale() * 100)));
+            ImGui::SetNextItemWidth(combo);
+            if (ImGui::BeginCombo("Resolution Scale", current)) {
+                for (float s : style::kUiScales) {
+                    char item[16];
+                    std::snprintf(item, sizeof item, "%d%%", int(std::lround(s * 100)));
+                    if (ImGui::Selectable(item, std::abs(s - style::uiScale()) < 0.001f)) {
+                        style::setUiScale(s);
+                        changed = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
             ImGui::SeparatorText("Layout");
             ImGui::SetNextItemWidth(combo);
             if (ImGui::Combo("Preset", &layoutPreset_, kLayoutNames, kLayouts)) {
@@ -2813,7 +2822,7 @@ void App::drawExportWindow() {
     exportPresetRow();
     alsoExportRow();
     int tab = -1;
-    if (ImGui::BeginTabBar("##exportTabs")) {
+    if (ImGui::BeginTabBar("##exportTabs", ImGuiTabBarFlags_DrawSelectedOverline)) {
         if (ImGui::BeginTabItem("Single")) {
             tab = 0;
             ImGui::TextUnformatted("Renders the Output node at full resolution.");
