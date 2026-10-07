@@ -17,6 +17,8 @@
 #include "ui/GuideWindow.h"
 #include "ui/NodeInspectors.h"
 #include "ui/ParamWidgets.h"
+#include "ui/SliderTrack.h"
+#include "ui/Theme.h"
 
 
 namespace {
@@ -85,6 +87,22 @@ bool editParam(Node& node, int i, float width, bool compact) {
             float v = node.paramF(i);
             beginNumberField(label.c_str());
             const bool drag = compact || d.hardMax > d.max || d.hardMin < d.min;
+            const bool track = d.track != SliderTrack::None;
+            // The frame's width (CalcItemWidth sees SetNextItemWidth only until the widget takes it).
+            const float trackW = track ? ImGui::CalcItemWidth() : 0.0f;
+            if (track) {
+                // The coloured track goes under a see-through frame; hover and drag still lighten it.
+                const ImVec2 p = ImGui::GetCursorScreenPos();
+                slidertrack::draw(ImGui::GetWindowDrawList(), p, ImVec2(p.x + trackW, p.y + ImGui::GetFrameHeight()),
+                                  d, theme::col(theme::Field), ImGui::GetStyle().FrameRounding);
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(255, 255, 255, 22));
+                ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(255, 255, 255, 34));
+                // ImGui's grab would sit on the centred value text ("0|0" at the default), so it's
+                // hidden and slidertrack::marker draws notches at the edges instead.
+                ImGui::PushStyleColor(ImGuiCol_SliderGrab, IM_COL32(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, IM_COL32(0, 0, 0, 0));
+            }
             if (drag) {
                 // Unbounded (math) values: drag field whose speed follows the soft range.
                 changed = ImGui::DragFloat(label.c_str(), &v, (d.max - d.min) / 300.0f, d.hardMin, d.hardMax, "%.3f",
@@ -92,6 +110,13 @@ bool editParam(Node& node, int i, float width, bool compact) {
             } else {
                 changed = ImGui::SliderFloat(label.c_str(), &v, d.min, d.max, d.max - d.min >= 20.0f ? "%.1f" : "%.3f",
                                              ImGuiSliderFlags_AlwaysClamp);
+            }
+            if (track) {
+                ImGui::PopStyleColor(5);
+                const ImVec2 a = ImGui::GetItemRectMin();
+                const float frac = d.max > d.min ? std::clamp((v - d.min) / (d.max - d.min), 0.0f, 1.0f) : 0.5f;
+                slidertrack::marker(ImGui::GetWindowDrawList(), a.x + trackW * frac, a.y, a.y + ImGui::GetFrameHeight(),
+                                    ImGui::GetFontSize() / 17.0f);
             }
             if (changed) node.params[i] = v;
             changed |= endNumberField(node, i, before, !drag);

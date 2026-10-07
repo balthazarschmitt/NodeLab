@@ -25,6 +25,7 @@ std::vector<uint8_t> exportBlock(const std::string& sourceU8, int w, int h);
 // What the library sorts by and filename templates name exports after.
 struct PhotoInfo {
     std::string make, model, lens;
+    std::string software;  // what wrote the file (EXIF Software): "NodeLab x.y.z" in exports from RAWs
     // "YYYY:MM:DD HH:MM:SS" (EXIF's DateTimeOriginal, else DateTime), or "" when the file has none.
     std::string captureTime;
     float exposureTime = 0, fNumber = 0, iso = 0, focalLength = 0;  // seconds, f/, ISO, mm; 0 = unknown

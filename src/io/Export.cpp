@@ -20,6 +20,7 @@
 #include "io/Exif.h"
 #include "io/ImageCache.h"
 #include "io/ImageIO.h"
+#include "io/Library.h"
 #include "nodes/ImageOps.h"
 #include "io/Paths.h"
 #include "nodes/io/IONodes.h"
@@ -487,22 +488,41 @@ std::string batchOutputPath(const std::string& sourceU8, const std::string& outD
 std::vector<std::string> batchOutputPaths(const std::vector<NameSource>& sources, const std::string& outDirU8,
                                           const ExportSettings& s) {
     std::vector<std::string> out;
-    std::set<std::string> used;  // lower case: Windows names ignore case
+    std::error_code ec;
+    // Lower case: Windows names ignore case.
+    auto key = [&](const fs::path& p) { return lowerAscii(pathToU8(fs::absolute(p, ec).lexically_normal())); };
+    // sourceNames: each source without its extension, the name a RAW+JPEG pair shares.
+    std::set<std::string> used, sourceFiles, sourceNames;
+    for (const NameSource& src : sources)
+        if (!src.path.empty()) {
+            sourceFiles.insert(key(u8ToPath(src.path)));
+            sourceNames.insert(key(u8ToPath(src.path).replace_extension()));
+        }
+    // A file already there is an earlier export, which a new export replaces, unless it's an
+    // original: a Library photo (it has a sidecar), or the camera's JPEG beside a RAW. That one
+    // has the RAW's name and the camera's EXIF, where NodeLab's export of the RAW has its own
+    // Software tag (and exports of PNGs and TIFFs have no camera EXIF).
+    auto original = [&](const fs::path& p) {
+        if (fs::exists(u8ToPath(library::sidecarPath(pathToU8(p))), ec)) return true;
+        if (!sourceNames.count(key(fs::path(p).replace_extension()))) return false;
+        exif::PhotoInfo info;
+        return exif::readInfo(pathToU8(p), info) && !info.make.empty() && info.software.rfind("NodeLab", 0) != 0;
+    };
+    auto taken = [&](const fs::path& p) {
+        if (used.count(key(p)) || sourceFiles.count(key(p))) return true;
+        return fs::exists(p, ec) && original(p);
+    };
     for (size_t i = 0; i < sources.size(); ++i) {
-        std::string p = batchOutputPath(sources[i].path, outDirU8, s, int(i) + 1, sources[i].copy);
-        if (used.count(lowerAscii(p))) {
-            const fs::path base = u8ToPath(p);
+        fs::path p = u8ToPath(batchOutputPath(sources[i].path, outDirU8, s, int(i) + 1, sources[i].copy));
+        if (taken(p)) {
+            const fs::path base = p;
             for (int k = 2;; ++k) {
-                const fs::path alt =
-                    base.parent_path() / u8ToPath(pathToU8(base.stem()) + " (" + std::to_string(k) + ")" + pathToU8(base.extension()));
-                if (!used.count(lowerAscii(pathToU8(alt)))) {
-                    p = pathToU8(alt);
-                    break;
-                }
+                p = base.parent_path() / u8ToPath(pathToU8(base.stem()) + " (" + std::to_string(k) + ")" + pathToU8(base.extension()));
+                if (!taken(p)) break;
             }
         }
-        used.insert(lowerAscii(p));
-        out.push_back(std::move(p));
+        used.insert(key(p));
+        out.push_back(pathToU8(p));
     }
     return out;
 }
