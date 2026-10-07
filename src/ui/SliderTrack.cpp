@@ -84,4 +84,14 @@ void draw(ImDrawList* dl, ImVec2 a, ImVec2 b, const ParamDesc& d, ImU32 base, fl
     }
 }
 
+void marker(ImDrawList* dl, float x, float y0, float y1, float scale) {
+    const float hw = 4.5f * scale, h = std::min(3.5f * scale, (y1 - y0) * 0.2f);
+    const ImU32 fill = IM_COL32(255, 255, 255, 240), edge = IM_COL32(0, 0, 0, 170);
+    for (const float y : {y0, y1}) {
+        const float tip = y == y0 ? y0 + h : y1 - h;
+        dl->AddTriangleFilled(ImVec2(x - hw, y), ImVec2(x + hw, y), ImVec2(x, tip), fill);
+        dl->AddTriangle(ImVec2(x - hw, y), ImVec2(x + hw, y), ImVec2(x, tip), edge, std::max(1.0f, scale));
+    }
+}
+
 }  // namespace slidertrack

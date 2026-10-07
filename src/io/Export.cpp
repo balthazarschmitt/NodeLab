@@ -70,10 +70,6 @@ void ExportSettings::fromJson(const nlohmann::json& j) {
         nameTemplate = t->get<std::string>();
     else if (auto sfx = j.find("suffix"); sfx != j.end() && sfx->is_string())
         nameTemplate = "{name}" + sfx->get<std::string>();
-    // Projects and presets saved the template whatever it was, so the old default "{name}_edit"
-    // is in many that never chose it: they get the source's own name too (an export still never
-    // replaces its source).
-    if (nameTemplate == "{name}_edit") nameTemplate = "{name}";
 }
 
 bool ExportSettings::sameOutput(const ExportSettings& o) const {
@@ -492,26 +488,29 @@ std::string batchOutputPath(const std::string& sourceU8, const std::string& outD
 std::vector<std::string> batchOutputPaths(const std::vector<NameSource>& sources, const std::string& outDirU8,
                                           const ExportSettings& s) {
     std::vector<std::string> out;
-    // Lower case: Windows names ignore case.
-    auto key = [](const fs::path& p) { return lowerAscii(pathToU8(p.lexically_normal())); };
-    std::set<std::string> used, sourceFiles;
-    for (const NameSource& src : sources)
-        if (!src.path.empty()) sourceFiles.insert(key(u8ToPath(src.path)));
-    // Files already in the output folder are previous exports, which a new export replaces,
-    // unless the folder holds the sources: there they are originals (the camera JPEG of a
-    // RAW+JPEG pair), as is a Library photo (one with a sidecar) wherever it is.
     std::error_code ec;
-    const fs::path outDir = u8ToPath(outDirU8);
-    bool holdsSources = false;
+    // Lower case: Windows names ignore case.
+    auto key = [&](const fs::path& p) { return lowerAscii(pathToU8(fs::absolute(p, ec).lexically_normal())); };
+    // sourceNames: each source without its extension, the name a RAW+JPEG pair shares.
+    std::set<std::string> used, sourceFiles, sourceNames;
     for (const NameSource& src : sources)
-        if (!src.path.empty() && !holdsSources) {
-            const fs::path dir = u8ToPath(src.path).parent_path();
-            holdsSources = key(dir) == key(outDir) || fs::equivalent(dir, outDir, ec);
+        if (!src.path.empty()) {
+            sourceFiles.insert(key(u8ToPath(src.path)));
+            sourceNames.insert(key(u8ToPath(src.path).replace_extension()));
         }
+    // A file already there is an earlier export, which a new export replaces, unless it's an
+    // original: a Library photo (it has a sidecar), or the camera's JPEG beside a RAW. That one
+    // has the RAW's name and the camera's EXIF, where NodeLab's export of the RAW has its own
+    // Software tag (and exports of PNGs and TIFFs have no camera EXIF).
+    auto original = [&](const fs::path& p) {
+        if (fs::exists(u8ToPath(library::sidecarPath(pathToU8(p))), ec)) return true;
+        if (!sourceNames.count(key(fs::path(p).replace_extension()))) return false;
+        exif::PhotoInfo info;
+        return exif::readInfo(pathToU8(p), info) && !info.make.empty() && info.software.rfind("NodeLab", 0) != 0;
+    };
     auto taken = [&](const fs::path& p) {
         if (used.count(key(p)) || sourceFiles.count(key(p))) return true;
-        if (!fs::exists(p, ec)) return false;
-        return holdsSources || fs::exists(u8ToPath(library::sidecarPath(pathToU8(p))), ec);
+        return fs::exists(p, ec) && original(p);
     };
     for (size_t i = 0; i < sources.size(); ++i) {
         fs::path p = u8ToPath(batchOutputPath(sources[i].path, outDirU8, s, int(i) + 1, sources[i].copy));

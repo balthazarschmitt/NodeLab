@@ -14,4 +14,8 @@ void colorAt(const ParamDesc& d, float t, float rgb[3]);
 // value drawn over it stay readable in dark and light themes.
 void draw(ImDrawList* dl, ImVec2 a, ImVec2 b, const ParamDesc& d, ImU32 base, float rounding);
 
+// The value's marker at x: notches on the top and bottom edges of [y0, y1] (Lightroom's), which
+// stay clear of the label and value text a full-height grab would cross.
+void marker(ImDrawList* dl, float x, float y0, float y1, float scale);
+
 }  // namespace slidertrack

@@ -199,6 +199,7 @@ bool infoFromTiff(const uint8_t* t, size_t n, PhotoInfo& out) {
     v.eachEntry(v.u32(4), [&](size_t e, unsigned tag) {
         if (tag == 0x010F) out.make = asciiAt(v, e);
         else if (tag == 0x0110) out.model = asciiAt(v, e);
+        else if (tag == 0x0131) out.software = asciiAt(v, e);
         else if (tag == 0x0132) dateTime = asciiAt(v, e);
         else if (tag == 0x8769) exifIfd = v.u32(e + 8);
         else return;

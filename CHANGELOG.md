@@ -9,19 +9,19 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 - **Coloured sliders** (Lightroom's): Temperature runs blue to yellow and Tint green to magenta
   (Basic), Hue sliders show the spectrum (Color Grading, Color Key, HSL Mask, Hue Shift), Color
   Mixer's Hue, Saturation and Luminance sliders show their band's colour changing, and
-  Blackbody's Temperature shows the colour at each temperature. In the Inspector and on nodes.
+  Blackbody's Temperature shows the colour at each temperature. In the Inspector and on nodes,
+  with notches at the top and bottom edges marking the value, clear of its text.
 - **Segoe UI Variable** (Windows 11's interface font) replaces Segoe UI where it's installed.
 
 ### Changed
 - **Exports keep the photo's name**: the File Naming template defaults to `{name}` instead of
-  `{name}_edit` (projects and presets that kept the old default switch too), and a single
+  `{name}_edit` for new projects and presets (saved ones keep their template), and a single
   export suggests the source photo's name.
 
 ### Fixed
-- **Batch export no longer replaces originals**: an export whose name is taken by a file in a
-  source's folder (such as the camera JPEG beside a RAW), by another source in the batch, or by
-  a Library photo gets " (2)" added. Earlier exports in a separate output folder are still
-  replaced.
+- **Batch export no longer replaces originals**: an export whose name is taken by a source in
+  the batch, a Library photo, or the camera's JPEG beside a RAW (recognised by its camera EXIF)
+  gets " (2)" added. Earlier exports are still replaced, wherever they are.
 
 ## 1.3.0 (2026-10-06)
 

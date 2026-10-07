@@ -123,10 +123,7 @@ void drawValueField(ImDrawList* dl, const ImRect& box, const char* label, float 
     if (d.track != SliderTrack::None) {
         // Coloured track (Temperature, Hue...) with a marker at the value instead of a fill.
         slidertrack::draw(dl, box.Min, box.Max, d, theme::col(hovered ? theme::FieldHover : theme::Field), round);
-        const float x = box.Min.x + box.GetWidth() * frac;
-        const float hw = std::max(1.0f, zoom);
-        dl->AddRectFilled(ImVec2(x - hw - 1, box.Min.y), ImVec2(x + hw + 1, box.Max.y), IM_COL32(0, 0, 0, 160));
-        dl->AddRectFilled(ImVec2(x - hw, box.Min.y), ImVec2(x + hw, box.Max.y), IM_COL32(255, 255, 255, 235));
+        slidertrack::marker(dl, box.Min.x + box.GetWidth() * frac, box.Min.y, box.Max.y, zoom);
     } else {
         dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::FieldHover : theme::Field), round);
         dl->AddRectFilled(box.Min, ImVec2(box.Min.x + box.GetWidth() * frac, box.Max.y),

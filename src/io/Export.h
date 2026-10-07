@@ -117,8 +117,9 @@ extern const int kNameTokenCount;
 std::string batchOutputPath(const std::string& sourceU8, const std::string& outDirU8, const ExportSettings& s,
                             int sequence = 1, int copy = 0);
 // Output paths for a whole batch, numbered in order. A name that is taken gets " (2)", " (3)"...:
-// one the template gives twice, a source, or an existing file that isn't a previous export (any
-// file when the output folder holds sources, else a Library photo). Previous exports are replaced.
+// one the template gives twice, a source, or an original already there (a Library photo, or a
+// camera file with a source's name, such as the JPEG of a RAW+JPEG pair). Earlier exports are
+// replaced.
 std::vector<std::string> batchOutputPaths(const std::vector<NameSource>& sources, const std::string& outDirU8,
                                           const ExportSettings& s);
 
