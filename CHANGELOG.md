@@ -5,6 +5,12 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 ## Unreleased
 
+### New
+- **Coloured sliders** (Lightroom's): Temperature runs blue to yellow and Tint green to magenta
+  (Basic), Hue sliders show the spectrum (Color Grading, Color Key, HSL Mask, Hue Shift), Color
+  Mixer's Hue, Saturation and Luminance sliders show their band's colour changing, and
+  Blackbody's Temperature shows the colour at each temperature. In the Inspector and on nodes.
+
 ### Changed
 - **Exports keep the photo's name**: the File Naming template defaults to `{name}` instead of
   `{name}_edit` (projects and presets that kept the old default switch too), and a single
