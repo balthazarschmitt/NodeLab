@@ -3,6 +3,19 @@
 NodeLab uses [semantic versioning](https://semver.org): minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
+## Unreleased
+
+### Changed
+- **Exports keep the photo's name**: the File Naming template defaults to `{name}` instead of
+  `{name}_edit` (projects and presets that kept the old default switch too), and a single
+  export suggests the source photo's name.
+
+### Fixed
+- **Batch export no longer replaces originals**: an export whose name is taken by a file in a
+  source's folder (such as the camera JPEG beside a RAW), by another source in the batch, or by
+  a Library photo gets " (2)" added. Earlier exports in a separate output folder are still
+  replaced.
+
 ## 1.3.0 (2026-10-06)
 
 ### New

@@ -255,7 +255,7 @@ private:
     int exportTab_ = 0;  // tab shown last frame: 0 single, 1 batch (drops go to batch sources)
     char exportPath_[1024] = {};
     char batchDir_[1024] = {};
-    char nameTemplate_[256] = "{name}_edit";  // exportSettings_.nameTemplate while it's edited
+    char nameTemplate_[256] = "{name}";  // exportSettings_.nameTemplate while it's edited
     std::vector<ExportPreset> exportPresets_;  // the user's (preferences.json)
     std::vector<std::string> alsoPresets_;     // presets every export also writes (by name)
     char presetName_[64] = {};
