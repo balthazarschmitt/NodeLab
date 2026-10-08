@@ -1491,9 +1491,9 @@ void LibraryPanel::endMain(bool side) {
     ImGui::EndChild();
 }
 
-void LibraryPanel::drawMetadataWindow() {
+void LibraryPanel::drawMetadataWindow(const char* title) {
     ImGui::SetNextWindowSize(ImVec2(320, 480), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Metadata###LibraryMetadata", &showMetadata)) drawMetadata();
+    if (ImGui::Begin(title, &showMetadata)) drawMetadata();
     ImGui::End();
 }
 

@@ -78,7 +78,7 @@ public:
     // Lightroom's Metadata panel for the selection: colour label, title, caption, keywords, and
     // the camera's details. A window in the editor; a sidebar in the Library views.
     bool showMetadata = false;
-    void drawMetadataWindow();
+    void drawMetadataWindow(const char* title = "Metadata###LibraryMetadata");  // its workspace's window
     // Lightroom's Sort order (the toolbar's Sort menu), kept in the preferences.
     enum Sort { ByName, ByCaptureTime, ByFileType, ByRating, ByPick, ByEditTime, ByCamera, ByLens, ByIso, ByFocalLength, kSortCount };
     int sortBy = ByName;

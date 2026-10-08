@@ -113,7 +113,8 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Presets | Right-click a node > Save as Preset...; Add > Presets inserts it into any project (files in `%APPDATA%\NodeLab\presets`) |
 | Frame | Ctrl+J around the selection; drag its title to move it with its nodes, corner to resize, double-click to rename, right-click for color |
 | Move nodes between frames | right-click a node → Move to Frame, or select nodes and right-click a frame title → Move Selected Nodes Here; Alt+P removes from frame |
-| Panels | Drag a panel's tab to dock it elsewhere, or out of the window; View > Layout picks a preset (Default, Compositing, Photo, Side by Side, Node Focus); View > Reset Layout |
+| Workspaces | The tabs in the menu bar: Library (an open folder's photos), Develop (photo, settings column, graph underneath) and Nodes; Ctrl+PgUp / Ctrl+PgDn step through them |
+| Panels | Drag a panel's tab to dock it elsewhere, or out of the window; View > Layout picks a preset for the current workspace (Default, Compositing, Photo, Side by Side, Node Focus); View > Reset Layout |
 | Inspector | Floats in the Node Editor's corner while a node is selected; Preferences > Interface (or View > Inspector Overlay) makes it a panel |
 | Edit a value | Double-click a slider (or click a node's value box) to type; Backspace over it, or right-click, resets it |
 | Reset to defaults | Right-click a node → Reset to Defaults (keeps its file) |
@@ -123,8 +124,8 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Guide | Help > Guide or F1 (opens at the selected node's entry); also the Inspector's Guide button |
 | Zoom / pan images | Mouse wheel / drag; double-click resets. Both panes stay in sync and sharpen to full resolution when zoomed in |
 | Colour management | Color menu: View Transform (Standard, AgX, Raw), Look, view Exposure and Gamma, as in Blender's Render Properties. New projects are scene-linear; Convert Project to Scene-Linear upgrades a legacy one |
-| Histogram / clipping | Result toolbar, or H / J with the mouse over the Result: RGB histogram, and clipped highlights in red and crushed shadows in blue; Gamut shows colours outside the export colour space in magenta (soft proofing) |
-| Before / after | Result toolbar, or Y with the mouse over the Result: the original left of a draggable divider, the edit right; `\` shows the original alone |
+| Histogram / clipping | Result's icons (over its top-left corner), or H / J with the mouse over the Result: RGB histogram, and clipped highlights in red and crushed shadows in blue; Gamut shows colours outside the export colour space in magenta (soft proofing) |
+| Before / after | Result's icons, or Y with the mouse over the Result: the original left of a draggable divider, the edit right; `\` shows the original alone |
 | Transparency | Images with alpha are drawn over a checkerboard |
 | On-image controls | Select a Crop, gradient, shape or Brush Mask node and edit it on the Result: drag handles; Crop shows the whole frame (drag outside to straighten); Brush paints, Alt erases, `[` `]` size; O toggles the red mask overlay, or with Crop cycles its guide overlay (Shift+O turns it); Perspective: drag to draw Guided Upright guides, Alt+click removes |
 | Loupe overlay | View > Loupe Overlay: a grid and draggable guide lines over the Result |

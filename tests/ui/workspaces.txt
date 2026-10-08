@@ -1,0 +1,21 @@
+# build\NodeLab.exe tests\ui\develop.nlproj --script tests\ui\workspaces.txt
+# Workspace tabs: Develop has its own layout (photo, Inspector panel, graph below), Nodes keeps its own.
+settle
+click "node:Basic"
+settle
+shot build/smoke/ws1_nodes.png
+click "Develop"
+wait 5
+settle
+expect "Inspector/Temperature"
+shot build/smoke/ws2_develop.png
+# the floating icon bar: histogram on
+click "Result/Histogram"
+wait 5
+settle
+shot build/smoke/ws3_histogram.png
+click "Nodes"
+wait 5
+expect "node:Basic"
+shot build/smoke/ws4_back.png
+quit

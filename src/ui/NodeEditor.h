@@ -237,6 +237,9 @@ private:
     std::string presetStatus_;      // the last save's error, shown in the popup
     std::vector<std::string> presetNames_;  // listed when the Add menu opens
     bool frameSelectionNext_ = false;
+    // Frames left before checking that a restored view (setViewState) shows any node; when it
+    // shows none (saved with another panel size, or nodes moved), the graph is framed instead.
+    int checkVisible_ = 0;
 };
 
 ImU32 pinColor(PinType t);

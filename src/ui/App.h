@@ -135,7 +135,9 @@ private:
     void drawMainMenu();
     void drawStatusBar();
     void drawStatusRight();
-    void buildLayout(unsigned dockId);  // layoutPreset_'s docked layout
+    void buildLayout();  // the current workspace's docked layout, from its preset
+    void drawWorkspaceTabs();
+    void setWorkspace(int ws, bool library);
     void drawOriginalWindow();
     void drawEditorWindow();
     void drawInspectorWindow();
@@ -159,7 +161,10 @@ private:
     void openViewer(NodePath pin);
     void finishPick(const PickRequest& pick);  // applies an eyedropper pick to its Color param
     Node* overlayNode();  // selected node with on-image controls, or null
-    void drawResultToolbar(Node* ov);
+    // Result's floating icon bar over the view (viewMin..viewMax), with `caption` (what's shown,
+    // or null) beside it. Sets toolHint_.
+    void drawResultToolbar(Node* ov, ImVec2 viewMin, ImVec2 viewMax, const char* caption);
+    const char* toolHint_ = nullptr;  // the selected node's on-image controls, for the status bar
     // Toolbar's Add Mask: a new Basic before the Output, driven by a new mask (one undo step).
     void addMask(int kind);
     void applyAutoTone(int nodeId);  // Basic's Auto button
@@ -287,6 +292,19 @@ private:
     enum LayoutPreset { LayoutDefault, LayoutCompositing, LayoutPhoto, LayoutSideBySide, LayoutNodeFocus, kLayouts };
     static constexpr const char* kLayoutNames[kLayouts] = {"Default", "Compositing", "Photo", "Side by Side", "Node Focus"};
     int layoutPreset_ = LayoutDefault;
+    // Workspaces, as Blender's tabs and Lightroom's modules: Develop and Nodes each keep their own
+    // docked layout (a dockspace with its own copies of the panels, so moving a panel in one
+    // leaves the other alone); Library is the grid over the whole window (library_.grid).
+    enum Workspace { WsDevelop, WsNodes, kWorkspaces };
+    static constexpr const char* kWorkspaceNames[kWorkspaces] = {"Develop", "Nodes"};
+    int workspace_ = WsNodes;
+    int developPreset_ = LayoutPhoto;
+    int& workspacePreset() { return workspace_ == WsDevelop ? developPreset_ : layoutPreset_; }
+    // A panel's window ID in the current workspace: "###Result" in Nodes (as layouts saved before
+    // workspaces have it), "###Result.Develop" in Develop.
+    std::string panelId(const std::string& base) const;
+    // The Inspector floats over the editor only in Nodes: Develop is built around its panel.
+    bool overlayInspector() const { return inspectorOverlay_ && workspace_ == WsNodes; }
     // The Inspector floats over the Node Editor's top-right corner while a node is selected,
     // instead of being a docked panel. Automated runs keep the panel (their scripts click in it).
     bool inspectorOverlay_ = true;

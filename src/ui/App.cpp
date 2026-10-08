@@ -42,12 +42,14 @@
 #include "ui/GuideWindow.h"
 #include "nodes/color/AutoTone.h"
 #include "nodes/filter/SpotRemoval.h"
+#include "ui/Icons.h"
 #include "ui/Inspector.h"
 #include "ui/NodeInspectors.h"
 #include "ui/Style.h"
 #include "ui/SystemStats.h"
 #include "ui/UiItems.h"
 #include "ui/UiScript.h"
+#include "ui/Widgets.h"
 
 namespace fs = std::filesystem;
 
@@ -55,6 +57,11 @@ static const char* kProjectFilter = "NodeLab project (*.nlproj)|*.nlproj|All fil
 
 static bool isImageFile(const std::filesystem::path& p) { return isImageFile(pathToU8(p)); }
 static const char* kDockName = "NodeLabDockSpace";
+
+// Each workspace's dockspace. Nodes keeps the name layouts saved before workspaces used.
+static ImGuiID dockSpaceId(int ws) {
+    return ws == 1 ? ImHashStr(kDockName) : ImHashStr((std::string(kDockName) + "." + std::to_string(ws)).c_str());
+}
 
 void dropCallback(GLFWwindow* w, int count, const char** paths) {
     auto* app = static_cast<App*>(glfwGetWindowUserPointer(w));
@@ -120,6 +127,10 @@ void App::loadPreferences() {
         const std::string layout = j.value("layout", std::string());
         for (int i = 0; i < kLayouts; ++i)
             if (layout == kLayoutNames[i]) layoutPreset_ = i;
+        const std::string develop = j.value("developLayout", std::string());
+        for (int i = 0; i < kLayouts; ++i)
+            if (develop == kLayoutNames[i]) developPreset_ = i;
+        workspace_ = j.value("workspace", std::string()) == "Develop" ? WsDevelop : WsNodes;
         newView_ = j.value("newProjectView", std::string()) == "AgX" ? ColorManagement::AgX : ColorManagement::Standard;
         newLook_ = std::clamp(j.value("newProjectLook", 0), 0, 2);
         if (const auto c = j.find("customThemes"); c != j.end() && c->is_array())
@@ -167,6 +178,8 @@ void App::savePreferences() const {
                         {"autosave", autosave_},
                         {"autosaveMinutes", autosaveMinutes_},
                         {"layout", kLayoutNames[layoutPreset_]},
+                        {"developLayout", kLayoutNames[developPreset_]},
+                        {"workspace", kWorkspaceNames[workspace_]},
                         {"newProjectView", newView_ == ColorManagement::AgX ? "AgX" : "Standard"},
                         {"newProjectLook", newLook_},
                         {"theme", theme::current().toJson()},
@@ -401,29 +414,37 @@ void App::drawFrame() {
     drawStatusBar();
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const ImGuiID dockId = ImHashStr(kDockName);
+    // A workspace seen for the first time (or missing from an older layout.ini) starts from its preset.
+    if (!ImGui::DockBuilderGetNode(dockSpaceId(workspace_))) resetLayout_ = true;
     if (resetLayout_) {
-        buildLayout(dockId);
+        buildLayout();
         resetLayout_ = false;
     }
-    ImGui::DockSpaceOverViewport(dockId, vp);
+    // Panels have no close or window-menu buttons, as Blender's editors: the tab is the panel's
+    // header, and View hides or shows a panel.
+    ImGui::DockSpaceOverViewport(dockSpaceId(workspace_), vp, ImGuiDockNodeFlags_NoCloseButton | ImGuiDockNodeFlags_NoWindowMenuButton);
+    // The other workspaces' dockspaces stay alive, so their panels stay docked while hidden
+    // (only ones that exist: keeping one alive creates it, empty).
+    for (int ws = 0; ws < kWorkspaces; ++ws)
+        if (ws != workspace_ && ImGui::DockBuilderGetNode(dockSpaceId(ws))) ImGui::DockSpace(dockSpaceId(ws), ImVec2(0, 0), ImGuiDockNodeFlags_KeepAliveOnly);
 
     originalDrawn_ = false;
     if (showOriginal_) drawOriginalWindow();
     editorShown_ = false;
     if (showEditor_) drawEditorWindow();
-    if (showInspector_ && !inspectorOverlay_) drawInspectorWindow();
+    if (showInspector_ && !overlayInspector()) drawInspectorWindow();
     if (showResult_) drawViewerWindow(*viewers_[0], true);
     for (size_t i = 1; i < viewers_.size(); ++i) drawViewerWindow(*viewers_[i], false);
     if (library_.active() && showLibrary_) drawLibraryWindow();
     if (showSnapshots_) drawSnapshotsWindow();
     if (showHistory_) drawHistoryWindow();
-    if (library_.active() && library_.showMetadata && !library_.grid) library_.drawMetadataWindow();
+    if (library_.active() && library_.showMetadata && !library_.grid)
+        library_.drawMetadataWindow(("Metadata" + panelId("LibraryMetadata")).c_str());
     if (library_.active() && library_.grid) drawLibraryGrid();
     gridShown_ = library_.active() && library_.grid;
     library_.poll();
     if (!library_.status.empty()) status_ = std::move(library_.status), library_.status.clear();
-    if (inspectorOverlay_) drawInspectorOverlay();
+    if (overlayInspector()) drawInspectorOverlay();
     drawGuideWindow();
     drawExportWindow();
     drawPreferencesWindow();
@@ -576,8 +597,12 @@ void App::tickAutosave() {
 
 // ---------------------------------------------------------------- layout & panels
 
-void App::buildLayout(unsigned dockIdU) {
-    const ImGuiID dockId = dockIdU;
+std::string App::panelId(const std::string& base) const {
+    return workspace_ == WsNodes ? "###" + base : "###" + base + "." + kWorkspaceNames[workspace_];
+}
+
+void App::buildLayout() {
+    const ImGuiID dockId = dockSpaceId(workspace_);
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::DockBuilderRemoveNode(dockId);
     ImGui::DockBuilderAddNode(dockId, ImGuiDockNodeFlags_DockSpace);
@@ -590,9 +615,9 @@ void App::buildLayout(unsigned dockIdU) {
     // folder is open; the panels above take its space otherwise).
     const ImGuiID filmstrip = split(center, ImGuiDir_Down, 0.2f);
     // With the inspector overlay there is no Inspector panel to make room for.
-    const bool panel = !inspectorOverlay_;
+    const bool panel = !overlayInspector();
     ImGuiID original = 0, result = 0, editor = 0, inspector = 0;
-    switch (layoutPreset_) {
+    switch (workspacePreset()) {
         default:
         case LayoutDefault:
             original = split(center, ImGuiDir_Left, 0.27f);
@@ -634,23 +659,23 @@ void App::buildLayout(unsigned dockIdU) {
             break;
         }
     }
-    ImGui::DockBuilderDockWindow("###Original", original);
-    ImGui::DockBuilderDockWindow("###Result", result);
-    ImGui::DockBuilderDockWindow("###NodeEditor", editor);
-    if (inspector) ImGui::DockBuilderDockWindow("###Inspector", inspector);
-    ImGui::DockBuilderDockWindow("###Library", filmstrip);
+    ImGui::DockBuilderDockWindow(panelId("Original").c_str(), original);
+    ImGui::DockBuilderDockWindow(panelId("Result").c_str(), result);
+    ImGui::DockBuilderDockWindow(panelId("NodeEditor").c_str(), editor);
+    if (inspector) ImGui::DockBuilderDockWindow(panelId("Inspector").c_str(), inspector);
+    ImGui::DockBuilderDockWindow(panelId("Library").c_str(), filmstrip);
     for (size_t i = 1; i < viewers_.size(); ++i)
-        ImGui::DockBuilderDockWindow(("###Viewer" + std::to_string(viewers_[i]->id)).c_str(), result);
+        ImGui::DockBuilderDockWindow(panelId("Viewer" + std::to_string(viewers_[i]->id)).c_str(), result);
     ImGui::DockBuilderFinish(dockId);
     // Where Original shares Result's node, Result is the tab in front.
-    if (ImGuiDockNode* n = ImGui::DockBuilderGetNode(result)) n->SelectedTabId = ImHashStr("###Result");
+    if (ImGuiDockNode* n = ImGui::DockBuilderGetNode(result)) n->SelectedTabId = ImHashStr(panelId("Result").c_str());
     showOriginal_ = showEditor_ = showInspector_ = showResult_ = showLibrary_ = true;
 }
 
 static constexpr ImGuiWindowFlags kCanvasFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 
 void App::drawOriginalWindow() {
-    if (ImGui::Begin("Original###Original", &showOriginal_, kCanvasFlags)) {
+    if (ImGui::Begin(("Original" + panelId("Original")).c_str(), &showOriginal_, kCanvasFlags)) {
         PickRequest pick{leftShown_.get()};
         originalDrawn_ = true;
         drawImageView("##leftview", leftTex_, view_, "Drop an image here or use File > Import Image",
@@ -663,7 +688,7 @@ void App::drawOriginalWindow() {
 
 void App::drawEditorWindow() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
-    const bool visible = ImGui::Begin("Node Editor###NodeEditor", &showEditor_, kCanvasFlags);
+    const bool visible = ImGui::Begin(("Node Editor" + panelId("NodeEditor")).c_str(), &showEditor_, kCanvasFlags);
     ImGui::PopStyleVar();
     if (visible) {
         editorShown_ = true;
@@ -756,7 +781,7 @@ void App::drawEditorWindow() {
 }
 
 void App::drawInspectorWindow() {
-    if (ImGui::Begin("Inspector###Inspector", &showInspector_)) drawInspectorContents();
+    if (ImGui::Begin(("Inspector" + panelId("Inspector")).c_str(), &showInspector_)) drawInspectorContents();
     ImGui::End();
 }
 
@@ -829,8 +854,8 @@ void App::drawInspectorContents() {
 
 void App::drawViewerWindow(Viewer& v, bool isMain) {
     std::string title;
-    if (isMain) title = "Result###Result";
-    else title = "Viewer " + std::to_string(v.id) + "###Viewer" + std::to_string(v.id);
+    if (isMain) title = "Result" + panelId("Result");
+    else title = "Viewer " + std::to_string(v.id) + panelId("Viewer" + std::to_string(v.id));
     bool* open = isMain ? &showResult_ : &v.open;
     if (!isMain) {
         // New viewers float in the middle of the window (cascaded) until docked somewhere.
@@ -884,14 +909,6 @@ void App::drawViewerWindow(Viewer& v, bool isMain) {
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom and pan together with Original and Result");
         }
         Node* ov = isMain ? overlayNode() : nullptr;
-        if (isMain) {
-            drawResultToolbar(ov);
-            if (!previewPath_.empty()) {
-                // Only worth mentioning when showing something other than the Output node.
-                ImGui::SameLine();
-                ImGui::TextDisabled("%s", label.c_str());
-            }
-        }
         const char* emptyMsg = !v.error.empty() ? v.error.c_str()
                                : shown.empty() ? "Add an Output node (right-click the canvas)"
                                                : "No output yet - connect this node's inputs";
@@ -914,9 +931,23 @@ void App::drawViewerWindow(Viewer& v, bool isMain) {
             loupe_.inner = controls;
             controls = &loupe_;
         }
+        // Result's tools float over the image's corner. They're submitted before the image so they
+        // win the mouse, and drawn on a channel above it.
+        ImDrawList* wdl = ImGui::GetWindowDrawList();
+        if (isMain) {
+            wdl->ChannelsSplit(2);
+            wdl->ChannelsSetCurrent(1);
+            const ImVec2 avail = ImGui::GetContentRegionAvail();
+            // The preview is only worth mentioning when it shows something other than the Output node.
+            drawResultToolbar(ov, viewMin, ImVec2(viewMin.x + avail.x, viewMin.y + avail.y),
+                              previewPath_.empty() ? nullptr : label.c_str());
+            wdl->ChannelsSetCurrent(0);
+            ImGui::SetCursorScreenPos(viewMin);
+        }
         drawImageView(isMain ? "##result" : "##viewer", v.tex, isMain || v.sync ? view_ : v.view, emptyMsg,
                       eyedropper().active() ? &pick : nullptr, controls,
                       v.detailTex.valid() ? &v.detail : nullptr, &v.info, split.before ? &split : nullptr);
+        if (isMain) wdl->ChannelsMerge();
         finishPick(pick);
         if (ov && overlay_.takeChanged()) markChanged(true);
         if (auto* sr = dynamic_cast<SpotRemovalNode*>(ov); sr && sr->findSource >= 0) findSpotSource(*sr);
@@ -942,18 +973,7 @@ Node* App::overlayNode() {
     return n && NodeOverlay::supports(*n) ? n : nullptr;
 }
 
-// SameLine when an item `w` wide still fits the window's width, otherwise a new row, so a toolbar
-// wraps in a narrow panel instead of hiding its last controls past the edge.
-static void sameLineIfFits(float w) {
-    const float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
-    if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + w <= right) ImGui::SameLine();
-}
-
-static float checkboxWidth(const char* label) {
-    return ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(label, nullptr, true).x;
-}
-
-void App::drawResultToolbar(Node* ov) {
+void App::drawResultToolbar(Node* ov, ImVec2 viewMin, ImVec2 viewMax, const char* caption) {
     Viewer& v = *viewers_[0];
     // Hotkeys while the pointer is over the Result viewer (J and O as in Lightroom).
     const bool hover = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !ImGui::GetIO().WantTextInput &&
@@ -984,9 +1004,65 @@ void App::drawResultToolbar(Node* ov) {
     if (hover && shift && ImGui::IsKeyPressed(ImGuiKey_R, false)) addMask(int(recipes::MaskKind::Radial));
     if (hover && !shift && ImGui::IsKeyPressed(ImGuiKey_K, false)) addMask(int(recipes::MaskKind::Brush));
 
-    if (ImGui::SmallButton("Add Mask") || openMaskMenu) ImGui::OpenPopup("##addmask");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Adjust part of the image: adds a Basic before the Output, driven by a new mask (Shift+M)");
+    // A row of icons in a pill over the image's top-left corner (Blender's viewport header
+    // buttons, Lightroom's loupe toolbar), left out when the view is too small for it.
+    const bool mask = ov && NodeOverlay::isMask(*ov);
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float h = ImGui::GetFrameHeight(), gap = 2.0f * style::scale(), pad = 3.0f * style::scale();
+    const float margin = 8.0f * style::scale(), divider = st.ItemSpacing.x;
+    const int icons = 5 + (mask ? 1 : 0);
+    const ImVec2 p0(viewMin.x + margin, viewMin.y + margin);
+    const ImVec2 p1(p0.x + pad * 2 + icons * h + (icons - 1) * gap + divider, p0.y + pad * 2 + h);
+    if (p1.x <= viewMax.x && p1.y <= viewMax.y) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(p0, p1, ImGui::GetColorU32(ImGuiCol_PopupBg, 0.92f), st.FrameRounding + pad);
+        dl->AddRect(p0, p1, ImGui::GetColorU32(ImGuiCol_Border), st.FrameRounding + pad);
+        float x = p0.x + pad;
+        const float y = p0.y + pad;
+        auto next = [&] {
+            ImGui::SetCursorScreenPos(ImVec2(x, y));
+            x += h + gap;
+        };
+        next();
+        if (ui::IconButton(ICON_MASK, "Add Mask", false, "Shift+M",
+                           "Adjust part of the image: adds a Basic before the Output, driven by a new mask"))
+            openMaskMenu = true;
+        const float dx = x + (divider - gap) * 0.5f;
+        dl->AddLine(ImVec2(dx, y + h * 0.2f), ImVec2(dx, y + h * 0.8f), ImGui::GetColorU32(ImGuiCol_Separator));
+        x += divider;
+        next();
+        if (ui::IconButton(ICON_CHART, "Histogram", showHistogram_, "H", "Show the histogram")) showHistogram_ = !showHistogram_;
+        next();
+        if (ui::IconButton(ICON_CLIPPING, "Clipping", clipping_, "J", "Show clipped highlights in red and crushed shadows in blue"))
+            clipping_ = !clipping_, clipToggled = true;
+        next();
+        char gamutTip[200];
+        std::snprintf(gamutTip, sizeof gamutTip,
+                      "Soft proofing's gamut warning: colours the export colour space (%s) can't hold show magenta. "
+                      "Needs a scene-linear project with the Standard view.",
+                      outspace::kNames[std::clamp(exportSettings_.colorSpace, 0, int(outspace::kCount) - 1)]);
+        if (ui::IconButton(ICON_GAMUT, "Gamut", gamutWarning_, nullptr, gamutTip)) gamutWarning_ = !gamutWarning_, clipToggled = true;
+        next();
+        if (ui::IconButton(ICON_COLUMNS, "Before / After", splitView_, "Y",
+                           "Split the view: the original left of the divider, the result right of it. Drag the divider "
+                           "to move it; \\ shows the whole original"))
+            splitView_ = !splitView_, beforeFull_ = false;
+        if (mask) {
+            next();
+            if (ui::IconButton(ICON_EYE, "Mask Overlay", maskOverlay_, "O", "Tint the selected mask over the image"))
+                maskOverlay_ = !maskOverlay_;
+        }
+        // What's shown, when it isn't the Output: beside the icons.
+        if (caption && p1.x + margin * 4 < viewMax.x) {
+            const float wrap = viewMax.x - p1.x - margin * 4;
+            const ImVec2 tp(p1.x + margin * 1.5f, y + (h - ImGui::GetTextLineHeight()) * 0.5f);
+            const ImVec2 ts = ImGui::CalcTextSize(caption, nullptr, false, wrap);
+            dl->AddRectFilled(ImVec2(tp.x - pad * 2, tp.y - pad), ImVec2(tp.x + ts.x + pad * 2, tp.y + ts.y + pad),
+                              ImGui::GetColorU32(ImGuiCol_PopupBg, 0.85f), st.FrameRounding);
+            dl->AddText(nullptr, 0.0f, tp, ImGui::GetColorU32(ImGuiCol_Text), caption, nullptr, wrap);
+        }
+    }
+    if (openMaskMenu) ImGui::OpenPopup("##addmask");
     if (ImGui::BeginPopup("##addmask")) {
         if (ImGui::MenuItem("Linear Gradient", "M")) addMask(int(recipes::MaskKind::Linear));
         if (ImGui::MenuItem("Radial Gradient", "Shift+R")) addMask(int(recipes::MaskKind::Radial));
@@ -1001,50 +1077,24 @@ void App::drawResultToolbar(Node* ov) {
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
-    sameLineIfFits(checkboxWidth("Histogram"));
-    ImGui::Checkbox("Histogram", &showHistogram_);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show the histogram (H)");
-    sameLineIfFits(checkboxWidth("Clipping"));
-    clipToggled |= ImGui::Checkbox("Clipping", &clipping_);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show clipped highlights in red and crushed shadows in blue (J)");
-    sameLineIfFits(checkboxWidth("Gamut"));
-    clipToggled |= ImGui::Checkbox("Gamut", &gamutWarning_);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Soft proofing's gamut warning: colours the export colour space (%s) can't hold\n"
-                          "show magenta. Needs a scene-linear project with the Standard view.",
-                          outspace::kNames[std::clamp(exportSettings_.colorSpace, 0, int(outspace::kCount) - 1)]);
-    sameLineIfFits(checkboxWidth("Before / After"));
-    if (ImGui::Checkbox("Before / After", &splitView_)) beforeFull_ = false;
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Split the view: the original image left of the divider, the result right of it (Y).\n"
-                          "Drag the divider to move it; \\ shows the whole original");
     if (clipToggled) {
         refreshDisplay(v, true);
         refreshDetail(v, true);
     }
-    if (ov && NodeOverlay::isMask(*ov)) {
-        sameLineIfFits(checkboxWidth("Mask Overlay"));
-        ImGui::Checkbox("Mask Overlay", &maskOverlay_);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tint the selected mask over the image (O)");
-    }
-    if (ov) {
-        const char* hint = ov->info().type == crop::kType
-                               ? "Drag the frame or its handles; drag outside to straighten; O cycles the overlay"
-                           : ov->info().type == perspective::kType
-                               ? (ov->paramI(perspective::Upright) == perspective::UprightGuided
-                                      ? "Drag along a line that should be straight to add a guide (up to 4); Alt+click removes one"
-                                      : perspective::uprightDetects(ov->paramI(perspective::Upright))
-                                      ? "Upright finds the lines itself; set it to Guided to draw them"
-                                      : "Set Upright to Guided to draw guides")
-                           : ov->info().type == panzoom::kType ? "Drag to move the picture, Ctrl+wheel to zoom"
-                           : dynamic_cast<BrushMaskNode*>(ov) ? "Paint to add, Alt+paint to erase, [ ] brush size"
-                           : dynamic_cast<SpotRemovalNode*>(ov) ? "Click to add a spot, drag to move, Alt+click removes, [ ] size"
-                                                              : "Drag the handles to shape the mask";
-        sameLineIfFits(ImGui::CalcTextSize(hint).x);
-        ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextDisabled("%s", hint);
-        ImGui::PopTextWrapPos();
-    }
+    // How to use the selected node's on-image controls: in the status bar, as Blender's tool hints.
+    toolHint_ = !ov ? nullptr
+                : ov->info().type == crop::kType
+                    ? "Drag the frame or its handles; drag outside to straighten; O cycles the overlay"
+                : ov->info().type == perspective::kType
+                    ? (ov->paramI(perspective::Upright) == perspective::UprightGuided
+                           ? "Drag along a line that should be straight to add a guide (up to 4); Alt+click removes one"
+                       : perspective::uprightDetects(ov->paramI(perspective::Upright))
+                           ? "Upright finds the lines itself; set it to Guided to draw them"
+                           : "Set Upright to Guided to draw guides")
+                : ov->info().type == panzoom::kType ? "Drag to move the picture, Ctrl+wheel to zoom"
+                : dynamic_cast<BrushMaskNode*>(ov) ? "Paint to add, Alt+paint to erase, [ ] brush size"
+                : dynamic_cast<SpotRemovalNode*>(ov) ? "Click to add a spot, drag to move, Alt+click removes, [ ] size"
+                                                   : "Drag the handles to shape the mask";
 }
 
 void App::applyAutoTone(int nodeId) {
@@ -1177,21 +1227,22 @@ void App::drawStatusBar() {
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar;
     if (ImGui::BeginViewportSideBar("##status", ImGui::GetMainViewport(), ImGuiDir_Down, ImGui::GetFrameHeight(), flags)) {
         if (ImGui::BeginMenuBar()) {
+            // Left: what the pointer can do and what just happened, as Blender's status bar.
+            // Right (drawStatusRight): the render's state, device, time and size, then the computer's load.
             const Viewer& main = *viewers_[0];
             std::string st;
-            if (main.tex.valid())
-                st = std::to_string(main.tex.width()) + " x " + std::to_string(main.tex.height()) + " preview  |  " +
-                     std::to_string(int(evalMs_)) + " ms";
-            if (eval_->busy()) st += "  |  evaluating...";
-            if (gpuFallbacks_)
-                st += "  |  " + std::to_string(gpuFallbacks_) + (gpuFallbacks_ == 1 ? " node" : " nodes") +
-                      " ran on the CPU (" + gpuError_ + ")";
+            auto add = [&](const std::string& part) {
+                if (part.empty()) return;
+                if (!st.empty()) st += "  |  ";
+                st += part;
+            };
+            if (const char* hint = std::exchange(toolHint_, nullptr)) add(hint);
             if (exporter_.busy()) {
                 const Exporter::Progress pr = exporter_.progress();
-                st += "  |  Export " + std::to_string(pr.done) + "/" + std::to_string(pr.total) + ": " + pr.stage;
+                add("Export " + std::to_string(pr.done) + "/" + std::to_string(pr.total) + ": " + pr.stage);
             }
-            if (!main.error.empty()) st += "  |  " + main.error;
-            if (!status_.empty()) st += "  |  " + status_;
+            add(main.error);
+            add(status_);
             if (eyedropper().active()) {
                 const Node* n = currentGraph().find(eyedropper().node);
                 st = "Eyedropper: click a pixel or drag a rectangle on an image";
@@ -1216,7 +1267,8 @@ std::string gigabytes(uint64_t b) {
 }
 }  // namespace
 
-// Right of the status bar: an AI model running in the background, and the computer's load.
+// Right of the status bar: an AI model running in the background, the render (state, device,
+// time and preview size), and the computer's load.
 void App::drawStatusRight() {
     stats_.update();
     const AutoMaskNode::Progress pr = AutoMaskNode::progress();
@@ -1237,10 +1289,22 @@ void App::drawStatusRight() {
     char load[96];
     std::snprintf(load, sizeof load, "RAM %s / %s   CPU %.0f%%", gigabytes(stats_.ramUsed).c_str(),
                   gigabytes(stats_.ramTotal).c_str(), stats_.systemCpu * 100.0f);
+    // The render: a dot (accent while evaluating), the device, the last evaluation's time and the
+    // preview's size.
+    const Viewer& main = *viewers_[0];
+    const bool busy = eval_->busy();
+    const bool gpuOn = gpuDevice_ && gpu::available();
+    std::string render = busy ? "Rendering" : "Ready";
+    render += gpuOn ? (gpuFallbacks_ ? "   GPU (" + std::to_string(gpuFallbacks_) + " on CPU)" : std::string("   GPU")) : "   CPU";
+    if (main.tex.valid())
+        render += "   " + std::to_string(int(evalMs_)) + " ms   " + std::to_string(main.tex.width()) + " x " +
+                  std::to_string(main.tex.height());
     const ImGuiStyle& style = ImGui::GetStyle();
-    const float barW = 120.0f;
-    float w = ImGui::CalcTextSize(mem.c_str()).x + ImGui::CalcTextSize(load).x + style.ItemSpacing.x * 3 + 8.0f;
-    if (pr.running) w += ImGui::CalcTextSize(ai.c_str()).x + barW + style.ItemSpacing.x * 2;
+    const float barW = 120.0f * style::scale(), dot = ImGui::GetTextLineHeight() * 0.18f;
+    const float sep = style.ItemSpacing.x * 4;
+    float w = dot * 2 + style.ItemInnerSpacing.x + ImGui::CalcTextSize(render.c_str()).x + sep +
+              ImGui::CalcTextSize(mem.c_str()).x + ImGui::CalcTextSize(load).x + style.ItemSpacing.x * 2 + 8.0f;
+    if (pr.running) w += ImGui::CalcTextSize(ai.c_str()).x + barW + style.ItemSpacing.x * 2 + sep;
     const float x = ImGui::GetWindowContentRegionMax().x - w;
     if (x < ImGui::GetCursorPosX()) return;  // no room
     ImGui::SetCursorPosX(x);
@@ -1249,7 +1313,27 @@ void App::drawStatusRight() {
         if (pr.queued && ImGui::IsItemHovered())
             ImGui::SetTooltip("%d more waiting", pr.queued);
         ImGui::ProgressBar(fraction, ImVec2(barW, ImGui::GetTextLineHeight() * 0.6f), "");
-        ImGui::SameLine(0, style.ItemSpacing.x * 2);
+        ImGui::SameLine(0, sep);
+    }
+    {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float cy = p.y + ImGui::GetFrameHeight() * 0.5f;
+        // In a menu bar the cursor sits at the frame's top; the text is centred on the bar.
+        ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + dot, cy), dot,
+                                                    busy ? ui::accent() : ImGui::GetColorU32(ImGuiCol_TextDisabled));
+        ImGui::Dummy(ImVec2(dot * 2, 1));
+        ImGui::SameLine(0, style.ItemInnerSpacing.x);
+        ImGui::TextDisabled("%s", render.c_str());
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::Text("Compositor device: %s (View > Compositor)", gpuOn ? "GPU" : "CPU");
+            if (gpuDevice_ && !gpu::available()) ImGui::TextUnformatted(gpuError_.c_str());
+            if (gpuFallbacks_)
+                ImGui::Text("%d %s ran on the CPU: %s", gpuFallbacks_, gpuFallbacks_ == 1 ? "node" : "nodes", gpuError_.c_str());
+            ImGui::TextUnformatted("The time is the last evaluation's; the size is the preview's (exports render at full size).");
+            ImGui::EndTooltip();
+        }
+        ImGui::SameLine(0, sep);
     }
     ImGui::TextDisabled("%s", mem.c_str());
     const bool low = stats_.ramTotal && stats_.ramUsed > stats_.ramTotal / 10 * 9;
@@ -1404,8 +1488,8 @@ void App::drawMainMenu() {
         ImGui::Separator();
         if (ImGui::BeginMenu("Layout")) {
             for (int i = 0; i < kLayouts; ++i)
-                if (ImGui::MenuItem(kLayoutNames[i], nullptr, layoutPreset_ == i)) {
-                    layoutPreset_ = i;
+                if (ImGui::MenuItem(kLayoutNames[i], nullptr, workspacePreset() == i)) {
+                    workspacePreset() = i;
                     resetLayout_ = true;
                     savePreferences();
                 }
@@ -1414,7 +1498,7 @@ void App::drawMainMenu() {
         if (ImGui::MenuItem("Reset Layout")) resetLayout_ = true;
         if (ImGui::MenuItem("Inspector Overlay", nullptr, inspectorOverlay_)) {
             inspectorOverlay_ = !inspectorOverlay_;
-            resetLayout_ = true;
+            resetLayout_ = workspace_ == WsNodes;  // Develop always has the panel
             savePreferences();
         }
         ImGui::Separator();
@@ -1456,7 +1540,65 @@ void App::drawMainMenu() {
         ImGui::TextUnformatted("Wires: amber = Image, gray = Channel, blue = Number");
         ImGui::EndMenu();
     }
+    drawWorkspaceTabs();
     ImGui::EndMainMenuBar();
+}
+
+// Workspace tabs in the middle of the menu bar, as Blender's: Library (while a folder is open),
+// Develop and Nodes. The selected one takes the panels' colour, as a selected dock tab does.
+void App::drawWorkspaceTabs() {
+    struct Tab {
+        const char* icon;
+        const char* name;
+        bool library;
+        int ws;
+    };
+    const Tab tabs[] = {{ICON_IMAGES, "Library", true, 0}, {ICON_SLIDERS, "Develop", false, WsDevelop}, {ICON_WORKFLOW, "Nodes", false, WsNodes}};
+    const bool grid = library_.active() && library_.grid;
+    const ImGuiStyle& s = ImGui::GetStyle();
+    const float h = ImGui::GetFrameHeight(), pad = s.FramePadding.x * 1.5f;
+    float widths[3], total = 0;
+    for (int i = 0; i < 3; ++i) {
+        widths[i] = ImGui::CalcTextSize(tabs[i].icon).x + s.ItemInnerSpacing.x + ImGui::CalcTextSize(tabs[i].name).x + pad * 2;
+        total += widths[i];
+    }
+    // Centred in the window, unless the menus reach that far.
+    const float x0 = std::max(ImGui::GetCursorPosX() + s.ItemSpacing.x * 2, (ImGui::GetWindowWidth() - total) * 0.5f);
+    ImGui::SetCursorPosX(x0);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    for (int i = 0; i < 3; ++i) {
+        const Tab& t = tabs[i];
+        const bool sel = t.library ? grid : !grid && workspace_ == t.ws;
+        const bool enabled = !t.library || library_.active();
+        ImGui::BeginDisabled(!enabled);
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        if (ImGui::InvisibleButton(t.name, ImVec2(widths[i], h))) setWorkspace(t.ws, t.library);
+        const bool hovered = ImGui::IsItemHovered();
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ui::Tooltip(t.name, t.library ? "G" : "Ctrl+PgUp / Ctrl+PgDn",
+                        t.library   ? (enabled ? "The photos of the open folder" : "Open a folder first (File > Open Folder)")
+                        : t.ws == WsDevelop ? "The photo, its settings in a column of panels, and the graph below"
+                                            : "The graph between the original and the result");
+        const ImVec2 q(p.x + widths[i], p.y + h);
+        if (sel) dl->AddRectFilled(p, q, ImGui::GetColorU32(ImGuiCol_WindowBg), s.FrameRounding);
+        else if (hovered) dl->AddRectFilled(p, q, ImGui::GetColorU32(ImGuiCol_FrameBgHovered), s.FrameRounding);
+        const ImU32 text = ImGui::GetColorU32(!enabled ? ImGuiCol_TextDisabled : sel || hovered ? ImGuiCol_Text : ImGuiCol_TextDisabled);
+        const float ty = p.y + (h - ImGui::GetTextLineHeight()) * 0.5f;
+        dl->AddText(ImVec2(p.x + pad, ty), sel ? ui::accent() : text, t.icon);
+        dl->AddText(ImVec2(p.x + pad + ImGui::CalcTextSize(t.icon).x + s.ItemInnerSpacing.x, ty), text, t.name);
+    }
+}
+
+void App::setWorkspace(int ws, bool library) {
+    if (library) {
+        if (library_.active()) library_.grid = true;
+        return;
+    }
+    library_.grid = false;
+    if (ws == workspace_) return;
+    workspace_ = std::clamp(ws, 0, int(kWorkspaces) - 1);
+    savePreferences();
 }
 
 void App::handleShortcuts() {
@@ -1475,6 +1617,15 @@ void App::handleShortcuts() {
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_I))
         if (auto p = openFileDialog("Import image", kImageFileFilter)) importImage(*p);
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_E)) openExportWindow();
+    // Blender's Ctrl+PgUp / Ctrl+PgDn: the next or previous workspace (Library while a folder is open).
+    for (const int step : {1, -1})
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | (step > 0 ? ImGuiKey_PageDown : ImGuiKey_PageUp))) {
+            const int count = kWorkspaces + 1;  // Library is 0, then the docked workspaces
+            int i = library_.active() && library_.grid ? 0 : workspace_ + 1;
+            do i = (i + step + count) % count;
+            while (i == 0 && !library_.active());
+            setWorkspace(i - 1, i == 0);
+        }
     // G, C and N: the Library's Grid, Compare and Survey views, as in Lightroom (the Node Editor
     // keeps G for grabbing nodes).
     if (library_.active() && !library_.grid && !editorFocused_ && !eyedropper().active() && !io.KeyCtrl && !io.KeyAlt &&
@@ -1767,7 +1918,7 @@ void App::stepHistory(int steps) {
 // back (or forward) to it; an edit made from there drops the steps above, as undo does.
 void App::drawHistoryWindow() {
     ImGui::SetNextWindowSize(ImVec2(300, 360), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("History", &showHistory_)) {
+    if (!ImGui::Begin(("History" + panelId("History")).c_str(), &showHistory_)) {
         ImGui::End();
         return;
     }
@@ -2156,9 +2307,9 @@ void App::drawLibraryWindow() {
     // (once), rather than leaving the filmstrip floating over the panels.
     if (!libraryLayoutChecked_) {
         libraryLayoutChecked_ = true;
-        if (!ImGui::FindWindowSettingsByID(ImHashStr("###Library"))) resetLayout_ = true;
+        if (!ImGui::FindWindowSettingsByID(ImHashStr(panelId("Library").c_str()))) resetLayout_ = true;
     }
-    if (ImGui::Begin("Library###Library", &showLibrary_, kCanvasFlags)) {
+    if (ImGui::Begin(("Library" + panelId("Library")).c_str(), &showLibrary_, kCanvasFlags)) {
         const ImGuiIO& io = ImGui::GetIO();
         const bool keys = !io.WantTextInput && !editorFocused_ && !eyedropper().active() &&
                           !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
@@ -2449,7 +2600,8 @@ void App::drawPreferencesWindow() {
             }
             ImGui::SeparatorText("Layout");
             ImGui::SetNextItemWidth(combo);
-            if (ImGui::Combo("Preset", &layoutPreset_, kLayoutNames, kLayouts)) {
+            // The current workspace's preset (Develop and Nodes each have one).
+            if (ImGui::Combo("Preset", &workspacePreset(), kLayoutNames, kLayouts)) {
                 resetLayout_ = true;
                 changed = true;
             }
@@ -2470,10 +2622,10 @@ void App::drawPreferencesWindow() {
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("The Inspector is a panel of its own in the layout.");
             if (modeChanged) {
                 inspectorOverlay_ = mode == 0;
-                resetLayout_ = true;  // make room for the panel, or take it back
+                resetLayout_ = workspace_ == WsNodes;  // make room for the panel, or take it back
                 changed = true;
             }
-            ImGui::TextDisabled("Changing this rebuilds the layout.");
+            ImGui::TextDisabled("In the Nodes workspace (Develop always has the panel).\nChanging this rebuilds its layout.");
             ImGui::SeparatorText("Node Editor");
             changed |= ImGui::Checkbox("Node Timings", &editor_.showTimings);
             break;
@@ -3071,7 +3223,7 @@ void App::restoreSnapshot(int i) {
 
 void App::drawSnapshotsWindow() {
     ImGui::SetNextWindowSize(ImVec2(300, 320), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Snapshots", &showSnapshots_)) {
+    if (!ImGui::Begin(("Snapshots" + panelId("Snapshots")).c_str(), &showSnapshots_)) {
         ImGui::End();
         return;
     }

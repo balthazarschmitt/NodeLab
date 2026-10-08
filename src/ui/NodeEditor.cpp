@@ -269,6 +269,7 @@ void NodeEditor::setViewState(const nlohmann::json& j) {
     pan_ = ImVec2(j[0].get<float>(), j[1].get<float>());
     zoom_ = std::clamp(j[2].get<float>(), kMinZoom, kMaxZoom);
     fitFrames_ = 0;
+    checkVisible_ = 3;  // once the docked panel has settled its size
 }
 
 // ---------------------------------------------------------------- hit testing
@@ -875,6 +876,14 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
         frameSelectionNext_ = false;
         fitFrames_ = 0;
         frameSelected(g);
+    }
+    if (checkVisible_ > 0 && --checkVisible_ == 0) {
+        bool any = false;
+        for (const auto& [id, n] : g.nodes()) {
+            const float x = pan_.x + n->x * zoom_, y = pan_.y + n->y * zoom_;
+            any |= x < size_.x && y < size_.y && x + kNodeW * zoom_ > 0 && y + nodeHeightGrid(*n) * zoom_ > 0;
+        }
+        if (!any) fitFrames_ = 1;
     }
     if (fitFrames_ > 0) {
         doFrame(g);

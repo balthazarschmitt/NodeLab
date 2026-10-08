@@ -12,20 +12,34 @@ F1 (or the **Guide** button in the Inspector) jumps straight to that node's entr
 
 ### The Window
 
+The tabs in the middle of the menu bar switch **workspaces**, as Blender's do (Ctrl+PgUp and
+Ctrl+PgDn step through them):
+
+- **Library**: the photos of the open folder (see Library below). Only available while a folder is
+  open.
+- **Develop**: the photo in the middle, its settings in a column on the right and the graph
+  underneath, like Lightroom's Develop module. The Inspector is always a panel here.
+- **Nodes**: the graph between the original and the result.
+
+Each workspace keeps its own arrangement of panels, and NodeLab reopens the last one used.
+
 - **Original** (left): the image loaded by the first Image Input node.
 - **Node Editor** (middle): the graph. Right-click empty space to add nodes.
 - **Inspector**: every setting of the selected node, with larger editors for curves and ramps.
   By default it floats in the Node Editor's top-right corner while a node is selected; in
   **Edit > Preferences > Interface** (or **View > Inspector Overlay**) it can be a panel instead.
-- **Result** (right): what the Output node receives, or the node you are previewing.
-- **Status bar** (bottom): the preview's size and how long it took, then on the right an AI mask
-  being computed (with its progress), NodeLab's memory, and the whole computer's RAM and CPU use.
-  Hover it for details. The RAM turns orange when it is nearly full: Windows then swaps to disk,
+- **Result** (right): what the Output node receives, or the node you are previewing. Its tools
+  float over the image's top-left corner (see Histogram and Clipping).
+- **Status bar** (bottom): on the left, what the selected node's on-image controls do and what
+  just happened. On the right, an AI mask being computed (with its progress), then the render:
+  Ready or Rendering, the device (GPU or CPU), how long the last evaluation took and the
+  preview's size, then NodeLab's memory and the whole computer's RAM and CPU use. Hover it for
+  details. The RAM turns orange when it is nearly full: Windows then swaps to disk,
   which slows everything down.
 
 Every panel is a tab that can be dragged. Drop it on the edge of another panel to dock it there,
-or outside the window to float it. **View > Layout** offers ready-made arrangements, like
-Blender's workspaces:
+or outside the window to float it. **View > Layout** offers ready-made arrangements for the
+current workspace:
 
 - **Default**: the original and the result either side of the graph.
 - **Compositing**: the result over a wide graph, the original as a tab behind it.
@@ -34,7 +48,8 @@ Blender's workspaces:
 - **Side by Side**: before and after at equal sizes over the graph.
 - **Node Focus**: a big graph with the images stacked on the right.
 
-**View > Reset Layout** puts the chosen layout back.
+**View > Reset Layout** puts the chosen layout back. Develop starts with Photo, Nodes with
+Default.
 **View > New Viewer** opens an extra image panel that can show any node (see Viewing Intermediate
 Results below). **View > Node Timings** shows how long each node took above it (amber when it is
 50 ms or more), so you can see what slows a graph down. Nodes that ran on the graphics card are
@@ -114,8 +129,8 @@ viewer's own background colour (Edit > Preferences > Viewer) shows around the im
 
 ### Before / After
 
-Like Lightroom's, with the mouse over the Result panel (or the **Before / After** toggle on its
-toolbar):
+Like Lightroom's, with the mouse over the Result panel (or the **Before / After** icon over
+it):
 
 - **Y** splits the Result: the original on the left of the divider, the edit on the right. Drag
   the divider's handle to move it. Both halves zoom and pan together.
@@ -125,7 +140,8 @@ The "before" is what the Original panel shows: the first Image Input.
 
 ### Histogram and Clipping
 
-The Result panel's toolbar has these toggles (hover the Result panel to use the keys):
+The icons over the Result's top-left corner are **Add Mask** (Shift+M, see Masks), then these
+toggles (hover the Result panel to use the keys). Hover an icon for its name and key.
 
 - **Histogram (H):** red, green, blue and luminance distribution of the result, drawn in the
   top-right corner. Dark tones are on the left, bright tones on the right.
@@ -169,7 +185,7 @@ Middle-drag still pans and the wheel still zooms while these controls are shown.
 can drag (drag where they cross to move both). Use them to check that horizons and verticals are
 straight. Center Guides puts them back in the middle.
 
-**Add Mask** (on the Result toolbar) makes a local adjustment in one step, like Lightroom's
+**Add Mask** (the first icon over the Result) makes a local adjustment in one step, like Lightroom's
 "Create New Mask". It inserts a **Basic** labelled "Mask N" right before the Output and wires a
 new mask into its Factor: Linear Gradient, Radial Gradient, Brush (its Image wired for Auto
 Mask), Luminance Range, or the AI masks Subject, Sky and Background (Select Subject inverted). The mask is selected, so you can shape or paint it straight away, and
@@ -1495,7 +1511,7 @@ progress, and **Cancel** stops it.
     **ProPhoto RGB** (use 16 bit) to hand the widest colours to another editor; **Rec.2020**.
     In a scene-linear project with the Standard view, the wider spaces keep the saturated
     colours sRGB would clip. Other views and legacy projects make sRGB colours, which are
-    converted unchanged. Use **Gamut** in the Result toolbar to see what a space clips.
+    converted unchanged. Use **Gamut** over the Result to see what a space clips.
   - **Rec.2100 PQ (HDR)** writes an HDR PNG (16 bit, with the cICP chunk that browsers and HDR
     displays read), JPEG XL (16 bit) or AVIF (10 bit): scene-linear white is shown at 203 nits
     and brighter values stay brighter, up to 10,000 nits, instead of clipping. Exposure applies;

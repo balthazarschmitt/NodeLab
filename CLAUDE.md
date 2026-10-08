@@ -98,7 +98,7 @@ build\nodelab_tests.exe
     colour buttons and `#CLOSE`); canvas nodes report themselves from `NodeEditor::drawNode`.
   - Input goes straight into ImGui and the real mouse is ignored.
   - Scripts save screenshots with `shot build/smoke/<file>.png`; read them to verify.
-  - Coordinates assume the automated 1600x900 window, the default docked layout, and
+  - Coordinates assume the automated 1600x900 window, the Nodes workspace's default layout, and
     `interact.nlproj`'s fixed graph view. The canvas origin is at (439, 72) at zoom 1.
 - **Don't drive the user's desktop.** Faking OS input (PostMessage, SendInput) or grabbing screen
   pixels breaks because the real mouse interferes, and it can capture the user's other windows.
@@ -234,6 +234,11 @@ src/gpu       Device (hidden GL 4.3 context sharing textures with the UI, textur
     - `runPass` chains the passes; mark sums and other intermediates `full`.
     - `gpu::boxBlur` blurs a texture, and `gpu::select` gives exact ranks (percentiles).
     - Basic's `guidedGpu`/`sumGpu` show a guided filter and a sum read back.
+- **Workspaces** (Develop, Nodes; Library is the grid over them): each has its own dockspace
+  (`dockSpaceId(ws)`; Nodes keeps the original ID so saved layouts load) and its own windows,
+  named through `App::panelId("Result")` (`###Result` in Nodes, `###Result.Develop` in Develop),
+  so they dock independently. Hidden workspaces' dockspaces are kept alive with `KeepAliveOnly`.
+  Automated runs start in Nodes.
 - **Preferences:** `App::loadPreferences`/`savePreferences` (`%APPDATA%\NodeLab\preferences.json`).
   Automated runs neither load nor save them, never auto save, and keep the Inspector as a docked panel, so their
   scripts' coordinates hold.

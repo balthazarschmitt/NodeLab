@@ -3,7 +3,7 @@
 NodeLab uses [semantic versioning](https://semver.org): minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
-## Unreleased
+## 1.4.0 (2026-10-07)
 
 ### New
 - **Coloured sliders** (Lightroom's): Temperature runs blue to yellow and Tint green to magenta
@@ -18,6 +18,13 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 - **Resolution Scale** in Preferences > Interface (80-150%), as in Blender: text and controls
   scale together, on top of Windows' display scaling.
 - **Icons**: Lucide's icon set (ISC licence) is merged into the interface font.
+- **Workspaces** (Blender's): tabs in the menu bar switch between Library, Develop (the photo,
+  a column of settings and the graph underneath) and Nodes, each with its own panel layout;
+  Ctrl+PgUp / Ctrl+PgDn step through them.
+- **Result's tools float over the image** as a row of icons (Add Mask, Histogram, Clipping,
+  Gamut, Before / After, Mask Overlay) instead of taking two rows above it.
+- **Status bar**: on-image tool hints on the left, as Blender's; on the right the render's
+  state, device, time and preview size.
 - **Scripted UI tests click by name** (`click "Inspector/Factor"`, `click "node:Curves"`,
   `node:Title.Field`) through ImGui's test-engine hooks, so layout changes don't break them.
 
