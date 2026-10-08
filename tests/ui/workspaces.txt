@@ -8,6 +8,8 @@ click "Develop"
 wait 5
 settle
 expect "Inspector/Temperature"
+move 700 400
+wait 3
 shot build/smoke/ws2_develop.png
 # the floating icon bar: histogram on
 click "Result/Histogram"

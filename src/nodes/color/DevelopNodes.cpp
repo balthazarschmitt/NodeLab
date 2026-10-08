@@ -357,14 +357,21 @@ public:
                   {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f),
-                   ParamDesc::Float("Temperature", 0.0f, -100.0f, 100.0f).withTrack(SliderTrack::Temperature),
-                   ParamDesc::Float("Tint", 0.0f, -100.0f, 100.0f).withTrack(SliderTrack::Tint),
-                   ParamDesc::Float("Exposure", 0.0f, -5.0f, 5.0f), ParamDesc::Float("Contrast", 0.0f, -100.0f, 100.0f),
-                   ParamDesc::Float("Highlights", 0.0f, -100.0f, 100.0f), ParamDesc::Float("Shadows", 0.0f, -100.0f, 100.0f),
-                   ParamDesc::Float("Whites", 0.0f, -100.0f, 100.0f), ParamDesc::Float("Blacks", 0.0f, -100.0f, 100.0f),
-                   ParamDesc::Float("Texture", 0.0f, -100.0f, 100.0f), ParamDesc::Float("Clarity", 0.0f, -100.0f, 100.0f),
-                   ParamDesc::Float("Dehaze", 0.0f, -100.0f, 100.0f), ParamDesc::Float("Vibrance", 0.0f, -100.0f, 100.0f),
-                   ParamDesc::Float("Saturation", 0.0f, -100.0f, 100.0f)},
+                   ParamDesc::Float("Temperature", 0.0f, -100.0f, 100.0f)
+                       .withTrack(SliderTrack::Temperature)
+                       .inGroup("White Balance"),
+                   ParamDesc::Float("Tint", 0.0f, -100.0f, 100.0f).withTrack(SliderTrack::Tint).inGroup("White Balance"),
+                   ParamDesc::Float("Exposure", 0.0f, -5.0f, 5.0f).inGroup("Tone"),
+                   ParamDesc::Float("Contrast", 0.0f, -100.0f, 100.0f).inGroup("Tone"),
+                   ParamDesc::Float("Highlights", 0.0f, -100.0f, 100.0f).inGroup("Tone"),
+                   ParamDesc::Float("Shadows", 0.0f, -100.0f, 100.0f).inGroup("Tone"),
+                   ParamDesc::Float("Whites", 0.0f, -100.0f, 100.0f).inGroup("Tone"),
+                   ParamDesc::Float("Blacks", 0.0f, -100.0f, 100.0f).inGroup("Tone"),
+                   ParamDesc::Float("Texture", 0.0f, -100.0f, 100.0f).inGroup("Presence"),
+                   ParamDesc::Float("Clarity", 0.0f, -100.0f, 100.0f).inGroup("Presence"),
+                   ParamDesc::Float("Dehaze", 0.0f, -100.0f, 100.0f).inGroup("Presence"),
+                   ParamDesc::Float("Vibrance", 0.0f, -100.0f, 100.0f).inGroup("Presence"),
+                   ParamDesc::Float("Saturation", 0.0f, -100.0f, 100.0f).inGroup("Presence")},
                   false, true})
     // Its local filters read around each pixel; sizes follow the full image's long edge. Dehaze's
     // airlight is global: a region reuses the preview's.

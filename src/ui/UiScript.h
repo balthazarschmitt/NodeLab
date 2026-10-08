@@ -18,6 +18,7 @@
 // "node:Title" ("node:Title.Field" for a field on its body, "node:Title<Pin" / ">Pin" for pins).
 // A missing target waits up to 2 s, then the script fails (exit code 1).
 //   click "T" [B]          click the target's centre
+//   doubleclick "T"        double-click the target's centre (two quick left clicks)
 //   clickat "T" FX FY [B]  click at a fraction of the target's rectangle (0..1 from top left)
 //   move "T"               move to the target's centre
 //   moveat "T" FX FY       move to a fraction of the target's rectangle

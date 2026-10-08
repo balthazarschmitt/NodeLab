@@ -21,6 +21,7 @@
 #include "nodes/matte/MatteNodes.h"
 #include "nodes/transform/TransformNodes.h"
 #include "ui/ViewerOverlay.h"
+#include "ui/Widgets.h"
 
 int autoToneRequest = 0;
 
@@ -44,17 +45,16 @@ void pushBandColor(float hueDeg) {
 // ---------------------------------------------------------------- Basic
 
 void basic(Node& n, const ParamRow& row) {
-    row(0);
-    ImGui::SeparatorText("White Balance");
-    row(1), row(2);
-    ImGui::SeparatorText("Tone");
-    // Lightroom's Auto, at the top of the Tone group.
-    if (ImGui::SmallButton("Auto")) autoToneRequest = n.id;
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Set Exposure, Contrast, Highlights, Shadows, Whites and Blacks from the image's tones");
-    for (int i = 3; i <= 8; ++i) row(i);
-    ImGui::SeparatorText("Presence");
-    for (int i = 9; i <= 13; ++i) row(i);
+    drawParamGroups(n, row, [&](const std::string& group) {
+        if (group != "Tone") return;
+        // Lightroom's Auto, at the right of the Tone heading.
+        const char* label = "Auto";
+        const float w = ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2;
+        ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - w));
+        if (ImGui::SmallButton(label)) autoToneRequest = n.id;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Set Exposure, Contrast, Highlights, Shadows, Whites and Blacks from the image's tones");
+    });
 }
 
 // ---------------------------------------------------------------- Color Mixer
@@ -474,6 +474,22 @@ static void lensProfile(LensProfileNode& n, const ParamRow& row, bool& changed, 
         changed = true;
     }
     ImGui::PopTextWrapPos();
+}
+
+void drawParamGroups(Node& n, const ParamRow& row, const std::function<void(const std::string&)>& afterHeading) {
+    const auto& params = n.info().params;
+    std::string group;
+    for (int i = 0; i < int(params.size()); ++i) {
+        // A heading over the first visible param of each group.
+        if (params[size_t(i)].group != group && n.paramVisible(i)) {
+            group = params[size_t(i)].group;
+            if (!group.empty()) {
+                ui::SubHeading(group.c_str());
+                if (afterHeading) afterHeading(group);
+            }
+        }
+        row(i);
+    }
 }
 
 bool drawNodeInspector(Node& n, const ParamRow& row, bool& changed, const Graph* g) {

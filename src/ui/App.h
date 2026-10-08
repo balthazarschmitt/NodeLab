@@ -9,6 +9,7 @@
 
 #include "graph/Evaluator.h"
 #include "graph/Graph.h"
+#include "io/Exif.h"
 #include "io/Export.h"
 #include "io/ImageCache.h"
 #include "ui/DisplayWorker.h"
@@ -142,6 +143,9 @@ private:
     void drawEditorWindow();
     void drawInspectorWindow();
     void drawInspectorContents();
+    void drawSelectedInspector(Graph& g, Graph* parent);
+    void drawDevelopHeader(const std::vector<int>& chain);
+    void drawDevelopStack(Graph& g, const std::vector<int>& chain, GroupNode* owner, Graph* parent);
     void drawInspectorOverlay();
     void drawPreferencesWindow();
     ColorManagement newProjectColor() const;  // a new project's working space and view
@@ -229,6 +233,13 @@ private:
     float splitPos_ = 0.5f;
     bool originalDrawn_ = false;  // the Original window drew its view this frame
     Histogram histogram_;
+    // Develop's Inspector: which node sections are open (by node id; open unless closed), the
+    // selection it last followed, and the EXIF line's photo.
+    std::map<int, bool> stackOpen_;
+    int stackFollowed_ = -1;
+    std::string exifPath_;
+    exif::PhotoInfo exifInfo_;
+    bool exifValid_ = false;
     DisplayWorker display_;
     std::map<int, uint64_t> displaySeq_;
 

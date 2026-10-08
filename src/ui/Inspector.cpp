@@ -1,7 +1,9 @@
 #include "ui/Inspector.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -17,23 +19,18 @@
 #include "ui/GuideWindow.h"
 #include "ui/NodeInspectors.h"
 #include "ui/ParamWidgets.h"
+#include "ui/Icons.h"
 #include "ui/SliderTrack.h"
+#include "ui/Style.h"
 #include "ui/Theme.h"
+#include "ui/Widgets.h"
 
 
 namespace {
 
-// Blender's number fields: double-click types a value, and Backspace over one (or right-click >
-// Reset to Default) resets it. ImGui sliders only type on Ctrl+click, and their first click
-// already moved the value to the mouse, so a double-click puts back the value from before it.
-struct SliderClick {
-    ImGuiID id = 0;
-    nlohmann::json before;
-};
-SliderClick g_firstClick;
-ImGuiID g_typeNext = 0;  // slider to open for typing on its next frame
+ImGuiID g_typeNext = 0;  // number field to open for typing on its next frame
 
-// Call before the slider: opens it for typing when a double-click asked for that.
+// Call before the field: opens it for typing when its menu's Edit Value asked for that.
 void beginNumberField(const char* label) {
     if (g_typeNext && g_typeNext == ImGui::GetID(label)) {
         ImGui::SetKeyboardFocusHere();
@@ -41,21 +38,11 @@ void beginNumberField(const char* label) {
     }
 }
 
-// Call right after the slider (the last item). Returns true if it changed the param.
-bool endNumberField(Node& node, int i, const nlohmann::json& before, bool isSlider) {
+// Call right after the field (the last item): Backspace over it, or right-click > Reset to
+// Default, resets it. Returns true if it changed the param.
+bool endNumberField(Node& node, int i) {
     bool changed = false;
     const ImGuiID id = ImGui::GetItemID();
-    if (isSlider && ImGui::IsItemActivated()) {
-        if (ImGui::GetIO().MouseClickedCount[ImGuiMouseButton_Left] >= 2 && g_firstClick.id == id) {
-            node.params[i] = g_firstClick.before;
-            g_typeNext = id;
-            // Let go of the slider, or it keeps dragging to the mouse while the button is held.
-            ImGui::ClearActiveID();
-            changed = true;
-        } else {
-            g_firstClick = {id, before};
-        }
-    }
     const bool hovered = ImGui::IsItemHovered();
     if (hovered && !ImGui::IsItemActive() && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) {
         node.resetParam(i);
@@ -63,81 +50,174 @@ bool endNumberField(Node& node, int i, const nlohmann::json& before, bool isSlid
     }
     if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) ImGui::OpenPopup("##numberMenu");
     if (ImGui::BeginPopup("##numberMenu")) {
-        if (ImGui::MenuItem("Reset to Default", "Backspace")) {
+        if (ImGui::MenuItem("Reset to Default", "Double-click")) {
             node.resetParam(i);
             changed = true;
         }
-        if (ImGui::MenuItem("Edit Value", "Double-click")) g_typeNext = id;
+        if (ImGui::MenuItem("Edit Value", "Ctrl+click")) g_typeNext = id;
         ImGui::EndPopup();
     }
     return changed;
+}
+
+// "-0.0" reads as a change from the default; drop the sign of a value that prints as zero.
+void dropNegativeZero(char* buf) {
+    if (buf[0] == '-' && std::strspn(buf + 1, "0.") == std::strlen(buf + 1)) std::memmove(buf, buf + 1, std::strlen(buf));
+}
+
+// A number param as Lightroom's slider rows: the name on the left inside the frame, the value on
+// the right, and a fill from zero (or the minimum) to the value. Dragging moves the value from
+// where it was, the frame's width covering the slider range (Shift faster, Alt slower);
+// double-click resets it and Ctrl+click types, as in Lightroom and Blender. Track sliders
+// (Temperature, Hue...) show their colours and a notch instead of the fill.
+bool numberSlider(Node& node, int i, const std::string& label, float width, bool showName) {
+    const ParamDesc& d = node.info().params[i];
+    const bool isInt = d.kind == ParamKind::Int;
+    const ImGuiStyle& s = ImGui::GetStyle();
+    const float h = ImGui::GetFrameHeight();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const ImVec2 q(p.x + width, p.y + h);
+    const ImGuiID id = ImGui::GetID(label.c_str());
+    const bool typing = ImGui::TempInputIsActive(id);
+    // ImGui's drag fields type on a double-click; here it resets, so the second click is spotted
+    // before the field and the field runs without text input for that frame.
+    const bool reset = !typing && ImGui::GetCurrentContext()->HoveredIdPreviousFrame == id &&
+                       ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+                       ImGui::GetIO().MouseClickedCount[ImGuiMouseButton_Left] == 2;
+    const bool track = d.track != SliderTrack::None;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    int colours = 0;
+    if (track) {
+        // The coloured track goes under a see-through frame; hover and drag still lighten it.
+        slidertrack::draw(dl, p, q, d, theme::col(theme::Field), s.FrameRounding);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(255, 255, 255, 22));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(255, 255, 255, 34));
+        colours = 3;
+    }
+    // ImGui's own text is hidden (the name and value are drawn below), except while typing.
+    if (!typing) ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0, 0, 0, 0)), ++colours;
+    const float speed = (d.max - d.min) / std::max(width, 1.0f);
+    const ImGuiSliderFlags flags = ImGuiSliderFlags_AlwaysClamp | (reset ? ImGuiSliderFlags_NoInput : 0);
+    const bool wide = d.hardMax > d.max || d.hardMin < d.min;  // math inputs: any value
+    const char* fmt = isInt ? "%d" : (!wide && d.max - d.min >= 20.0f) ? "%.1f" : "%.3f";
+    ImGui::SetNextItemWidth(width);
+    bool changed = false;
+    float v = 0.0f;
+    if (isInt) {
+        int iv = node.paramI(i);
+        changed = ImGui::DragInt(label.c_str(), &iv, std::max(speed, 0.02f), int(d.hardMin), int(d.hardMax), fmt, flags);
+        if (changed) node.params[i] = iv;
+        v = float(iv);
+    } else {
+        v = node.paramF(i);
+        changed = ImGui::DragFloat(label.c_str(), &v, speed, d.hardMin, d.hardMax, fmt, flags);
+        if (changed) node.params[i] = v;
+    }
+    ImGui::PopStyleColor(colours);
+    if (reset && ImGui::IsItemActive()) {
+        // Let go of the field too, or it keeps dragging while the button is held.
+        ImGui::ClearActiveID();
+        node.resetParam(i);
+        v = isInt ? float(node.paramI(i)) : node.paramF(i);
+        changed = true;
+    }
+    if (typing) return changed;
+
+    const float lo = d.min, hi = d.max;
+    const float frac = hi > lo ? std::clamp((v - lo) / (hi - lo), 0.0f, 1.0f) : 0.0f;
+    if (track) {
+        slidertrack::marker(dl, p.x + width * frac, p.y, q.y, ImGui::GetFontSize() / 17.0f);
+    } else if (hi > lo) {
+        // Fill from zero for signed ranges (Exposure), from the minimum otherwise (Factor), in the
+        // theme's slider colour (Color Mixer tints it with each band's).
+        const float zero = lo < 0.0f && hi > 0.0f ? (0.0f - lo) / (hi - lo) : 0.0f;
+        float a = p.x + width * zero, b = p.x + width * frac;
+        if (a > b) std::swap(a, b);
+        if (b - a >= 0.5f) {
+            ImDrawFlags corners = (a <= p.x + 0.5f ? ImDrawFlags_RoundCornersLeft : 0) |
+                                  (b >= q.x - 0.5f ? ImDrawFlags_RoundCornersRight : 0);
+            dl->AddRectFilled(ImVec2(a, p.y), ImVec2(b, q.y), ImGui::GetColorU32(ImGuiCol_SliderGrab, 0.4f),
+                              corners ? s.FrameRounding : 0.0f, corners ? corners : ImDrawFlags_RoundCornersNone);
+        }
+        if (zero > 0.0f) {
+            const float x = IM_ROUND(p.x + width * zero);
+            dl->AddLine(ImVec2(x, p.y + h * 0.2f), ImVec2(x, q.y - h * 0.2f), ImGui::GetColorU32(ImGuiCol_Text, 0.18f));
+        }
+    }
+
+    char value[48];
+    if (isInt) std::snprintf(value, sizeof value, fmt, int(v));
+    else std::snprintf(value, sizeof value, fmt, v);
+    dropNegativeZero(value);
+    const float defV = d.def.is_number() ? d.def.get<float>() : 0.0f;
+    const bool edited = std::fabs(v - defV) > (isInt ? 0.5f : 1e-6f);
+    const float ty = p.y + s.FramePadding.y;
+    const ImVec2 vs = ImGui::CalcTextSize(value);
+    const ImVec4 clip(p.x, p.y, q.x, q.y);
+    const ImU32 shadow = IM_COL32(0, 0, 0, 150);
+    auto text = [&](float x, ImU32 col, const char* str) {
+        // Over a colour track the text gets a shadow, as it may sit on yellow or white.
+        if (track) dl->AddText(nullptr, 0.0f, ImVec2(x + 1, ty + 1), shadow, str, nullptr, 0.0f, &clip);
+        dl->AddText(nullptr, 0.0f, ImVec2(x, ty), col, str, nullptr, 0.0f, &clip);
+    };
+    const float vx = q.x - s.FramePadding.x - vs.x;
+    text(vx, ImGui::GetColorU32(ImGuiCol_Text), value);
+    if (showName) {
+        const std::string name = d.name;
+        const ImVec4 nameClip(p.x, p.y, vx - s.ItemInnerSpacing.x, q.y);
+        // The name is dim at the default and bright, with an accent dot, once changed. Over a
+        // colour track a dim name would be lost, so it is only a little dimmer.
+        const ImU32 nameCol = edited  ? ImGui::GetColorU32(ImGuiCol_Text)
+                              : track ? ImGui::GetColorU32(ImGuiCol_Text, 0.8f)
+                                      : ImGui::GetColorU32(ImGuiCol_TextDisabled);
+        const float r = std::min(ImGui::GetFontSize() * 0.12f, s.FramePadding.x * 0.3f);
+        const float nx = p.x + s.FramePadding.x + r;  // room for the dot
+        if (track) dl->AddText(nullptr, 0.0f, ImVec2(nx + 1, ty + 1), shadow, name.c_str(), nullptr, 0.0f, &nameClip);
+        dl->AddText(nullptr, 0.0f, ImVec2(nx, ty), nameCol, name.c_str(), nullptr, 0.0f, &nameClip);
+        if (edited) dl->AddCircleFilled(ImVec2(p.x + s.FramePadding.x * 0.5f + r * 0.5f, p.y + h * 0.5f), r, ui::accent());
+    }
+    return changed;
+}
+
+// Other params: the name on the left, dim, and the widget in the rest of the row. Returns the
+// widget's width.
+float leftLabel(const std::string& name, float width) {
+    const float labelW = std::floor(width * 0.38f);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float h = ImGui::GetFrameHeight();
+    const ImVec4 clip(p.x, p.y, p.x + labelW - ImGui::GetStyle().ItemInnerSpacing.x, p.y + h);
+    ImGui::GetWindowDrawList()->AddText(nullptr, 0.0f, ImVec2(p.x, p.y + ImGui::GetStyle().FramePadding.y),
+                                        ImGui::GetColorU32(ImGuiCol_TextDisabled), name.c_str(), nullptr, 0.0f, &clip);
+    ImGui::Dummy(ImVec2(labelW, h));
+    ImGui::SameLine(0, 0);
+    return width - labelW;
 }
 
 }  // namespace
 
 bool editParam(Node& node, int i, float width, bool compact) {
     const ParamDesc& d = node.info().params[i];
-    std::string label = compact ? "##" + d.name : d.name;
+    // Names are drawn by these widgets (or beside them); "##Name" still lets scripts find them.
+    const std::string label = "##" + d.name;
     bool changed = false;
     ImGui::PushID(i);
-    ImGui::SetNextItemWidth(width);
+    auto labelled = [&] { ImGui::SetNextItemWidth(compact ? width : leftLabel(d.name, width)); };
     switch (d.kind) {
-        case ParamKind::Float: {
-            const nlohmann::json before = node.params[i];
-            float v = node.paramF(i);
+        case ParamKind::Float:
+        case ParamKind::Int:
             beginNumberField(label.c_str());
-            const bool drag = compact || d.hardMax > d.max || d.hardMin < d.min;
-            const bool track = d.track != SliderTrack::None;
-            // The frame's width (CalcItemWidth sees SetNextItemWidth only until the widget takes it).
-            const float trackW = track ? ImGui::CalcItemWidth() : 0.0f;
-            if (track) {
-                // The coloured track goes under a see-through frame; hover and drag still lighten it.
-                const ImVec2 p = ImGui::GetCursorScreenPos();
-                slidertrack::draw(ImGui::GetWindowDrawList(), p, ImVec2(p.x + trackW, p.y + ImGui::GetFrameHeight()),
-                                  d, theme::col(theme::Field), ImGui::GetStyle().FrameRounding);
-                ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
-                ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(255, 255, 255, 22));
-                ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(255, 255, 255, 34));
-                // ImGui's grab would sit on the centred value text ("0|0" at the default), so it's
-                // hidden and slidertrack::marker draws notches at the edges instead.
-                ImGui::PushStyleColor(ImGuiCol_SliderGrab, IM_COL32(0, 0, 0, 0));
-                ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, IM_COL32(0, 0, 0, 0));
-            }
-            if (drag) {
-                // Unbounded (math) values: drag field whose speed follows the soft range.
-                changed = ImGui::DragFloat(label.c_str(), &v, (d.max - d.min) / 300.0f, d.hardMin, d.hardMax, "%.3f",
-                                           ImGuiSliderFlags_AlwaysClamp);
-            } else {
-                changed = ImGui::SliderFloat(label.c_str(), &v, d.min, d.max, d.max - d.min >= 20.0f ? "%.1f" : "%.3f",
-                                             ImGuiSliderFlags_AlwaysClamp);
-            }
-            if (track) {
-                ImGui::PopStyleColor(5);
-                const ImVec2 a = ImGui::GetItemRectMin();
-                const float frac = d.max > d.min ? std::clamp((v - d.min) / (d.max - d.min), 0.0f, 1.0f) : 0.5f;
-                slidertrack::marker(ImGui::GetWindowDrawList(), a.x + trackW * frac, a.y, a.y + ImGui::GetFrameHeight(),
-                                    ImGui::GetFontSize() / 17.0f);
-            }
-            if (changed) node.params[i] = v;
-            changed |= endNumberField(node, i, before, !drag);
+            changed = numberSlider(node, i, label, width, !compact);
+            changed |= endNumberField(node, i);
             break;
-        }
-        case ParamKind::Int: {
-            const nlohmann::json before = node.params[i];
-            int v = node.paramI(i);
-            beginNumberField(label.c_str());
-            changed = ImGui::SliderInt(label.c_str(), &v, int(d.min), int(d.max), "%d", ImGuiSliderFlags_AlwaysClamp);
-            if (changed) node.params[i] = v;
-            changed |= endNumberField(node, i, before, true);
-            break;
-        }
         case ParamKind::Bool: {
             bool v = node.paramB(i);
-            changed = ImGui::Checkbox(label.c_str(), &v);
+            changed = ImGui::Checkbox(d.name.c_str(), &v);
             if (changed) node.params[i] = v;
             break;
         }
         case ParamKind::Enum: {
+            labelled();
             int v = node.paramI(i);
             const char* preview = (v >= 0 && v < int(d.options.size())) ? d.options[v].c_str() : "?";
             if (ImGui::BeginCombo(label.c_str(), preview)) {
@@ -152,6 +232,7 @@ bool editParam(Node& node, int i, float width, bool compact) {
             break;
         }
         case ParamKind::Path: {
+            if (!compact) leftLabel(d.name, width);
             std::string path = node.paramS(i);
             std::string name = path.empty() ? "(none)" : pathToU8(u8ToPath(path).filename());
             if (ImGui::Button("Browse...")) {
@@ -166,6 +247,7 @@ bool editParam(Node& node, int i, float width, bool compact) {
             break;
         }
         case ParamKind::Text: {
+            labelled();
             char buf[1024];
             std::snprintf(buf, sizeof(buf), "%s", node.paramS(i).c_str());
             if (ImGui::InputText(label.c_str(), buf, sizeof(buf))) {
@@ -181,6 +263,12 @@ bool editParam(Node& node, int i, float width, bool compact) {
             changed = curveEditor("##curves", node.params[i], d.options);
             break;
         case ParamKind::Color: {
+            const bool picking = eyedropper().is(node.id, i);
+            const char* pickLabel = picking ? "Picking..." : "Pick";
+            const ImGuiStyle& s = ImGui::GetStyle();
+            const float pickW = ImGui::CalcTextSize(pickLabel).x + s.FramePadding.x * 2 + s.ItemSpacing.x;
+            const float w = compact ? width : leftLabel(d.name, width);
+            ImGui::SetNextItemWidth(std::max(w - pickW, ImGui::GetFrameHeight() * 3));
             float c[3];
             node.paramC(i, c);
             if (!d.gammaColor) colordisplay::toDisplay(c);
@@ -193,9 +281,8 @@ bool editParam(Node& node, int i, float width, bool compact) {
                 changed = true;
             }
             ImGui::SameLine();
-            const bool picking = eyedropper().is(node.id, i);
             if (picking) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            if (ImGui::SmallButton(picking ? "Picking..." : "Pick")) eyedropper().toggle(node.id, i);
+            if (ImGui::SmallButton(pickLabel)) eyedropper().toggle(node.id, i);
             if (picking) ImGui::PopStyleColor();
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Eyedropper: click a pixel in the Original, Result or a viewer,\n"
@@ -203,6 +290,7 @@ bool editParam(Node& node, int i, float width, bool compact) {
             break;
         }
         case ParamKind::SavePath: {
+            if (!compact) leftLabel(d.name, width);
             std::string path = node.paramS(i);
             if (ImGui::Button("Save as...")) {
                 if (auto p = saveFileDialog("File Output", kSaveImageFilter, "png")) {
@@ -350,7 +438,7 @@ static bool drawLayerStack(LayerStackNode& ls, Graph& g, const std::function<boo
     return changed;
 }
 
-bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerParent) {
+bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerParent, bool embedded) {
     Node* n = g.find(selectedNode);
     if (n) {
         if (auto* grp = dynamic_cast<GroupNode*>(n)) {
@@ -412,22 +500,27 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
         return false;
     }
     const NodeInfo& info = n->info();
-    ImGui::Text("%s", info.displayName.c_str());
-    ImGui::SameLine();
-    ImGui::TextDisabled("(%s)", info.category.c_str());
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Guide")) openGuide(info.displayName);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("What this node does (F1)");
-    if (info.type == "conv.expression" || info.type == "conv.image_expression") {
+    if (!embedded) {
+        // The node's name (semibold), its category, and the Guide on the right.
+        ImGui::AlignTextToFramePadding();
+        if (ImFont* f = style::fonts().semibold) ImGui::PushFont(f);
+        ImGui::TextUnformatted(n->title().c_str());
+        if (style::fonts().semibold) ImGui::PopFont();
         ImGui::SameLine();
-        ImGui::TextDisabled("(?)");
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Variables: r g b a (Image input), in1 in2, x y (pixel), u v (0..1), w h\n"
-                              "Functions: sin cos tan pow sqrt abs floor ceil log ln exp atan2\n"
-                              "           min max clamp mix step smoothstep fract\n"
-                              "Example: mix(r, b, smoothstep(0.3, 0.7, v))");
+        ImGui::TextDisabled("%s", info.category.c_str());
+        if (info.type == "conv.expression" || info.type == "conv.image_expression") {
+            ImGui::SameLine();
+            ImGui::TextDisabled(ICON_INFO);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Variables: r g b a (Image input), in1 in2, x y (pixel), u v (0..1), w h\n"
+                                  "Functions: sin cos tan pow sqrt abs floor ceil log ln exp atan2\n"
+                                  "           min max clamp mix step smoothstep fract\n"
+                                  "Example: mix(r, b, smoothstep(0.3, 0.7, v))");
+        }
+        ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - ImGui::GetFrameHeight()));
+        if (ui::IconButton(ICON_BOOK, "Guide", false, "F1", "What this node does")) openGuide(info.displayName);
+        ImGui::Separator();
     }
-    ImGui::Separator();
 
     if (info.params.empty()) {
         ImGui::TextDisabled("No settings.");
@@ -435,7 +528,7 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
     }
 
     bool changed = false;
-    const float width = ImGui::GetContentRegionAvail().x * 0.6f;
+    const float width = ImGui::GetContentRegionAvail().x;
     // Scope widget state (selected curve channel, ramp stop) to this node, so selecting another
     // Curves node doesn't inherit the previous one's channel.
     ImGui::PushID(n->id);
@@ -446,11 +539,13 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
         for (int p = 0; p < int(info.inputs.size()); ++p)
             if (info.inputs[p].fallbackParam == i && g.inputLink(n->id, p)) driven = true;
         if (driven) {
+            const char* wired = "(wired)";
+            const ImGuiStyle& s = ImGui::GetStyle();
             ImGui::BeginDisabled();
-            editParam(*n, i, width, false);
+            editParam(*n, i, std::max(width - ImGui::CalcTextSize(wired).x - s.ItemSpacing.x, width * 0.5f), false);
             ImGui::EndDisabled();
             ImGui::SameLine();
-            ImGui::TextDisabled("(wired)");
+            ImGui::TextDisabled("%s", wired);
             return false;
         }
         const bool c = editParam(*n, i, width, false);
@@ -459,7 +554,7 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
     };
     if (auto* ls = dynamic_cast<LayerStackNode*>(n)) changed |= drawLayerStack(*ls, g, row);
     else if (!drawNodeInspector(*n, row, changed, &g))
-        for (int i = 0; i < int(info.params.size()); ++i) row(i);
+        drawParamGroups(*n, row);
     ImGui::PopID();
     return changed;
 }

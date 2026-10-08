@@ -49,11 +49,19 @@ struct ParamDesc {
     bool gammaColor = false;  // Color kind: see ColorGamma()
     SliderTrack track = SliderTrack::None;
     float trackHue = 0.0f, trackSpan = 0.0f;  // degrees, for the band tracks
+    // The Inspector's sub-heading over this param and the ones after it with the same group
+    // ("Tone" in Basic), like Lightroom's panel groups. Empty: no heading.
+    std::string group;
 
     ParamDesc when(int param, int value = 1) const {
         ParamDesc d = *this;
         d.showIf = param;
         d.showIfValue = value;
+        return d;
+    }
+    ParamDesc inGroup(std::string g) const {
+        ParamDesc d = *this;
+        d.group = std::move(g);
         return d;
     }
     ParamDesc withTrack(SliderTrack t, float hue = 0.0f, float span = 0.0f) const {

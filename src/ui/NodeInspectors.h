@@ -15,6 +15,10 @@ using ParamRow = std::function<bool(int)>;
 // graph holding the node (Lens Profile reads the photo feeding it).
 bool drawNodeInspector(Node& n, const ParamRow& row, bool& changed, const Graph* g = nullptr);
 
+// Every param through `row`, with a sub-heading where a ParamDesc::group starts. `afterHeading`
+// (optional) adds widgets on a heading's line.
+void drawParamGroups(Node& n, const ParamRow& row, const std::function<void(const std::string&)>& afterHeading = {});
+
 // Set by Basic's Auto button to that node's id; the App works out the settings from the image
 // arriving at it (it can evaluate the graph) and clears it.
 extern int autoToneRequest;

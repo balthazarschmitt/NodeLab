@@ -57,7 +57,7 @@ bool UiScript::load(const std::string& path, std::string& err) {
             push("wait", n);
         } else if (op == "settle" || op == "quit") {
             push(op);
-        } else if (std::string t, u; (op == "click" || op == "clickat" || op == "move" || op == "moveat" ||
+        } else if (std::string t, u; (op == "click" || op == "doubleclick" || op == "clickat" || op == "move" || op == "moveat" ||
                                        op == "drag" || op == "dragat" || op == "dragto" || op == "expect") &&
                                       readTarget(in, t)) {
             float fx = 0.5f, fy = 0.5f, dx = 0, dy = 0, bt = 0;
@@ -74,6 +74,13 @@ bool UiScript::load(const std::string& path, std::string& err) {
             }
             push("moveto", fx, fy, t);
             if (op == "move" || op == "moveat") continue;
+            if (op == "doubleclick") {
+                // Within ImGui's double-click time: click's waits would be too slow.
+                push("wait", 2);
+                for (int k = 0; k < 2; ++k) push("down", 0), push("wait", 1), push("up", 0), push("wait", 1);
+                push("wait", 2);
+                continue;
+            }
             press(bt);
             if (op == "drag" || op == "dragat")
                 for (int i = 1; i <= 12; ++i) push("moveby", dx * i / 12.0f, dy * i / 12.0f);

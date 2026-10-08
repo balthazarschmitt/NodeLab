@@ -3,6 +3,21 @@
 NodeLab uses [semantic versioning](https://semver.org): minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
+## Unreleased
+
+### New
+- **Inspector redesign** (Lightroom's panels): sliders show their name inside and their value
+  on the right, filled from zero; a changed setting's name turns bright with a dot. Drag moves
+  a value from where it was, double-click resets it and Ctrl+click types one. Other settings
+  have their name on the left. Basic's groups have small headings, with Auto beside Tone.
+- **Develop's Inspector** is a column of sections, one per node from the Image Input to the
+  Output, each with a bypass eye and a reset arrow, under the histogram and the photo's ISO,
+  focal length, aperture and shutter speed. Selecting a node opens its section.
+- Scripted UI tests: `doubleclick "Target"`.
+
+### Changed
+- Double-clicking a slider resets it (it typed a value before; Ctrl+click types now).
+
 ## 1.4.0 (2026-10-07)
 
 ### New

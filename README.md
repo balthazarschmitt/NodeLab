@@ -115,8 +115,8 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Move nodes between frames | right-click a node → Move to Frame, or select nodes and right-click a frame title → Move Selected Nodes Here; Alt+P removes from frame |
 | Workspaces | The tabs in the menu bar: Library (an open folder's photos), Develop (photo, settings column, graph underneath) and Nodes; Ctrl+PgUp / Ctrl+PgDn step through them |
 | Panels | Drag a panel's tab to dock it elsewhere, or out of the window; View > Layout picks a preset for the current workspace (Default, Compositing, Photo, Side by Side, Node Focus); View > Reset Layout |
-| Inspector | Floats in the Node Editor's corner while a node is selected; Preferences > Interface (or View > Inspector Overlay) makes it a panel |
-| Edit a value | Double-click a slider (or click a node's value box) to type; Backspace over it, or right-click, resets it |
+| Inspector | Floats in the Node Editor's corner while a node is selected; Preferences > Interface (or View > Inspector Overlay) makes it a panel. In Develop: histogram, EXIF and every node of the chain as a section (eye bypasses, arrow resets) |
+| Edit a value | Drag a slider; Ctrl+click it (or click a node's value box) to type; double-click it, Backspace over it, or right-click resets it |
 | Reset to defaults | Right-click a node → Reset to Defaults (keeps its file) |
 | Preferences | Edit > Preferences: layout, Inspector, Resolution Scale, themes (Studio, Classic, Blender, Darkroom, Midnight, High Contrast, Light, or your own colours), viewer background, compositor device, new projects' view transform |
 | Extra viewers | Right-click a node → Open in New Viewer (or View > New Viewer) to watch an intermediate result; the viewer's drop-down switches node, "Sync view" pans with the other panes |

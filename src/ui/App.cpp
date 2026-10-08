@@ -830,11 +830,149 @@ void App::drawInspectorOverlay() {
     ImGui::PopStyleVar(2);
 }
 
+// The develop chain: from the Output node back through each node's first image input, in
+// processing order (Image Input first). Empty without an Output.
+static std::vector<int> developChain(const Graph& g) {
+    std::vector<int> chain;
+    int id = g.firstOfType("io.output");
+    while (id && std::find(chain.begin(), chain.end(), id) == chain.end()) {
+        chain.push_back(id);
+        const Node* n = g.find(id);
+        int next = 0;
+        if (n)
+            for (int p = 0; p < int(n->info().inputs.size()); ++p)
+                if (n->info().inputs[size_t(p)].type == PinType::Image) {
+                    if (const Link* l = g.inputLink(id, p)) next = l->fromNode;
+                    break;
+                }
+        id = next;
+    }
+    std::reverse(chain.begin(), chain.end());
+    return chain;
+}
+
+// Develop's Inspector header, as Lightroom's: the histogram, then the photo's ISO, focal length,
+// aperture and shutter speed.
+void App::drawDevelopHeader(const std::vector<int>& chain) {
+    const float w = ImGui::GetContentRegionAvail().x;
+    if (histogram_.valid && w > 60.0f) {
+        const ImVec2 pos = ImGui::GetCursorScreenPos(), size(w, std::round(std::min(w * 0.42f, 140.0f * style::scale())));
+        ImGui::InvisibleButton("##histogram", size);
+        if (drawHistogram(ImGui::GetWindowDrawList(), pos, size, histogram_, clipping_)) {
+            clipping_ = !clipping_;
+            refreshDisplay(*viewers_[0], true);
+            refreshDetail(*viewers_[0], true);
+        }
+    }
+    std::string path;
+    for (int id : chain)
+        if (const Node* n = currentGraph().find(id); n && n->info().type == ImageInputNode::staticInfo().type) {
+            path = n->paramS(0);
+            break;
+        }
+    if (path != exifPath_) {
+        // Read once per photo: the file is opened only when the chain's photo changes.
+        exifPath_ = path;
+        exifInfo_ = {};
+        exifValid_ = !path.empty() && exif::readInfo(path, exifInfo_);
+    }
+    if (exifValid_) {
+        const exif::PhotoInfo& e = exifInfo_;
+        std::string line;
+        char buf[48];
+        auto add = [&](const char* s) {
+            if (!line.empty()) line += "    ";
+            line += s;
+        };
+        if (e.iso > 0) std::snprintf(buf, sizeof buf, "ISO %.0f", e.iso), add(buf);
+        if (e.focalLength > 0) std::snprintf(buf, sizeof buf, "%.0f mm", e.focalLength), add(buf);
+        if (e.fNumber > 0) std::snprintf(buf, sizeof buf, "f/%.1f", e.fNumber), add(buf);
+        if (e.exposureTime > 0) {
+            if (e.exposureTime < 0.5f) std::snprintf(buf, sizeof buf, "1/%.0f s", 1.0f / e.exposureTime);
+            else std::snprintf(buf, sizeof buf, "%.1f s", e.exposureTime);
+            add(buf);
+        }
+        if (!line.empty()) {
+            if (ImFont* f = style::fonts().small) ImGui::PushFont(f);
+            ImGui::TextDisabled("%s", line.c_str());
+            if (style::fonts().small) ImGui::PopFont();
+            if (ImGui::IsItemHovered() && !(e.model.empty() && e.lens.empty()))
+                ImGui::SetTooltip("%s %s\n%s", e.make.c_str(), e.model.c_str(), e.lens.c_str());
+        }
+    }
+    ImGui::Spacing();
+}
+
+// Develop's Inspector body: each node of the chain as a collapsible section, in processing
+// order, like Lightroom's Develop panels. The eye bypasses a node (M) and the arrow resets its
+// settings. Selecting a node on the graph opens and scrolls to its section; opening a section
+// selects its node.
+void App::drawDevelopStack(Graph& g, const std::vector<int>& chain, GroupNode* owner, Graph* parent) {
+    const bool follow = selected_ != stackFollowed_;
+    stackFollowed_ = selected_;
+    for (int id : chain) {
+        Node* n = g.find(id);
+        if (!n || n->info().params.empty()) continue;
+        const bool input = n->info().type == ImageInputNode::staticInfo().type;
+        ImGui::PushID(id);
+        auto it = stackOpen_.find(id);
+        bool open = it == stackOpen_.end() || it->second;
+        if (follow && id == selected_) {
+            open = true;
+            ImGui::SetScrollHereY(0.0f);
+        }
+        const bool wasOpen = open;
+        bool enabled = !n->muted, reset = false;
+        // The photo's own node can't be bypassed or reset (that would drop the photo).
+        ui::SectionHeader(n->title().c_str(), &open, input ? nullptr : &enabled, input ? nullptr : &reset);
+        stackOpen_[id] = open;
+        if (open && !wasOpen) {
+            selected_ = id;
+            stackFollowed_ = id;
+            editor_.select(id);
+        }
+        if (enabled == n->muted) {
+            n->muted = !enabled;
+            markChanged(true);
+        }
+        if (reset) {
+            for (int i = 0; i < int(n->info().params.size()); ++i) n->resetParam(i);
+            markChanged(true);
+        }
+        if (open) {
+            ImGui::Spacing();
+            if (drawInspector(g, id, owner, parent, true)) markChanged(true);
+            if (autoToneRequest) applyAutoTone(std::exchange(autoToneRequest, 0));
+            ImGui::Spacing();
+        }
+        ImGui::PopID();
+    }
+}
+
 void App::drawInspectorContents() {
     Graph& g = currentGraph();
     Graph* parent = groupPath_.empty()
                         ? nullptr
                         : resolveGroupPath(graph_, std::vector<int>(groupPath_.begin(), groupPath_.end() - 1));
+    if (workspace_ == WsDevelop && groupPath_.empty()) {
+        const std::vector<int> chain = developChain(g);
+        drawDevelopHeader(chain);
+        // The histogram stays put while the settings under it scroll.
+        ImGui::BeginChild("##develop");
+        // The stack shows while nothing or a node of the chain is selected; another node (a
+        // mask) shows on its own, as in the Nodes workspace.
+        if (chain.size() > 1 && (!g.find(selected_) || std::find(chain.begin(), chain.end(), selected_) != chain.end()))
+            drawDevelopStack(g, chain, currentGroupOwner(), parent);
+        else
+            drawSelectedInspector(g, parent);
+        ImGui::EndChild();
+        return;
+    }
+    drawSelectedInspector(g, parent);
+}
+
+// The selected node's settings, and a mask's adjustment under it.
+void App::drawSelectedInspector(Graph& g, Graph* parent) {
     if (drawInspector(g, selected_, currentGroupOwner(), parent)) markChanged(true);
     if (autoToneRequest) applyAutoTone(std::exchange(autoToneRequest, 0));
     // A mask driving a Basic's Factor (as Add Mask builds) shows that adjustment's sliders

@@ -10,6 +10,10 @@ expect "Inspector/Temperature"
 drag "Inspector/Temperature" 40 0
 settle
 shot build/smoke/named2_temp.png
+# a double-click resets it, as in Lightroom
+doubleclick "Inspector/Temperature"
+settle
+shot build/smoke/named2b_reset.png
 click "File"
 expect "Export..."
 shot build/smoke/named3_menu.png

@@ -6,7 +6,7 @@ changed at any point: nothing is baked in until you export.
 
 This guide covers the basics, how the data on the wires works, every colour space, and every
 node. The same text is available inside the app under **Help > Guide** (F1). With a node selected,
-F1 (or the **Guide** button in the Inspector) jumps straight to that node's entry.
+F1 (or the book icon beside the node's name in the Inspector) jumps straight to that node's entry.
 
 ## Getting Started
 
@@ -28,6 +28,13 @@ Each workspace keeps its own arrangement of panels, and NodeLab reopens the last
 - **Inspector**: every setting of the selected node, with larger editors for curves and ramps.
   By default it floats in the Node Editor's top-right corner while a node is selected; in
   **Edit > Preferences > Interface** (or **View > Inspector Overlay**) it can be a panel instead.
+  - Sliders show their name inside, on the left, and their value on the right, as Lightroom's
+    do. A changed setting's name turns bright, with a dot before it.
+  - In the Develop workspace it is a column like Lightroom's Develop panels: the histogram and
+    the photo's ISO, focal length, aperture and shutter speed at the top, then every node from
+    the Image Input to the Output as a section. Click a section's title to open or close it, the
+    eye to bypass that node (as **M** does) and the arrow to reset its settings. Selecting a node
+    on the graph opens its section; selecting one off the chain (a mask) shows it on its own.
 - **Result** (right): what the Output node receives, or the node you are previewing. Its tools
   float over the image's top-left corner (see Histogram and Clipping).
 - **Status bar** (bottom): on the left, what the selected node's on-image controls do and what
@@ -1432,7 +1439,7 @@ Coordinates are relative to the image, so textures look the same in the preview 
 | Mute | M: the node passes its input straight through (shown with a red line). |
 | Collapse | H: hides the node's settings. |
 | Rename | F2, or right-click > Rename. |
-| Edit a value | Double-click a slider in the Inspector (or click a node's value box) to type a number. Backspace over one resets it to its default, and right-click offers Reset to Default and Edit Value. |
+| Edit a value | Drag a slider in the Inspector (Shift faster, Alt slower); Ctrl+click it (or click a node's value box) to type a number. Double-click or Backspace over one resets it to its default, and right-click offers Reset to Default and Edit Value. |
 | Reset to defaults | Right-click > Reset to Defaults (or Edit > Reset to Defaults) puts every setting of the selected nodes back to its default. File paths are kept, and a RAW gets its RAW defaults again. |
 | Make links | F connects the selected nodes in a chain, left to right (top to bottom in a column). Nodes already wired together are skipped, and when every matching input is taken, F replaces one. Afterwards a hint at the bottom of the canvas names the new wire: press 1 for the next output, 2 for the next input, or F again for the next pair (taken inputs are skipped, and an input F replaced gets its wire back). Esc, a click or a new selection ends it. |
 | Detach links | Alt+D (or right-click > Detach Links) removes the wires between the selected nodes. Their wires to unselected nodes stay. To take a node out of a chain instead, Alt+drag it. |
