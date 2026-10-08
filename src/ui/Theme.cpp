@@ -517,8 +517,8 @@ Theme Theme::fromJson(const nlohmann::json& j) {
     Theme t = classic();
     if (!j.is_object()) return t;
     t.name = j.value("name", std::string("Custom"));
-    // "Refractory Dark" was the default before Studio, saved whether or not anyone chose it.
-    if (t.name == "Refractory Dark") return studio();
+    // "NodeLab Dark" was the default before Studio, saved whether or not anyone chose it.
+    if (t.name == "NodeLab Dark") return studio();
     for (const Theme& p : presets())
         if (p.name == t.name) return p;
     t.light = j.value("light", false);

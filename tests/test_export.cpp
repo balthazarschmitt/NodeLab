@@ -142,6 +142,10 @@ TEST_CASE("Batch exports keep the source's name but never replace an original") 
     writeJpeg(dir / "a (2).jpg", "Refractory 1.3.0");
     outs = batchOutputPaths({{raw}}, pathToU8(dir), s);
     CHECK(u8ToPath(outs[0]).filename() == "a (2).jpg");
+    // So does one exported before the rename, by NodeLab.
+    writeJpeg(dir / "a (2).jpg", "NodeLab 1.6.1");
+    outs = batchOutputPaths({{raw}}, pathToU8(dir), s);
+    CHECK(u8ToPath(outs[0]).filename() == "a (2).jpg");
     // Both of the pair in one batch: neither export replaces the other's source.
     const std::string jpg = pathToU8(dir / "a.jpg");
     outs = batchOutputPaths({{raw}, {jpg}}, pathToU8(dir), s);

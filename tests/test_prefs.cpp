@@ -44,9 +44,9 @@ TEST_CASE("theme JSON round trip keeps every colour") {
 }
 
 TEST_CASE("saved built-in themes load the current preset") {
-    // Preferences saved before 1.4 hold the old default, Refractory Dark: they get the new default.
+    // Preferences saved before 1.4 hold the old default, NodeLab Dark: they get the new default.
     nlohmann::json old = theme::presets()[1].toJson();
-    old["name"] = "Refractory Dark";
+    old["name"] = "NodeLab Dark";
     CHECK(theme::Theme::fromJson(old).name == "Studio");
     // A built-in theme saved by an older build follows the preset's updates.
     nlohmann::json blender = {{"name", "Blender"}, {"colors", {{"canvas", {1, 0, 0}}}}};

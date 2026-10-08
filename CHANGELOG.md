@@ -3,6 +3,13 @@
 Refractory uses [semantic versioning](https://semver.org): minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
+## 1.7.1 (2026-10-08)
+
+### Fixed
+- After the rename, the window layout saved by NodeLab was reset on first start, and a theme
+  saved as NodeLab's old default didn't switch to Studio. Both carry over again.
+- Nodes copied in NodeLab paste into Refractory.
+
 ## 1.7.0 (2026-10-08)
 
 ### Changed

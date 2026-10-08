@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 
 #include "graph/Evaluator.h"
 #include "io/ImageCache.h"
@@ -178,4 +179,23 @@ TEST_CASE("project round-trip") {
     CHECK(g.toJson(&base) == g2.toJson(&base));
     CHECK(ui2["zoom"] == 2.0);
     CHECK(fs::equivalent(u8ToPath(g2.find(in->id)->paramS(0)), u8ToPath(file)));
+
+    // The same project as NodeLab (Refractory before 1.7) saved it loads unchanged.
+    nlohmann::json j = nlohmann::json::parse(std::ifstream(proj));
+    CHECK(j["app"] == "Refractory");
+    j["app"] = "NodeLab";
+    j["appVersion"] = "1.6.1";
+    const fs::path old = fs::temp_directory_path() / "refractory_roundtrip.NLPROJ";
+    std::ofstream(old) << j.dump();
+    CHECK(isProjectPath(pathToU8(old)));
+    CHECK(isProjectPath(pathToU8(proj)));
+    CHECK_FALSE(isProjectPath("photo.png"));
+    Graph g3;
+    nlohmann::json ui3;
+    REQUIRE(loadProject(pathToU8(old), g3, ui3, err));
+    CHECK(g.toJson(&base) == g3.toJson(&base));
+    // Some other app's JSON isn't a project.
+    j["app"] = "Other";
+    std::ofstream(old) << j.dump();
+    CHECK_FALSE(loadProject(pathToU8(old), g3, ui3, err));
 }

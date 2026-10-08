@@ -57,7 +57,9 @@ namespace fs = std::filesystem;
 static const char* kProjectFilter = "Refractory project (*.refract, *.nlproj)|*.refract;*.nlproj|All files|*.*";
 
 static bool isImageFile(const std::filesystem::path& p) { return isImageFile(pathToU8(p)); }
-static const char* kDockName = "RefractoryDockSpace";
+// Kept from before the rename to Refractory: saved layouts (layout.ini) key docked windows by
+// this name's hash, so changing it would reset everyone's layout.
+static const char* kDockName = "NodeLabDockSpace";
 
 // Each workspace's dockspace. Nodes keeps the name layouts saved before workspaces used.
 static ImGuiID dockSpaceId(int ws) {

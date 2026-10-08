@@ -2162,7 +2162,8 @@ bool NodeEditor::paste(Graph& g) {
     const char* text = ImGui::GetClipboardText();
     if (!text) return false;
     nlohmann::json clip = nlohmann::json::parse(text, nullptr, false);
-    if (clip.is_discarded() || !clip.contains("refractoryClipboard")) return false;
+    // nodelabClipboard: nodes copied in NodeLab (before 1.7), e.g. from another window still open.
+    if (clip.is_discarded() || !(clip.contains("refractoryClipboard") || clip.contains("nodelabClipboard"))) return false;
     return insertClip(g, clip, toGrid(ImGui::GetIO().MousePos));
 }
 
