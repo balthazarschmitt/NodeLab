@@ -3157,7 +3157,7 @@ void App::drawExportWindow() {
     if (ImGui::BeginTabBar("##exportTabs", ImGuiTabBarFlags_DrawSelectedOverline)) {
         if (ImGui::BeginTabItem("Single")) {
             tab = 0;
-            ImGui::TextWrapped("Renders the Output node at full resolution.");
+            ImGui::TextWrapped("Renders the Output node at the file's resolution.");
             ImGui::TextUnformatted("File");
             if (pathField("##exportPath", exportPath_, sizeof(exportPath_)))
                 if (auto p = saveFileDialog("Export result", kSaveImageFilter, es.extension() + 1)) {
@@ -3285,6 +3285,14 @@ void App::drawExportWindow() {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::SliderInt("##percent", &es.percent, 1, 100, "%d %%");
+    }
+    if (es.sizeMode != ExportSettings::Original) {
+        ImGui::Checkbox("High quality resampling", &es.highQuality);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("darktable's option: render at full resolution, then resize.\n"
+                              "Off, a downsized file renders at about 1.5x its size, as the\n"
+                              "preview does: several times faster, and very close.\n"
+                              "Legacy projects always render at full resolution.");
     }
     // Lightroom's Output Sharpening: after resizing, for where the image will be seen.
     ImGui::SetNextItemWidth(ui::comboWidth("No sharpening\0Sharpen for Screen\0Sharpen for Matte Paper\0Sharpen for Glossy Paper\0", 160));

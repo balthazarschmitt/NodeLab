@@ -460,7 +460,11 @@ public:
 
 }  // namespace
 
+bool hasFileOutputs(const Graph& g) { return g.firstOfType(FileOutputNode::staticInfo().type) != 0; }
+
 std::vector<std::string> writeFileOutputs(const Graph& g, ImageCache& cache) {
+    // Without File Outputs, sizing the context would decode a source for nothing.
+    if (!hasFileOutputs(g)) return {};
     EvalContext ctx;
     ctx.proxy = false;
     ctx.cache = &cache;

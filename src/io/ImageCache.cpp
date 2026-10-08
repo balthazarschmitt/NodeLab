@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "io/ImageIO.h"
 
@@ -29,6 +30,8 @@ ImagePtr ImageCache::lookupLocked(Entry& e, bool proxy, int proxyEdge, std::stri
         for (const auto& [edge, p] : e.proxies)
             if (edge > proxyEdge || std::max(p->w, p->h) < edge)  // bigger, or already the whole image
                 return e.proxies[proxyEdge] = downscaleToFit(p, proxyEdge);
+    } else if (e.held) {
+        return std::exchange(e.held, nullptr);
     } else if (ImagePtr full = e.full.lock()) {
         return full;
     }
@@ -97,6 +100,31 @@ ImagePtr ImageCache::get(const std::string& pathU8, bool proxy, std::string* err
     if (!p) p = proxyImg ? proxyImg : downscaleToFit(full, proxyEdge);
     if (proxy) return p;
     e.full = full;
+    return full;
+}
+
+void ImageCache::put(const std::string& pathU8, const Decode& decode, ImagePtr img, int fullW, int fullH, int edge) {
+    if (!img) return;
+    std::lock_guard lock(mutex_);
+    Entry& e = entries_[entryKey(pathU8, decode)];
+    e.fullW = fullW;
+    e.fullH = fullH;
+    e.error.clear();
+    fullSizes_[pathU8] = {fullW, fullH};
+    if (edge > 0) {
+        e.proxies[edge] = img;
+    } else {
+        e.held = img;
+        e.full = img;
+    }
+}
+
+ImagePtr ImageCache::holdFull(const std::string& pathU8, std::string* err, const Decode& decode) {
+    ImagePtr full = get(pathU8, false, err, decode);
+    if (full) {
+        std::lock_guard lock(mutex_);
+        entries_[entryKey(pathU8, decode)].held = full;
+    }
     return full;
 }
 

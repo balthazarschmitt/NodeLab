@@ -1,5 +1,7 @@
 #include <doctest/doctest.h>
 
+#include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -367,5 +369,102 @@ TEST_CASE("Multi-preset export writes every preset's file from one render, in it
     CHECK(full->w == 40);
     CHECK(jpg->w == 20);
     CHECK(jpg->h == 10);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("Downsized exports render at reduced size, like the full render resized") {
+    const fs::path dir = fs::temp_directory_path() / "refractory_reduced_render";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    // Detail at every scale: a gradient with a fine checker and a ring pattern.
+    Image img(400, 300);
+    for (int y = 0; y < img.h; ++y)
+        for (int x = 0; x < img.w; ++x) {
+            float* p = img.pixel(size_t(y) * img.w + x);
+            const float ring = 0.5f + 0.5f * std::sin(std::hypot(x - 200.0f, y - 150.0f) * 0.15f);
+            p[0] = x / 400.0f, p[1] = ring, p[2] = ((x / 3 + y / 3) & 1) ? 0.8f : 0.2f, p[3] = 1.0f;
+        }
+    std::string err;
+    const std::string src = pathToU8(dir / "src.png");
+    REQUIRE(saveImage(src, img, err));
+
+    auto run = [&](bool linear, const ExportSettings& s, double cropRight, const std::string& name, bool& reduced) {
+        Graph g;
+        g.colorManagement.linear = linear;
+        Node* in = g.addNode("io.image_input");
+        Node* crop = g.addNode("xform.crop");
+        Node* out = g.addNode("io.output");
+        crop->params[1] = cropRight;
+        crop->params[3] = cropRight;  // Bottom
+        g.connect(in->id, 0, crop->id, 0);
+        g.connect(crop->id, 0, out->id, 0);
+        const std::string path = pathToU8(dir / name);
+        Exporter ex;
+        ex.timings = true;
+        ex.start(g.toJson(), {{src, path}}, in->id, s);
+        ex.wait();
+        const std::vector<std::string> log = ex.takeLog();
+        REQUIRE(log.size() == 1);
+        reduced = log[0].find("reduced render") != std::string::npos;
+        std::string e;
+        auto r = loadImage(path, e);
+        REQUIRE(r);
+        return r;
+    };
+    auto meanDiff = [](const Image& a, const Image& b) {
+        double d = 0;
+        for (size_t i = 0; i < a.px.size(); ++i) d += std::abs(a.px[i] - b.px[i]);
+        return d / a.px.size();
+    };
+
+    ExportSettings s;
+    s.sizeMode = ExportSettings::LongEdge, s.longEdge = 100;
+    CHECK(s.highQuality);  // full rendering by default
+    ExportSettings hq = s;
+    s.highQuality = false;
+    bool reduced = false;
+    SUBCASE("long edge") {
+        auto a = run(true, s, 1.0, "a.png", reduced);
+        CHECK(reduced);
+        auto b = run(true, hq, 1.0, "b.png", reduced);
+        CHECK_FALSE(reduced);
+        REQUIRE(a->w == b->w);
+        REQUIRE(a->h == b->h);
+        CHECK(a->w == 100);
+        CHECK(a->h == 75);
+        CHECK(meanDiff(*a, *b) < 0.02);
+    }
+    SUBCASE("percent") {
+        s.sizeMode = hq.sizeMode = ExportSettings::Percent;
+        s.percent = hq.percent = 25;
+        auto a = run(true, s, 1.0, "a.png", reduced);
+        CHECK(reduced);
+        auto b = run(true, hq, 1.0, "b.png", reduced);
+        REQUIRE(a->w == b->w);
+        REQUIRE(a->h == b->h);
+        CHECK(a->w == 100);
+        CHECK(meanDiff(*a, *b) < 0.02);
+    }
+    SUBCASE("a crop smaller than the file falls back to a full render") {
+        auto a = run(true, s, 0.2, "a.png", reduced);  // 80 x 60: never enlarged
+        CHECK_FALSE(reduced);
+        CHECK(a->w == 80);
+        CHECK(a->h == 60);
+    }
+    SUBCASE("legacy projects keep the full render") {
+        auto a = run(false, s, 1.0, "a.png", reduced);
+        CHECK_FALSE(reduced);
+        auto b = run(false, hq, 1.0, "b.png", reduced);
+        CHECK(std::memcmp(a->px.data(), b->px.data(), a->px.size() * sizeof(float)) == 0);
+    }
+    SUBCASE("high quality resampling round-trips, and matters only when resizing") {
+        ExportSettings t;
+        t.fromJson(hq.toJson());
+        CHECK(t.highQuality);
+        CHECK_FALSE(t.sameOutput(s));
+        ExportSettings o1, o2;
+        o2.highQuality = false;
+        CHECK(o1.sameOutput(o2));
+    }
     fs::remove_all(dir);
 }

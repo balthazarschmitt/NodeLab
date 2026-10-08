@@ -1537,13 +1537,19 @@ progress, and **Cancel** stops it.
 - **Size:** Original, **Long edge** (pixels), or **Percent**. Exports are only ever made smaller,
   with a sharp Lanczos filter in linear light (the same as Blender's and darktable's high-quality
   resize), so fine detail stays crisp without halos.
+  - **High quality resampling** (darktable's option, on by default) renders at full resolution
+    and then resizes. Turn it off for much faster downsized exports in scene-linear projects:
+    the file is rendered the way the preview is, at about 1.5x its size, and a RAW needs only
+    its fast half-size decode. The result is very close (the finest detail can differ
+    slightly). Legacy projects, and exports that also write File Output nodes, always render at
+    full resolution.
 - **Output Sharpening** (Lightroom's): **Sharpen for Screen**, **Matte Paper** or **Glossy
   Paper**, at **Low**, **Standard** or **High**. It is applied after resizing, so it suits the
   final pixel size; use Screen for web and phone images and the paper options for prints.
 
 The settings and folders are saved with the project. From the command line,
-`Refractory.exe --batch project.refract outDir [--png|--jpg|--tif|--exr|--webp|--jxl|--avif] [--depth N] [--quality Q] a.jpg b.jpg ...`
-does the same batch without the window, and `Refractory.exe --render project.refract out.tif
+`Refractory.exe --batch project.refract outDir [--png|--jpg|--tif|--exr|--webp|--jxl|--avif] [--depth N] [--quality Q] [--reduced-render] [--timings] a.jpg b.jpg ...`
+does the same batch without the window (`--timings` adds where each file's time went), and `Refractory.exe --render project.refract out.tif
 [--depth 16] [--quality Q]` renders one image (the extension picks the format; `--depth 32` for
 full-float EXR; `--quality` makes WebP, JPEG XL and AVIF lossy at that quality).
 Add `--device gpu` to render on the graphics card (`--precision half` for speed, full by default).

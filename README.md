@@ -56,8 +56,9 @@ See [CHANGELOG.md](CHANGELOG.md).
 Headless render: `Refractory.exe --render project.refract out.png [--depth 16] [--quality Q]` (the extension picks
 PNG, JPEG, TIFF, OpenEXR, WebP, JPEG XL or AVIF; `--depth 32` for full-float EXR; `--quality` makes WebP, JPEG XL
 and AVIF lossy; `--timings` prints evaluate and save times)
-Headless batch: `Refractory.exe --batch project.refract outDir [--png|--jpg|--tif|--exr|--webp|--jxl|--avif] [--depth N] [--quality Q] a.jpg b.jpg ...`
-(each source goes into the project's first Image Input and is saved as `outDir\<name>.<ext>`)
+Headless batch: `Refractory.exe --batch project.refract outDir [--png|--jpg|--tif|--exr|--webp|--jxl|--avif] [--depth N] [--quality Q] [--reduced-render] [--timings] a.jpg b.jpg ...`
+(each source goes into the project's first Image Input and is saved as `outDir\<name>.<ext>`; `--reduced-render`
+renders downsized files at about 1.5x their size instead of full resolution, `--timings` prints each file's load, render, resize and save times)
 Benchmark: `Refractory.exe --benchmark project.refract [--full] [--runs N] [--sync]` (median ms per node)
 GPU compositing: `--device gpu|cpu` and `--precision half|full` for `--render` and `--benchmark`
 (both use the CPU unless given `--device gpu`; `--precision` is full for `--render` and half for

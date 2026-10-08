@@ -26,6 +26,15 @@ public:
     // a fast half-size decode.
     ImagePtr get(const std::string& pathU8, bool proxy, std::string* err = nullptr, const Decode& decode = {},
                  int proxyEdge = kProxyEdge);
+    // The full-resolution image, kept until the next full-resolution get() takes it. A full-size
+    // render learns its size from this before evaluating (initContextSize), and the Image Input
+    // node then reads the same decode instead of making a second one: the full image is otherwise
+    // dropped as soon as nobody holds it.
+    ImagePtr holdFull(const std::string& pathU8, std::string* err = nullptr, const Decode& decode = {});
+    // Stores an image decoded elsewhere, from a file of fullW x fullH: with edge 0 the full image,
+    // held as holdFull holds it; otherwise the proxy of long edge `edge`. An export rendering at
+    // reduced size puts its sources here, resampled better than a preview's box filter.
+    void put(const std::string& pathU8, const Decode& decode, ImagePtr img, int fullW, int fullH, int edge = 0);
     // The proxy if it is already decoded, without decoding or waiting: for the UI thread, which
     // must not stall while the evaluator decodes.
     ImagePtr cached(const std::string& pathU8, const Decode& decode = {}, int proxyEdge = kProxyEdge);
@@ -47,6 +56,7 @@ private:
     struct Entry {
         std::map<int, ImagePtr> proxies;    // by long edge; always kept once loaded
         std::weak_ptr<const Image> full;    // kept only while in use
+        ImagePtr held;                      // holdFull's, until a full get() takes it
         int fullW = 0, fullH = 0;
         std::string error;
     };

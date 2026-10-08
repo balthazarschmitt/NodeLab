@@ -3,6 +3,26 @@
 Refractory uses [semantic versioning](https://semver.org): minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
+## 1.8.0 (2026-10-08)
+
+### Added
+- **High quality resampling** in the export dialog (darktable's option), shown when a file is
+  made smaller. It is on by default: the file renders at full resolution and is then resized,
+  as before. Turned off, scene-linear projects render a downsized file at about 1.5x its size,
+  as the preview does, and a RAW needs only its fast half-size decode: a 24 MP RAW exported at
+  2048 px takes about 1.3 s instead of 5 s, a 20 MP JPEG about 1.5 s instead of 3 s. The result
+  is very close; only the finest detail can differ slightly.
+- `--batch` takes `--timings` (each file's load, render, resize and save times) and
+  `--reduced-render` (High quality resampling off).
+
+### Changed
+- Exports decode each photo once instead of twice: a batch of 24 MP RAWs at full size takes
+  about 3.5 s per file instead of 5.2 s. Single exports and `--render` no longer make an extra
+  half-size RAW decode, and `--render` no longer decodes a preview for File Outputs a project
+  doesn't have.
+- Batch exports decode the next photo while the current one renders and saves.
+- The Lanczos resize is about a third faster, with identical results.
+
 ## 1.7.1 (2026-10-08)
 
 ### Fixed

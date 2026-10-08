@@ -29,6 +29,10 @@ struct ExportSettings {
     int sizeMode = Original;
     int longEdge = 2048;    // px, for LongEdge
     int percent = 50;       // for Percent (downscale only)
+    // darktable's high quality resampling (the default): a downsized file is rendered at full
+    // resolution and then resized. Off, scene-linear projects render it at about 1.5x the file's
+    // size, as the preview does: several times faster, and very close.
+    bool highQuality = true;
     // Lightroom's Output Sharpening, applied after resizing: for Screen, Matte Paper or Glossy
     // Paper (0 = off), at Low / Standard / High.
     enum Sharpen { SharpenOff = 0, Screen = 1, Matte = 2, Glossy = 3 };
@@ -64,6 +68,9 @@ const std::vector<ExportPreset>& builtInExportPresets();
 // reads, so edges stay sharp without dark or bright halos. Filter linear-light values: with
 // srgbEncoded the values are decoded first and re-encoded after.
 std::shared_ptr<Image> resizeLanczos(const Image& src, int w, int h, bool srgbEncoded = false);
+
+// The size an image of w x h is exported at with the size option (never larger).
+void exportSize(int w, int h, const ExportSettings& s, int& ow, int& oh);
 
 // Applies the size option (Lanczos-3 in linear light; never enlarges). srgbEncoded: the values
 // are sRGB-encoded (legacy projects).
@@ -169,6 +176,8 @@ public:
     Progress progress() const;
     // Log lines since the last call.
     std::vector<std::string> takeLog();
+    // Adds where each file's time went (load, render, resize, save) to its log line.
+    bool timings = false;
 
 private:
     void run(nlohmann::json graph, std::vector<ExportItem> items, int inputNode, ExportSettings s, bool gpu);

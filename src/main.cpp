@@ -202,10 +202,11 @@ static int benchmarkHeadless(const std::string& project, bool full, int runs, bo
     return 0;
 }
 
-// Refractory.exe --batch project.refract outDir [--png|--jpg|--tif|--exr|--webp|--jxl|--avif] [--depth N] [--quality Q] in1 in2 ... : runs
+// Refractory.exe --batch project.refract outDir [--png|--jpg|--tif|--exr|--webp|--jxl|--avif] [--depth N] [--quality Q] [--reduced-render] [--timings] in1 in2 ... : runs
 // each source image through the project (fed into its first Image Input) and writes
 // outDir/<name>.<ext>, or as the project's filename template names it. Unset options come
-// from the project's Export settings.
+// from the project's Export settings. --reduced-render renders downsized files at about 1.5x
+// their size instead of full resolution (high quality resampling off).
 static int batchHeadless(const std::string& project, const std::string& outDir, std::vector<std::string> args) {
     Graph g;
     nlohmann::json ui;
@@ -218,6 +219,7 @@ static int batchHeadless(const std::string& project, const std::string& outDir, 
     if (auto e = ui.find("export"); e != ui.end()) s.fromJson(*e);
     std::vector<ExportItem> items;
     std::vector<std::string> sources;
+    bool timings = false;
     for (size_t i = 0; i < args.size(); ++i) {
         const std::string& a = args[i];
         if (a == "--jpg") s.format = ExportSettings::JPEG;
@@ -230,6 +232,8 @@ static int batchHeadless(const std::string& project, const std::string& outDir, 
         else if (a == "--depth" && i + 1 < args.size()) s.depth = std::atoi(args[++i].c_str());
         else if (a == "--quality" && i + 1 < args.size())
             s.jpegQuality = std::clamp(std::atoi(args[++i].c_str()), 1, 100), s.lossless = false;
+        else if (a == "--timings") timings = true;
+        else if (a == "--reduced-render") s.highQuality = false;
         else if (a.rfind("--", 0) != 0) sources.push_back(a);
     }
     std::vector<NameSource> names;
@@ -248,9 +252,14 @@ static int batchHeadless(const std::string& project, const std::string& outDir, 
     std::error_code ec;
     std::filesystem::create_directories(u8ToPath(outDir), ec);
     Exporter ex;
+    ex.timings = timings;
+    const auto t0 = std::chrono::steady_clock::now();
     ex.start(g.toJson(), std::move(items), input, s);
     ex.wait();
     for (const std::string& line : ex.takeLog()) std::printf("%s\n", line.c_str());
+    if (timings)
+        std::printf("%d files in %.2f s\n", ex.progress().done,
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
     return ex.progress().failed ? 1 : 0;
 }
 

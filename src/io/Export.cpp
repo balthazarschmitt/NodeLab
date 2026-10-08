@@ -7,6 +7,8 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <functional>
+#include <future>
 #include <numbers>
 #include <optional>
 #include <set>
@@ -23,6 +25,7 @@
 #include "io/Library.h"
 #include "nodes/ImageOps.h"
 #include "io/Paths.h"
+#include "io/RawDecode.h"
 #include "nodes/io/IONodes.h"
 #include "nodes/utility/UtilityNodes.h"
 
@@ -47,7 +50,7 @@ SaveOptions ExportSettings::saveOptions(const std::string& source, int w, int h)
 
 nlohmann::json ExportSettings::toJson() const {
     return {{"format", format},     {"depth", depth},           {"jpegQuality", jpegQuality}, {"lossless", lossless},
-            {"sizeMode", sizeMode}, {"longEdge", longEdge},     {"percent", percent},
+            {"sizeMode", sizeMode}, {"longEdge", longEdge},     {"percent", percent}, {"highQuality", highQuality},
             {"fileOutputs", fileOutputs}, {"nameTemplate", nameTemplate},   {"sharpenFor", sharpenFor},
             {"sharpenAmount", sharpenAmount}, {"colorSpace", colorSpace}};
 }
@@ -61,6 +64,7 @@ void ExportSettings::fromJson(const nlohmann::json& j) {
     sizeMode = std::clamp(j.value("sizeMode", sizeMode), 0, 2);
     longEdge = std::clamp(j.value("longEdge", longEdge), 16, 65536);
     percent = std::clamp(j.value("percent", percent), 1, 100);
+    if (auto q = j.find("highQuality"); q != j.end() && q->is_boolean()) highQuality = q->get<bool>();
     fileOutputs = j.value("fileOutputs", fileOutputs);
     sharpenFor = std::clamp(j.value("sharpenFor", sharpenFor), 0, 3);
     sharpenAmount = std::clamp(j.value("sharpenAmount", sharpenAmount), 0, 2);
@@ -79,6 +83,7 @@ bool ExportSettings::sameOutput(const ExportSettings& o) const {
     // The depth means nothing for JPEG and WebP, the quality nothing for lossless files, and
     // lossless nothing for formats without it.
     if (format == JPEG || format == WEBP) a.erase("depth"), b.erase("depth");
+    if (sizeMode == Original) a.erase("highQuality"), b.erase("highQuality");  // nothing is resized
     if (!hasLossless(FileFormat(format))) a.erase("lossless"), b.erase("lossless");
     if (!hasQuality(FileFormat(format)) || (hasLossless(FileFormat(format)) && lossless && o.lossless))
         a.erase("jpegQuality"), b.erase("jpegQuality");
@@ -122,6 +127,9 @@ float lanczos3(double x) {
     return float(3.0 * std::sin(px) * std::sin(px / 3.0) / (px * px));
 }
 
+// Four floats in one register (GCC's vector extension).
+using V4 = float __attribute__((vector_size(16)));
+
 // Per output sample: the first source sample and `stride` weights (zero-padded), normalised.
 struct Taps {
     std::vector<int> first;
@@ -157,39 +165,52 @@ Taps lanczosTaps(int n, int m) {
 std::shared_ptr<Image> resizeLanczos(const Image& src, int w, int h, bool srgbEncoded) {
     w = std::max(1, w);
     h = std::max(1, h);
-    // Linear light, colour premultiplied by alpha.
-    Image in(src.w, src.h);
+    const Taps tx = lanczosTaps(src.w, w), ty = lanczosTaps(src.h, h);
+
+    // Horizontal pass into src.h rows of w pixels. Each source row is first converted to linear
+    // light, colour premultiplied by alpha, in a buffer of its own: a converted copy of the whole
+    // source would be as big as the source and cost a pass over it.
+    // The taps without zero weights (padding, and taps past the edge), as offsets into a row,
+    // so the inner loop has no branches.
+    std::vector<int> hn(w), hoff(size_t(w) * tx.stride);
+    std::vector<float> hw(size_t(w) * tx.stride);
+    for (int x = 0; x < w; ++x) {
+        const size_t base = size_t(x) * tx.stride;
+        int n = 0;
+        for (int k = 0; k < tx.stride && tx.first[x] + k < src.w; ++k)
+            if (tx.w[base + k] != 0.0f) {
+                hoff[base + n] = (tx.first[x] + k) * 4;
+                hw[base + n++] = tx.w[base + k];
+            }
+        hn[x] = n;
+    }
+    Image mid(w, src.h);
     parallelFor(src.h, [&](int y) {
+        thread_local std::vector<float> buf;
+        buf.resize(size_t(src.w) * 4);
         for (int x = 0; x < src.w; ++x) {
-            const size_t i = size_t(y) * src.w + x;
-            const float* s = src.pixel(i);
-            float* d = in.pixel(i);
+            const float* s = src.pixel(size_t(y) * src.w + x);
+            float* d = &buf[size_t(x) * 4];
             const float a = std::clamp(s[3], 0.0f, 1.0f);
             for (int c = 0; c < 3; ++c) d[c] = (srgbEncoded ? colormath::srgbToLinear(s[c]) : s[c]) * a;
             d[3] = a;
         }
-    });
-    const Taps tx = lanczosTaps(src.w, w), ty = lanczosTaps(src.h, h);
-
-    // Horizontal pass into src.h rows of w pixels.
-    Image mid(w, src.h);
-    parallelFor(src.h, [&](int y) {
-        const float* row = in.pixel(size_t(y) * src.w);
+        const float* row = buf.data();
         for (int x = 0; x < w; ++x) {
-            const float* wt = &tx.w[size_t(x) * tx.stride];
-            float acc[4] = {0, 0, 0, 0}, lo[4], hi[4];
-            for (int c = 0; c < 4; ++c) lo[c] = INFINITY, hi[c] = -INFINITY;
-            for (int k = 0; k < tx.stride && tx.first[x] + k < src.w; ++k) {
-                if (wt[k] == 0.0f) continue;
-                const float* p = row + size_t(tx.first[x] + k) * 4;
-                for (int c = 0; c < 4; ++c) {
-                    acc[c] += wt[k] * p[c];
-                    lo[c] = std::min(lo[c], p[c]);
-                    hi[c] = std::max(hi[c], p[c]);
-                }
+            const int* off = &hoff[size_t(x) * tx.stride];
+            const float* wt = &hw[size_t(x) * tx.stride];
+            // A pixel's four channels at once (the same sums and comparisons as one at a time).
+            V4 acc = {0, 0, 0, 0}, lo = {INFINITY, INFINITY, INFINITY, INFINITY}, hi = -lo;
+            for (int k = 0, n = hn[x]; k < n; ++k) {
+                V4 p;
+                std::memcpy(&p, row + off[k], sizeof p);
+                acc += wt[k] * p;
+                lo = p < lo ? p : lo;  // std::min, std::max
+                hi = hi < p ? p : hi;
             }
-            float* d = mid.pixel(size_t(y) * w + x);
-            for (int c = 0; c < 4; ++c) d[c] = std::clamp(acc[c], lo[c], hi[c]);
+            const V4 below = hi < acc ? hi : acc;  // std::clamp
+            acc = acc < lo ? lo : below;
+            std::memcpy(mid.pixel(size_t(y) * w + x), &acc, sizeof acc);
         }
     });
 
@@ -222,17 +243,27 @@ std::shared_ptr<Image> resizeLanczos(const Image& src, int w, int h, bool srgbEn
     return out;
 }
 
-std::shared_ptr<const Image> resizeForExport(const std::shared_ptr<const Image>& img, const ExportSettings& s,
-                                             bool srgbEncoded) {
-    if (!img || s.sizeMode == ExportSettings::Original) return img;
-    const int edge = std::max(img->w, img->h);
+void exportSize(int w, int h, const ExportSettings& s, int& ow, int& oh) {
+    ow = w;
+    oh = h;
+    if (s.sizeMode == ExportSettings::Original || w <= 0 || h <= 0) return;
+    const int edge = std::max(w, h);
     const int target = std::max(1, s.sizeMode == ExportSettings::LongEdge
                                        ? s.longEdge
                                        : int(std::lround(edge * std::clamp(s.percent, 1, 100) / 100.0)));
-    if (edge <= target) return img;  // never enlarge
+    if (edge <= target) return;  // never enlarge
     const double scale = double(target) / edge;
-    return resizeLanczos(*img, std::max(1, int(std::lround(img->w * scale))), std::max(1, int(std::lround(img->h * scale))),
-                         srgbEncoded);
+    ow = std::max(1, int(std::lround(w * scale)));
+    oh = std::max(1, int(std::lround(h * scale)));
+}
+
+std::shared_ptr<const Image> resizeForExport(const std::shared_ptr<const Image>& img, const ExportSettings& s,
+                                             bool srgbEncoded) {
+    if (!img) return img;
+    int w, h;
+    exportSize(img->w, img->h, s, w, h);
+    if (w == img->w && h == img->h) return img;
+    return resizeLanczos(*img, w, h, srgbEncoded);
 }
 
 std::shared_ptr<const Image> sharpenForExport(const std::shared_ptr<const Image>& img, const ExportSettings& s,
@@ -572,6 +603,108 @@ void Exporter::log(const std::string& line) {
     log_.push_back(line);
 }
 
+namespace {
+
+// Scales an image down so its long edge is at most `edge`, with the export's Lanczos filter (a
+// preview proxy's box filter would soften and alias the file).
+ImagePtr fitLanczos(const ImagePtr& img, int edge) {
+    if (!img || std::max(img->w, img->h) <= edge) return img;
+    const double scale = double(edge) / std::max(img->w, img->h);
+    return resizeLanczos(*img, std::max(1, int(std::lround(img->w * scale))), std::max(1, int(std::lround(img->h * scale))));
+}
+
+// Whether an item's files can come from a render at reduced size: downsized files, unless one asks
+// for high quality resampling. Legacy projects keep the full render, so their files stay as they
+// were, and so do File Output nodes, which are written at full size from the same evaluation.
+bool canReduce(const Graph& g, const std::vector<const ExportSettings*>& sets, bool fileOutputs) {
+    bool reduced = g.colorManagement.linear && !sets.empty() && !(fileOutputs && hasFileOutputs(g));
+    for (const ExportSettings* set : sets)
+        reduced = reduced && set->sizeMode != ExportSettings::Original && !set->highQuality;
+    return reduced;
+}
+
+// The Image Input whose file sets an item's size: the batch's, or the first with a file.
+const ImageInputNode* primaryInput(const Graph& g, int inputNode) {
+    for (const auto& [id, n] : g.nodes())
+        if (n->info().type == ImageInputNode::staticInfo().type && (inputNode ? id == inputNode : !n->paramS(0).empty()))
+            return static_cast<const ImageInputNode*>(n.get());
+    return nullptr;
+}
+
+// loadImage, or a decode made ahead of time (see Exporter::run).
+using DecodeFn = std::function<ImagePtr(const std::string& path, const ImageCache::Decode& decode, bool preview,
+                                        int& fw, int& fh, std::string& err)>;
+
+// Loads the graph's sources for a render at reduced size, the way a preview is rendered: each
+// Image Input reads a proxy of long edge ctx.proxyEdge, about 1.5x the largest file's long edge.
+// `primary` is the Image Input that sets the size (0: the first with a file); its full size goes to
+// fullW/fullH. Returns false when the files need a full-resolution render instead (a file at the
+// original size, or one too close to it to gain much); a full image already decoded is then left
+// held in the cache, so it isn't decoded again.
+bool loadReduced(const Graph& g, EvalContext& ctx, ImageCache& cache, int primary,
+                 const std::vector<const ExportSettings*>& sets, const DecodeFn& load, int& fullW, int& fullH) {
+    std::vector<const ImageInputNode*> inputs;
+    bool found = !primary;
+    for (const auto& [id, n] : g.nodes()) {
+        if (n->info().type != ImageInputNode::staticInfo().type || n->paramS(0).empty()) continue;
+        auto* in = static_cast<const ImageInputNode*>(n.get());
+        if (id == primary) inputs.insert(inputs.begin(), in), found = true;
+        else inputs.push_back(in);
+    }
+    if (inputs.empty() || !found) return false;
+    int renderEdge = 0;
+    for (const ImageInputNode* in : inputs) {
+        const std::string& path = in->paramS(0);
+        const ImageCache::Decode decode = in->decode(ctx.linear());
+        std::string err;
+        int fw = 0, fh = 0;
+        ImagePtr img;
+        // A RAW's fast half-size decode is enough for most downsized files.
+        const bool raw = raw::isRawPath(path);
+        if (raw) img = load(path, decode, true, fw, fh, err);
+        if (!renderEdge) {
+            if (!raw) img = load(path, decode, false, fw, fh, err);
+            if (!img || fw <= 0 || fh <= 0) return false;  // the full render reports the error
+            const int edge = std::max(fw, fh);
+            int need = 0;
+            for (const ExportSettings* s : sets) {
+                int w, h;
+                exportSize(fw, fh, *s, w, h);
+                need = std::max(need, std::max(w, h));
+            }
+            // Oversampled by half, so the file's own resize still antialiases and keeps detail.
+            renderEdge = need * 3 / 2;
+            if (renderEdge > edge * 4 / 5) {
+                if (!raw) cache.put(path, decode, img, fw, fh);
+                return false;
+            }
+            // A half-size RAW too small for the file: decode the whole thing.
+            if (raw && std::max(img->w, img->h) < need * 5 / 4) img = load(path, decode, false, fw, fh, err);
+            if (!img) return false;
+            fullW = fw;
+            fullH = fh;
+        } else {
+            if (raw && img && std::max(img->w, img->h) < renderEdge && std::max(img->w, img->h) < std::max(fw, fh))
+                img = nullptr;
+            if (!img) img = load(path, decode, false, fw, fh, err);
+            if (!img) continue;  // the node reports it
+        }
+        ImagePtr proxy = fitLanczos(img, renderEdge);
+        img.reset();
+        cache.put(path, decode, proxy, fw, fh, renderEdge);
+        if (in == inputs.front()) {
+            ctx.defaultW = proxy->w;
+            ctx.defaultH = proxy->h;
+            ctx.scale = float(proxy->w) / fw;
+        }
+    }
+    ctx.proxy = true;
+    ctx.proxyEdge = renderEdge;
+    return true;
+}
+
+}  // namespace
+
 void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int inputNode, ExportSettings s, bool gpu) {
     Graph jobGraph;
     try {
@@ -583,6 +716,63 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
     }
     const bool batch = inputNode != 0;
     int failed = 0;
+    auto setsOf = [&](const ExportItem& item) {
+        std::vector<const ExportSettings*> sets;
+        if (!item.output.empty()) sets.push_back(&s);
+        for (const ExportItem::Extra& e : item.extras) sets.push_back(&e.settings);
+        return sets;
+    };
+    // The next item's main source decodes on another thread while this one renders and saves:
+    // much of a RAW decode (unpacking the file) runs on one core. Its graph is set up the same
+    // way on a copy; a decode that turns out not to match is simply not used.
+    struct Decoded {
+        std::string path;
+        ImageCache::Decode decode;
+        bool preview = false;
+        ImagePtr img;
+        int fw = 0, fh = 0;
+        std::string err;
+    };
+    Graph probe;
+    if (batch) probe.fromJson(graphJson);
+    auto prefetch = [&](size_t j) -> std::future<Decoded> {
+        const ExportItem& item = items[j];
+        Graph own;
+        const Graph* g = &probe;
+        const ImageInputNode* in = nullptr;
+        try {
+            if (!item.graph.is_null()) {
+                own.fromJson(item.graph);
+                g = &own;
+                in = primaryInput(own, 0);
+            } else if (batch && (in = primaryInput(probe, inputNode))) {
+                // As the item's own render will (chooseFile can change the decode settings).
+                const_cast<ImageInputNode*>(in)->chooseFile(item.source);
+            }
+        } catch (const std::exception&) {
+            return {};
+        }
+        if (!in) return {};
+        Decoded d;
+        d.path = in->paramS(0);
+        d.decode = in->decode(g->colorManagement.linear);
+        d.preview = canReduce(*g, setsOf(item), false) && raw::isRawPath(d.path);
+        return std::async(std::launch::async, [d]() mutable {
+            try {
+                d.img = loadImage(d.path, d.err, d.decode, d.preview, &d.fw, &d.fh);
+            } catch (const std::exception& e) {
+                d.err = e.what();
+            }
+            return d;
+        });
+    };
+    std::future<Decoded> next = items.size() > 1 ? prefetch(0) : std::future<Decoded>{};
+    using Clock = std::chrono::steady_clock;
+    auto seconds = [](Clock::time_point a, Clock::time_point b) {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "%.2f s", std::chrono::duration<double>(b - a).count());
+        return std::string(buf);
+    };
     for (size_t i = 0; i < items.size() && !cancel_; ++i) {
         const ExportItem& item = items[i];
         // An item with its own edit (the library) renders that instead of the job's graph.
@@ -609,48 +799,115 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
         ctx.colorManagement = g.colorManagement;
         ctx.gpu = gpu && gpu::available();
         ctx.gpuHalf = false;
+        const Clock::time_point start = Clock::now();
+        Clock::time_point loaded = start, rendered = start;
+        Decoded pre = next.valid() ? next.get() : Decoded{};
+        const DecodeFn decodeFile = [&](const std::string& path, const ImageCache::Decode& decode, bool preview, int& fw,
+                                        int& fh, std::string& err) -> ImagePtr {
+            if (pre.img && pre.path == path && pre.decode == decode && pre.preview == preview) {
+                fw = pre.fw;
+                fh = pre.fh;
+                return std::exchange(pre.img, nullptr);
+            }
+            return loadImage(path, err, decode, preview, &fw, &fh);
+        };
         try {
+            Node* in = nullptr;
             if (batch && !ownGraph) {
-                Node* in = g.find(inputNode);
+                in = g.find(inputNode);
                 if (!in) throw std::runtime_error("the batch Image Input node is gone");
                 // As if chosen in the UI: a RAW batch from a JPEG project gets the RAW defaults.
                 static_cast<ImageInputNode&>(*in).chooseFile(item.source);
                 setStage("Loading " + pathToU8(u8ToPath(item.source).filename()));
-                std::string err;
-                ImagePtr src = cache.get(item.source, false, &err,
-                                         static_cast<const ImageInputNode&>(*in).decode(ctx.linear()));
-                if (!src) throw std::runtime_error(err.empty() ? "could not load " + item.source : err);
-                // Size from this source, not whichever Image Input happens to come first.
-                ctx.defaultW = src->w;
-                ctx.defaultH = src->h;
-                ctx.scale = 1.0f;
-            } else {
-                initContextSize(g, ctx);
             }
-            Evaluator ev;
             // File Output nodes have fixed paths, so a batch would overwrite them on every item.
             const bool fileOutputs = !batch && !ownGraph && (s.fileOutputs || item.output.empty());
+            const std::vector<const ExportSettings*> sets = setsOf(item);
+            bool reduced = canReduce(g, sets, fileOutputs);
+            int fullW = 0, fullH = 0;
+            auto load = [&] {
+                if (reduced) reduced = loadReduced(g, ctx, cache, in ? inputNode : 0, sets, decodeFile, fullW, fullH);
+                if (!reduced) {
+                    ctx.proxy = false;
+                    // A full image decoded ahead goes in the cache, held for the node.
+                    if (pre.img && !pre.preview) cache.put(pre.path, pre.decode, pre.img, pre.fw, pre.fh);
+                }
+                pre.img.reset();
+                // Now the next item's decode can start.
+                if (i + 1 < items.size() && !cancel_ && !next.valid()) next = prefetch(i + 1);
+                if (reduced) return;
+                if (in) {
+                    std::string err;
+                    // Held in the cache for the node, which would otherwise decode the file again.
+                    ImagePtr src = cache.holdFull(item.source, &err, static_cast<const ImageInputNode&>(*in).decode(ctx.linear()));
+                    if (!src) throw std::runtime_error(err.empty() ? "could not load " + item.source : err);
+                    // Size from this source, not whichever Image Input happens to come first.
+                    ctx.defaultW = src->w;
+                    ctx.defaultH = src->h;
+                    ctx.scale = 1.0f;
+                } else {
+                    initContextSize(g, ctx);
+                }
+            };
+            Evaluator ev;
             // A full-resolution render needs only the outputs still to be read: dropping the rest
             // keeps a big photo's peak memory to a few images instead of one per node. File
             // Outputs read the graph again afterwards, so they keep everything.
             ev.releaseIntermediates = !fileOutputs;
-            if (!item.output.empty() || !item.extras.empty()) {
-                setStage("Rendering " + outName);
+            if (sets.empty()) {
+                load();
+                loaded = Clock::now();
+            } else {
                 ImagePtr img;
-                if (outId) {
-                    // The device is held while evaluating only (the previews wait meanwhile), not
-                    // while resizing and saving.
-                    std::optional<gpu::Scope> device;
-                    if (ctx.gpu) device.emplace();
-                    img = ev.evaluateDisplay(g, outId, ctx);
+                int ew = 0, eh = 0;  // the render's size at full resolution
+                for (;;) {
+                    load();
+                    loaded = Clock::now();
+                    setStage("Rendering " + outName);
+                    if (outId) {
+                        // The device is held while evaluating only (the previews wait meanwhile),
+                        // not while resizing and saving.
+                        std::optional<gpu::Scope> device;
+                        if (ctx.gpu) device.emplace();
+                        img = ev.evaluateDisplay(g, outId, ctx);
+                    }
+                    if (!img) throw std::runtime_error("the Output node has no input");
+                    rendered = Clock::now();
+                    if (!reduced) {
+                        ew = img->w;
+                        eh = img->h;
+                        break;
+                    }
+                    // Exact when the graph keeps its source's size; scaled back up otherwise (a crop).
+                    if (img->w == ctx.defaultW && img->h == ctx.defaultH) {
+                        ew = fullW;
+                        eh = fullH;
+                    } else {
+                        ew = std::max(1, int(std::lround(img->w / ctx.scale)));
+                        eh = std::max(1, int(std::lround(img->h / ctx.scale)));
+                    }
+                    bool enough = true;
+                    for (const ExportSettings* set : sets) {
+                        int w, h;
+                        exportSize(ew, eh, *set, w, h);
+                        enough = enough && std::max(w, h) <= std::max(img->w, img->h);
+                    }
+                    if (enough) break;
+                    // A crop left less than the files need: render at full resolution after all.
+                    reduced = false;
+                    img.reset();
                 }
-                if (!img) throw std::runtime_error("the Output node has no input");
                 const std::string meta = batch || ownGraph ? item.source : metadataSource(g);
                 // Every file comes from the one render: each resizes and sharpens it for itself.
                 auto write = [&](const std::string& path, const ExportSettings& set) {
+                    const Clock::time_point t0 = Clock::now();
                     // Before the view transform: resampling in scene light.
-                    ImagePtr out = resizeForExport(img, set, !ctx.linear());
+                    ImagePtr out = img;
+                    int w, h;
+                    exportSize(ew, eh, set, w, h);
+                    if (w != img->w || h != img->h) out = resizeLanczos(*img, w, h, !ctx.linear());
                     out = sharpenForExport(out, set, ctx.linear());
+                    const Clock::time_point t1 = Clock::now();
                     if (cancel_) return false;
                     setStage("Saving " + pathToU8(u8ToPath(path).filename()));
                     std::error_code ec;
@@ -659,7 +916,11 @@ void Exporter::run(nlohmann::json graphJson, std::vector<ExportItem> items, int 
                     SaveOptions opt = set.saveOptions(meta, out->w, out->h);
                     opt.xmp = item.xmp;
                     if (!saveRendered(path, out, ctx.colorManagement, opt, err)) throw std::runtime_error(err);
-                    log("Wrote " + path + " (" + std::to_string(out->w) + " x " + std::to_string(out->h) + ")");
+                    std::string line = "Wrote " + path + " (" + std::to_string(out->w) + " x " + std::to_string(out->h) + ")";
+                    if (timings)
+                        line += ": load " + seconds(start, loaded) + ", render " + seconds(loaded, rendered) + ", resize " +
+                                seconds(t0, t1) + ", save " + seconds(t1, Clock::now()) + (reduced ? " (reduced render)" : "");
+                    log(line);
                     return true;
                 };
                 if (!item.output.empty() && !write(item.output, s)) break;
