@@ -384,6 +384,8 @@ int main(int argc, char** argv) {
         if (a == "--screenshot" && i + 1 < argc) opt.screenshot = argv[++i];
         else if (a == "--script" && i + 1 < argc) opt.script = argv[++i];
         else if (a == "--device" && i + 1 < argc) opt.gpu = std::string(argv[++i]) == "gpu";
+        else if (a == "--theme" && i + 1 < argc) opt.theme = argv[++i];
+        else if (a == "--ui-scale" && i + 1 < argc) opt.uiScale = float(std::atof(argv[++i]));
         else opt.project = a;
     }
     App app;

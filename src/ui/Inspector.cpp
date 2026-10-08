@@ -181,9 +181,14 @@ bool numberSlider(Node& node, int i, const std::string& label, float width, bool
 }
 
 // Other params: the name on the left, dim, and the widget in the rest of the row. Returns the
-// widget's width.
+// widget's width. A name too long for the column (a narrow panel, a large UI scale) goes on its
+// own line above a full-width widget rather than being cut off.
 float leftLabel(const std::string& name, float width) {
     const float labelW = std::floor(width * 0.38f);
+    if (ImGui::CalcTextSize(name.c_str()).x > labelW - ImGui::GetStyle().ItemInnerSpacing.x) {
+        ImGui::TextDisabled("%s", name.c_str());
+        return width;
+    }
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const float h = ImGui::GetFrameHeight();
     const ImVec4 clip(p.x, p.y, p.x + labelW - ImGui::GetStyle().ItemInnerSpacing.x, p.y + h);
@@ -320,7 +325,7 @@ bool drawGroupInterface(GroupNode& group, Graph& outer) {
     bool changed = false;
     char name[128];
     std::snprintf(name, sizeof(name), "%s", group.name.c_str());
-    ImGui::SetNextItemWidth(240);
+    ImGui::SetNextItemWidth(240 * style::scale());
     if (ImGui::InputText("Group name", name, sizeof(name))) {
         group.name = name;
         group.syncInner();
@@ -336,7 +341,7 @@ bool drawGroupInterface(GroupNode& group, Graph& outer) {
             ImGui::PushID(i);
             char buf[64];
             std::snprintf(buf, sizeof(buf), "%s", pins[i].name.c_str());
-            ImGui::SetNextItemWidth(150);
+            ImGui::SetNextItemWidth(150 * style::scale());
             if (ImGui::InputText("##name", buf, sizeof(buf))) {
                 pins[i].name = buf;
                 group.syncInner();
@@ -344,7 +349,7 @@ bool drawGroupInterface(GroupNode& group, Graph& outer) {
             }
             ImGui::SameLine();
             int t = int(pins[i].type);
-            ImGui::SetNextItemWidth(100);
+            ImGui::SetNextItemWidth(ui::comboWidth(types, 3, 100));
             if (ImGui::Combo("##type", &t, types, 3)) {
                 group.setPinType(outer, output, i, PinType(t));
                 changed = true;
@@ -372,7 +377,7 @@ bool drawGroupInterface(GroupNode& group, Graph& outer) {
                 GroupNode::InputRange r = group.ranges[size_t(i)];
                 float v[3] = {r.def, r.min, r.max};
                 ImGui::Indent();
-                ImGui::SetNextItemWidth(240);
+                ImGui::SetNextItemWidth(240 * style::scale());
                 if (ImGui::DragFloat3("Default / Min / Max", v, 0.01f, -1e6f, 1e6f, "%.3f")) {
                     // Moving min past max (or back) drags the other along.
                     if (v[1] != r.min) v[2] = std::max(v[2], v[1]);
@@ -458,7 +463,7 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
             bool changed = false;
             char buf[64];
             std::snprintf(buf, sizeof(buf), "%s", pins[size_t(v->pin)].name.c_str());
-            ImGui::SetNextItemWidth(240);
+            ImGui::SetNextItemWidth(240 * style::scale());
             if (ImGui::InputText("Name", buf, sizeof(buf)) && buf[0]) {
                 owner->renamePin(output, v->pin, buf);
                 changed = true;
@@ -466,7 +471,7 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
             // The socket's type: Number for a slider, Channel for a mask, Image for pixels.
             static const char* kTypes[] = {"Image", "Channel", "Number"};
             int t = int(pins[size_t(v->pin)].type);
-            ImGui::SetNextItemWidth(240);
+            ImGui::SetNextItemWidth(ui::comboWidth(kTypes, 3, 240));
             if (ImGui::Combo("Type", &t, kTypes, 3)) {
                 owner->setPinType(*ownerParent, output, v->pin, PinType(t));
                 changed = true;
@@ -474,7 +479,7 @@ bool drawInspector(Graph& g, int selectedNode, GroupNode* owner, Graph* ownerPar
             if (!output && pins[size_t(v->pin)].type != PinType::Image && v->pin < int(owner->ranges.size())) {
                 GroupNode::InputRange r = owner->ranges[size_t(v->pin)];
                 float vals[3] = {r.def, r.min, r.max};
-                ImGui::SetNextItemWidth(240);
+                ImGui::SetNextItemWidth(240 * style::scale());
                 if (ImGui::DragFloat3("Default / Min / Max", vals, 0.01f, -1e6f, 1e6f, "%.3f")) {
                     if (vals[1] != r.min) vals[2] = std::max(vals[2], vals[1]);
                     else if (vals[2] != r.max) vals[1] = std::min(vals[1], vals[2]);

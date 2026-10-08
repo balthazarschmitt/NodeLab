@@ -5,6 +5,8 @@
 // Script targets (UiItems.h): icon-only widgets answer to their name ("Before / After").
 #include <imgui.h>
 
+#include <string>
+
 namespace ui {
 
 // A square, borderless icon button the height of a frame. `on` draws it pressed (a toggle's
@@ -34,5 +36,19 @@ void Tooltip(const char* name, const char* key = nullptr, const char* text = nul
 
 // The theme's accent colour (primary buttons, toggles, selection marks).
 ImU32 accent();
+
+// The width a combo needs to show its widest item beside the arrow, at least `minWidth` (in
+// unscaled pixels). Fixed widths clip items in other languages of size: larger UI scales grow
+// the font but not a literal width. `items` is a list, or ImGui's "a\0b\0" form.
+float comboWidth(const char* const* items, int count, float minWidth = 0.0f);
+float comboWidth(const char* zeroSeparated, float minWidth = 0.0f);
+
+// A floating window's first size, `w` x `h` unscaled pixels grown with the UI scale (so its
+// contents fit at 150%), but never larger than 90% of the main window.
+ImVec2 windowSize(float w, float h);
+
+// `text` shortened with "..." to fit `maxWidth`, so a long name ends visibly rather than being
+// cut through a letter.
+std::string ellipsize(const std::string& text, float maxWidth);
 
 }  // namespace ui

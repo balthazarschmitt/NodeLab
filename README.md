@@ -137,11 +137,11 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Import image | File > Import Image, or drop a file on the window |
 | Library | File > Open Folder (Ctrl+Shift+O), drop a folder on the window, or `NodeLab.exe <folder>`: a filmstrip of the folder's photos. Click or ←/→ to open one; its edit is saved automatically in `<photo>.nlproj` beside it. New photos start as Image Input → Denoise → Basic → Output |
 | Culling | In the Library: 0-5 rate, P pick, X reject, U unflag, 6-9 colour labels; Ctrl+click / Shift+click select several; the filter menu shows picks, stars, rejects, labels, edited photos or duplicates |
-| Library metadata | The Library's Metadata button (or View > Metadata): title, caption, keywords and colour label of the selected photos; the Search box finds photos by name, title, caption or keyword. Exports carry them, with the rating, as XMP |
+| Library metadata | The Library toolbar's info button (or View > Metadata): title, caption, keywords and colour label of the selected photos; the Search box finds photos by name, title, caption or keyword. Exports carry them, with the rating, as XMP |
 | Collections and stacks | The Library's Collections menu: named lists of photos from any folders. Ctrl+G stacks the selected photos, S expands / collapses, Ctrl+Shift+G unstacks |
 | Find duplicates | The Library's Photo menu: groups copies and re-saved, resized or rotated versions of the same picture under the Duplicates filter |
 | Compare / Survey | C: two photos side by side, zoomed and panned together (←/→ next candidate, ↑ make select, ↓ swap). N: the selected photos tiled; / or the x removes one |
-| Library sort | The Library toolbar's Sort menu: file name, capture time, file type, rating, pick, edit time, camera, lens, ISO, focal length; A-Z / Z-A |
+| Library sort | The Library toolbar's Sort menu: file name, capture time, file type, rating, pick, edit time, camera, lens, ISO, focal length; ascending / descending |
 | Virtual copies | Ctrl+' (or right-click a thumbnail): another edit of the same photo, with its own sidecar, rating and flag |
 | Library grid | G (or the Library's Grid button): the whole folder as cards; click the stars to rate, double-click / Enter / E opens a photo, Esc goes back; Ctrl+wheel resizes. A filter bar (stars, flags, labels, sort, search) and a Folders / Collections column on the left |
 | Copy / paste edit | Ctrl+Shift+C copies the open photo's edit, Ctrl+Shift+V pastes it onto the selected photos (each keeps its own file and rating) |

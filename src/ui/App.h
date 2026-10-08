@@ -33,6 +33,8 @@ public:
         std::string screenshot;  // debug: save a frame once evaluation settles, then exit
         std::string script;      // debug: UI automation script (see UiScript.h)
         bool gpu = false;        // debug: --device gpu, so automated runs use the GPU device too
+        std::string theme;       // debug: --theme NAME, a preset for automated runs
+        float uiScale = 0;       // debug: --ui-scale X, Resolution Scale for automated runs
     };
     int run(const RunOptions& opt);
 
@@ -367,6 +369,7 @@ private:
     bool showOriginal_ = true, showEditor_ = true, showInspector_ = true, showResult_ = true;
     bool resetLayout_ = false;
     bool automated_ = false;
+    bool reduceMotion_ = false;  // preference: no glides (automated runs too, so scripts' views hold)
     std::string iniPath_;
 
     // Undo steps, named for the History panel (graph/History.h, or historyName_).

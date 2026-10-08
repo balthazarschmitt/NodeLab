@@ -123,6 +123,7 @@ void App::loadPreferences() {
         inspectorOverlay_ = j.value("inspector", std::string("Overlay")) == "Overlay";
         editor_.showTimings = j.value("nodeTimings", editor_.showTimings);
         editor_.showMinimap = j.value("minimap", editor_.showMinimap);
+        reduceMotion_ = j.value("reduceMotion", reduceMotion_);
         autosave_ = j.value("autosave", autosave_);
         autosaveMinutes_ = std::clamp(j.value("autosaveMinutes", autosaveMinutes_), 1, 120);
         const std::string layout = j.value("layout", std::string());
@@ -178,6 +179,7 @@ void App::savePreferences() const {
                         {"inspector", inspectorOverlay_ ? "Overlay" : "Panel"},
                         {"nodeTimings", editor_.showTimings},
                         {"minimap", editor_.showMinimap},
+                        {"reduceMotion", reduceMotion_},
                         {"autosave", autosave_},
                         {"autosaveMinutes", autosaveMinutes_},
                         {"layout", kLayoutNames[layoutPreset_]},
@@ -226,6 +228,7 @@ int App::run(const RunOptions& opt) {
     automated_ = !opt.screenshot.empty() || script.active();
     if (automated_) {
         inspectorOverlay_ = false;
+        reduceMotion_ = true;
         // Scripts may make collections: never in the user's own list.
         const std::filesystem::path col = std::filesystem::temp_directory_path() / "nodelab_ui_collections.json";
         std::error_code ec;
@@ -276,7 +279,13 @@ int App::run(const RunOptions& opt) {
     }
     resetLayout_ = !haveLayout;
 
-    theme::apply();  // the default theme; loadPreferences applies the user's
+    if (automated_) {
+        // Screenshots of other themes and scales, for checking contrast and layout.
+        for (const theme::Theme& p : theme::presets())
+            if (p.name == opt.theme) theme::current() = p;
+        if (opt.uiScale > 0) style::setUiScale(opt.uiScale);
+    }
+    theme::apply();  // the default theme (or --theme); loadPreferences applies the user's
     // Fonts and sizes are built before the first frame (style::build), once preferences have set
     // the UI scale.
 
@@ -742,6 +751,7 @@ void App::drawEditorWindow() {
         editor_.setTimings(groupPath_.empty() ? nodeMs_ : std::unordered_map<int, double>{},
                            groupPath_.empty() ? nodeGpu_ : std::unordered_map<int, bool>{});
         editor_.insideGroup = !groupPath_.empty();
+        editor_.animateView = !reduceMotion_;
         NodeEditor::Result r = editor_.draw(g, selected_, preview, previewPin_);
         // Value Input / Output nodes added, renamed or deleted inside the group change its sockets.
         if (GroupNode* owner = currentGroupOwner()) {
@@ -1015,7 +1025,7 @@ void App::drawViewerWindow(Viewer& v, bool isMain) {
         const float step = 30.0f * float((v.id - 1) % 6);
         ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f + step, vp->WorkPos.y + vp->WorkSize.y * 0.45f + step),
                                 ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(ImVec2(520, 420), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ui::windowSize(520, 420), ImGuiCond_FirstUseEver);
     }
     if (ImGui::Begin(title.c_str(), open, kCanvasFlags)) {
         // Toolbar: what is shown, and pin controls for extra viewers.
@@ -1523,13 +1533,13 @@ void App::drawColorMenu() {
     for (int i = 0; i < 3; ++i)
         if (ImGui::RadioButton(colormgmt::kViewNames[i], &cm.view, i)) changed = true;
     ImGui::BeginDisabled(cm.view != ColorManagement::AgX);
-    ImGui::SetNextItemWidth(160);
+    ImGui::SetNextItemWidth(ui::comboWidth(colormgmt::kLookNames, 3, 160));
     changed |= ImGui::Combo("Look", &cm.look, colormgmt::kLookNames, 3);
     ImGui::EndDisabled();
-    ImGui::SetNextItemWidth(160);
+    ImGui::SetNextItemWidth(160 * style::scale());
     changed |= ImGui::DragFloat("Exposure", &cm.exposure, 0.01f, -10.0f, 10.0f, "%.2f");
     if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) cm.exposure = 0.0f, changed = true;
-    ImGui::SetNextItemWidth(160);
+    ImGui::SetNextItemWidth(160 * style::scale());
     changed |= ImGui::DragFloat("Gamma", &cm.gamma, 0.005f, 0.01f, 5.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
     if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) cm.gamma = 1.0f, changed = true;
     ImGui::EndDisabled();
@@ -1616,7 +1626,7 @@ void App::drawMainMenu() {
         if (ImGui::BeginMenu("Loupe Overlay")) {
             ImGui::MenuItem("Grid", nullptr, &loupe_.grid);
             ImGui::MenuItem("Guides", nullptr, &loupe_.guides);
-            ImGui::SetNextItemWidth(160);
+            ImGui::SetNextItemWidth(160 * style::scale());
             ImGui::SliderFloat("Grid Size", &loupe_.gridSize, 8.0f, 400.0f, "%.0f px", ImGuiSliderFlags_Logarithmic);
             if (ImGui::MenuItem("Center Guides", nullptr, false, loupe_.guides)) loupe_.guideX = loupe_.guideY = 0.5f;
             ImGui::EndMenu();
@@ -2069,7 +2079,7 @@ void App::stepHistory(int steps) {
 // Lightroom's History panel: every undo step by name, newest at the top. Clicking a step goes
 // back (or forward) to it; an edit made from there drops the steps above, as undo does.
 void App::drawHistoryWindow() {
-    ImGui::SetNextWindowSize(ImVec2(300, 360), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ui::windowSize(300, 360), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin(("History" + panelId("History")).c_str(), &showHistory_)) {
         ImGui::End();
         return;
@@ -2518,12 +2528,12 @@ void App::handleLibraryActions(const LibraryPanel::Actions& a) {
         if (valid)
             ImGui::Text("Remove Copy %d of %s?\nIts edit goes to the Recycle Bin; the photo stays.", library_.copyOf(removeCopyIndex_),
                         pathToU8(u8ToPath(library_.photo(removeCopyIndex_)).filename()).c_str());
-        if (ImGui::Button("Remove", ImVec2(120, 0)) && valid) {
+        if (ImGui::Button("Remove", ImVec2(120 * style::scale(), 0)) && valid) {
             removeVirtualCopy(removeCopyIndex_);
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120, 0)) || !valid) ImGui::CloseCurrentPopup();
+        if (ImGui::Button("Cancel", ImVec2(120 * style::scale(), 0)) || !valid) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
     if (!a.openCollection.empty()) openCollection(a.openCollection);
@@ -2780,6 +2790,9 @@ void App::drawPreferencesWindow() {
             ImGui::TextDisabled("In the Nodes workspace (Develop always has the panel).\nChanging this rebuilds its layout.");
             ImGui::SeparatorText("Node Editor");
             changed |= ImGui::Checkbox("Node Timings", &editor_.showTimings);
+            ImGui::SeparatorText("Motion");
+            changed |= ImGui::Checkbox("Reduce Motion", &reduceMotion_);
+            ImGui::TextDisabled("Framing the graph (Home, \".\") jumps instead of gliding.");
             break;
         }
         case 1: {  // Themes
@@ -3094,7 +3107,7 @@ void App::fileNaming(const std::string& exampleSource) {
 
 void App::drawExportWindow() {
     if (!showExport_) return;
-    ImGui::SetNextWindowSize(ImVec2(520, 660), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ui::windowSize(520, 660), ImGuiCond_FirstUseEver);
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
                             ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
@@ -3129,7 +3142,7 @@ void App::drawExportWindow() {
     if (ImGui::BeginTabBar("##exportTabs", ImGuiTabBarFlags_DrawSelectedOverline)) {
         if (ImGui::BeginTabItem("Single")) {
             tab = 0;
-            ImGui::TextUnformatted("Renders the Output node at full resolution.");
+            ImGui::TextWrapped("Renders the Output node at full resolution.");
             ImGui::TextUnformatted("File");
             if (pathField("##exportPath", exportPath_, sizeof(exportPath_)))
                 if (auto p = saveFileDialog("Export result", kSaveImageFilter, es.extension() + 1)) {
@@ -3180,7 +3193,7 @@ void App::drawExportWindow() {
                 }
             ImGui::SameLine();
             if (ImGui::SmallButton("Clear")) batchSources_.clear();
-            if (ImGui::BeginChild("##sources", ImVec2(0, 110), ImGuiChildFlags_Borders)) {
+            if (ImGui::BeginChild("##sources", ImVec2(0, 110 * style::scale()), ImGuiChildFlags_Borders)) {
                 int remove = -1;
                 for (int i = 0; i < int(batchSources_.size()); ++i) {
                     ImGui::PushID(i);
@@ -3205,7 +3218,7 @@ void App::drawExportWindow() {
     exportTab_ = tab;
 
     ImGui::SeparatorText("Format");
-    ImGui::SetNextItemWidth(160);
+    ImGui::SetNextItemWidth(ui::comboWidth("PNG\0JPEG\0TIFF\0OpenEXR\0WebP\0JPEG XL\0AVIF\0", 160));
     // The path field follows the format, so what it shows is the file that gets written.
     if (ImGui::Combo("##format", &es.format, "PNG\0JPEG\0TIFF\0OpenEXR\0WebP\0JPEG XL\0AVIF\0") && exportPath_[0])
         std::snprintf(exportPath_, sizeof(exportPath_), "%s", withExt(exportPath_).c_str());
@@ -3238,7 +3251,7 @@ void App::drawExportWindow() {
     }
     // Lightroom's Color Space. OpenEXR is always scene-linear Rec.709.
     if (es.format != ExportSettings::EXR) {
-        ImGui::SetNextItemWidth(160);
+        ImGui::SetNextItemWidth(ui::comboWidth(outspace::kNames, outspace::kCount, 160));
         ImGui::Combo("Color Space", &es.colorSpace, outspace::kNames, outspace::kCount);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("The space the file is written in, with its ICC profile.\n"
@@ -3246,11 +3259,11 @@ void App::drawExportWindow() {
                               "Rec.2100 PQ is HDR, with highlights above white kept: 16-bit PNG\n"
                               "or JPEG XL, 10-bit AVIF (other formats get Rec.2020).");
     }
-    ImGui::SetNextItemWidth(160);
+    ImGui::SetNextItemWidth(ui::comboWidth("Original size\0Long edge\0Percent\0", 160));
     ImGui::Combo("##size", &es.sizeMode, "Original size\0Long edge\0Percent\0");
     if (es.sizeMode == ExportSettings::LongEdge) {
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(120);
+        ImGui::SetNextItemWidth(120 * style::scale());
         ImGui::InputInt("px", &es.longEdge, 64, 512);
         es.longEdge = std::clamp(es.longEdge, 16, 65536);
     } else if (es.sizeMode == ExportSettings::Percent) {
@@ -3259,7 +3272,7 @@ void App::drawExportWindow() {
         ImGui::SliderInt("##percent", &es.percent, 1, 100, "%d %%");
     }
     // Lightroom's Output Sharpening: after resizing, for where the image will be seen.
-    ImGui::SetNextItemWidth(160);
+    ImGui::SetNextItemWidth(ui::comboWidth("No sharpening\0Sharpen for Screen\0Sharpen for Matte Paper\0Sharpen for Glossy Paper\0", 160));
     ImGui::Combo("##sharpenFor", &es.sharpenFor, "No sharpening\0Sharpen for Screen\0Sharpen for Matte Paper\0Sharpen for Glossy Paper\0");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Lightroom's Output Sharpening, applied after resizing.\n"
@@ -3374,7 +3387,7 @@ void App::restoreSnapshot(int i) {
 }
 
 void App::drawSnapshotsWindow() {
-    ImGui::SetNextWindowSize(ImVec2(300, 320), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ui::windowSize(300, 320), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin(("Snapshots" + panelId("Snapshots")).c_str(), &showSnapshots_)) {
         ImGui::End();
         return;

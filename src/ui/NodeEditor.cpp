@@ -38,6 +38,11 @@ constexpr float kTitleH = 26.0f;
 constexpr float kRowH = 24.0f;
 constexpr float kPad = 6.0f;
 constexpr float kPinR = 5.0f;
+
+// Text on the canvas in grid units, like the nodes it sits in: the UI's font without the
+// Resolution Scale or screen DPI, so a larger UI never pushes labels out of their rows (the
+// canvas zoom enlarges both together).
+float canvasFontSize() { return ImGui::GetFontSize() / style::scale(); }
 constexpr float kMinZoom = 0.25f, kMaxZoom = 2.0f;
 
 
@@ -265,8 +270,42 @@ void NodeEditor::doFrame(const Graph& g) {
         x1 = std::max(x1, n->x + kNodeW);
         y1 = std::max(y1, n->y + nodeHeightGrid(*n));
     }
-    zoom_ = std::clamp(std::min((size_.x - 60) / (x1 - x0), (size_.y - 60) / (y1 - y0)), 0.3f, 1.0f);
+    zoom_ = std::clamp(std::min((size_.x - 60) / (x1 - x0), (size_.y - 60) / (y1 - y0)), 0.3f, std::max(1.0f, style::scale()));
     pan_ = ImVec2(size_.x * 0.5f - (x0 + x1) * 0.5f * zoom_, size_.y * 0.5f - (y0 + y1) * 0.5f * zoom_);
+}
+
+// Turns the jump to the view just set into a glide from the old one.
+void NodeEditor::startGlide(float oldZoom, ImVec2 oldPan) {
+    glide_.active = false;
+    if (!animateView || (oldZoom == zoom_ && oldPan.x == pan_.x && oldPan.y == pan_.y)) return;
+    auto centre = [&](float z, ImVec2 p) { return ImVec2((size_.x * 0.5f - p.x) / z, (size_.y * 0.5f - p.y) / z); };
+    glide_ = {true, 0.0f, oldZoom, zoom_, centre(oldZoom, oldPan), centre(zoom_, pan_), oldZoom, oldPan};
+    zoom_ = oldZoom;
+    pan_ = oldPan;
+}
+
+void NodeEditor::stepGlide() {
+    if (!glide_.active) return;
+    if (zoom_ != glide_.lastZoom || pan_.x != glide_.lastPan.x || pan_.y != glide_.lastPan.y) {
+        glide_.active = false;  // the user moved the view: theirs wins
+        return;
+    }
+    glide_.t = std::min(1.0f, glide_.t + ImGui::GetIO().DeltaTime / 0.25f);
+    const float u = 1.0f - glide_.t, e = 1.0f - u * u * u;  // cubic ease-out
+    zoom_ = std::exp(std::log(glide_.z0) + (std::log(glide_.z1) - std::log(glide_.z0)) * e);
+    const ImVec2 c(glide_.c0.x + (glide_.c1.x - glide_.c0.x) * e, glide_.c0.y + (glide_.c1.y - glide_.c0.y) * e);
+    pan_ = ImVec2(size_.x * 0.5f - c.x * zoom_, size_.y * 0.5f - c.y * zoom_);
+    glide_.lastZoom = zoom_;
+    glide_.lastPan = pan_;
+    if (glide_.t >= 1.0f) glide_.active = false;
+}
+
+void NodeEditor::frameSelectedGlide(const Graph& g) {
+    const float z = zoom_;
+    const ImVec2 p = pan_;
+    frameSelected(g);
+    if (fitFrames_ > 0) glideNext_ = true;  // nothing selected: frames all next
+    else startGlide(z, p);
 }
 
 void NodeEditor::onGraphReplaced(bool frame) {
@@ -281,6 +320,7 @@ void NodeEditor::onGraphReplaced(bool frame) {
     insertLink_ = 0;
     hoverPin_ = {};
     if (frame) fitFrames_ = 3;
+    glide_.active = glideNext_ = false;
 }
 
 void NodeEditor::select(int nodeId) {
@@ -396,7 +436,7 @@ void NodeEditor::drawLinks(ImDrawList* dl, const Graph& g) const {
 
 bool NodeEditor::drawValueBox(Node& n, int param, const ImRect& box, ImDrawList* dl, const char* label) {
     const ParamDesc& d = n.info().params[param];
-    const float fs = ImGui::GetFontSize() * zoom_;
+    const float fs = canvasFontSize() * zoom_;
     bool changed = false;
     ImGui::PushID(param);
     ImGui::SetCursorScreenPos(box.Min);
@@ -462,7 +502,7 @@ bool NodeEditor::drawValueBox(Node& n, int param, const ImRect& box, ImDrawList*
 bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box, bool canInteract) {
     const ParamDesc& d = n.info().params[i];
     const float z = zoom_;
-    const float fs = ImGui::GetFontSize() * z;
+    const float fs = canvasFontSize() * z;
     const bool showText = fs >= 5.0f;
     const ImU32 textCol = theme::col(theme::FieldText);
     const ImVec4 bclip(box.Min.x + 3 * z, box.Min.y, box.Max.x - 3 * z, box.Max.y);
@@ -677,7 +717,7 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
     const float z = zoom_;
     // Collapsed nodes and reroutes are just a title bar with their pins on its ends.
     const bool bar = n.collapsed || isReroute(n);
-    const float fs = ImGui::GetFontSize() * z;
+    const float fs = canvasFontSize() * z;
     const bool showText = fs >= 5.0f;
     const bool interactive = z >= 0.45f;
     const ImVec4 clip(L.min.x, L.min.y, L.max.x, L.max.y);
@@ -872,6 +912,14 @@ void NodeEditor::layoutOverlays() {
     }
 }
 
+// A theme colour at full opacity: the canvas overlays sit over nodes, whose text would show
+// through a see-through background.
+static ImU32 opaqueCol(ImGuiCol c) {
+    ImVec4 v = ImGui::GetStyleColorVec4(c);
+    v.w = 1.0f;
+    return ImGui::GetColorU32(v);
+}
+
 void NodeEditor::drawToolbar(const Graph& g) {
     if (toolbarRect_.GetWidth() <= 0) return;
     const ImGuiStyle& st = ImGui::GetStyle();
@@ -879,7 +927,7 @@ void NodeEditor::drawToolbar(const Graph& g) {
     const float divider = st.ItemSpacing.x;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p0 = toolbarRect_.Min, p1 = toolbarRect_.Max;
-    dl->AddRectFilled(p0, p1, ImGui::GetColorU32(ImGuiCol_PopupBg, 0.92f), st.FrameRounding * 1.5f);
+    dl->AddRectFilled(p0, p1, opaqueCol(ImGuiCol_PopupBg), st.FrameRounding * 1.5f);
     dl->AddRect(p0, p1, ImGui::GetColorU32(ImGuiCol_Border), st.FrameRounding * 1.5f);
     float x = p0.x + pad;
     const float y = p0.y + pad;
@@ -893,9 +941,9 @@ void NodeEditor::drawToolbar(const Graph& g) {
     dl->AddLine(ImVec2(dx, y + h * 0.2f), ImVec2(dx, y + h * 0.8f), ImGui::GetColorU32(ImGuiCol_Separator));
     x += divider;
     next();
-    if (ui::IconButton(ICON_FIT, "Frame Selected", false, ".", "Zoom to the selected nodes")) frameSelected(g);
+    if (ui::IconButton(ICON_FIT, "Frame Selected", false, ".", "Zoom to the selected nodes")) frameSelectedGlide(g);
     next();
-    if (ui::IconButton(ICON_HOME, "Frame All", false, "Home", "Zoom to the whole graph")) fitFrames_ = 1;
+    if (ui::IconButton(ICON_HOME, "Frame All", false, "Home", "Zoom to the whole graph")) fitFrames_ = 1, glideNext_ = true;
     next();
     if (ui::IconButton(ICON_MAP, "Minimap", showMinimap, nullptr, "An overview of the graph; drag in it to move the view"))
         showMinimap = !showMinimap;
@@ -929,7 +977,7 @@ void NodeEditor::drawMinimap(const Graph& g) {
         fitFrames_ = 0;
     }
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(minimapRect_.Min, minimapRect_.Max, ImGui::GetColorU32(ImGuiCol_PopupBg, 0.92f), st.FrameRounding * 1.5f);
+    dl->AddRectFilled(minimapRect_.Min, minimapRect_.Max, opaqueCol(ImGuiCol_PopupBg), st.FrameRounding * 1.5f);
     dl->AddRect(minimapRect_.Min, minimapRect_.Max, ImGui::GetColorU32(ImGuiCol_Border), st.FrameRounding * 1.5f);
     dl->PushClipRect(minimapRect_.Min, minimapRect_.Max, true);
     for (const Frame& f : g.frames())
@@ -1077,9 +1125,13 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
         }
         if (!any) fitFrames_ = 1;
     }
+    stepGlide();
     if (fitFrames_ > 0) {
+        const float z = zoom_;
+        const ImVec2 p = pan_;
         doFrame(g);
         --fitFrames_;
+        if (std::exchange(glideNext_, false)) startGlide(z, p);
     }
 
     // Background item catches clicks that no node widget takes.
@@ -1484,8 +1536,8 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
         if (ImGui::IsKeyChordPressed(ImGuiMod_Alt | ImGuiKey_D) && detachLinks(g)) r.evalChanged = r.docChanged = true;
         if (ImGui::IsKeyChordPressed(ImGuiMod_Alt | ImGuiKey_S) && swapLinks(g)) r.evalChanged = r.docChanged = true;
         if (ImGui::IsKeyPressed(ImGuiKey_L) && !io.KeyCtrl && !io.KeyAlt) selectLinked(g, io.KeyShift);
-        if (ImGui::IsKeyPressed(ImGuiKey_Home)) fitFrames_ = 1;
-        if ((ImGui::IsKeyPressed(ImGuiKey_Period) || ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal)) && noMods) frameSelected(g);
+        if (ImGui::IsKeyPressed(ImGuiKey_Home)) fitFrames_ = 1, glideNext_ = true;
+        if ((ImGui::IsKeyPressed(ImGuiKey_Period) || ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal)) && noMods) frameSelectedGlide(g);
         if (ImGui::IsKeyPressed(ImGuiKey_F2) && selection_.size() == 1) {
             renameNode_ = *selection_.begin();
             std::snprintf(renameBuf_, sizeof(renameBuf_), "%s", g.find(renameNode_)->label.c_str());
@@ -1835,7 +1887,7 @@ void NodeEditor::drawNodeMenu(Graph& g, int& preview, Result& r) {
 
 void NodeEditor::drawFrames(ImDrawList* dl, const Graph& g) const {
     const float z = zoom_;
-    const float fs = ImGui::GetFontSize() * z;
+    const float fs = canvasFontSize() * z;
     for (const Frame& f : g.frames()) {
         ImVec2 a = toScreen(ImVec2(f.x, f.y)), b = toScreen(ImVec2(f.x + f.w, f.y + f.h));
         ImU32 body = ImGui::GetColorU32(ImVec4(f.color[0], f.color[1], f.color[2], 0.35f));
@@ -1881,7 +1933,7 @@ void NodeEditor::drawFrameMenu(Graph& g, Result& r) {
         } else {
             char buf[128];
             std::snprintf(buf, sizeof(buf), "%s", f->label.c_str());
-            ImGui::SetNextItemWidth(200);
+            ImGui::SetNextItemWidth(200 * style::scale());
             if (ImGui::InputText("Label", buf, sizeof(buf))) {
                 f->label = buf;
                 r.docChanged = true;
@@ -1925,7 +1977,7 @@ void NodeEditor::drawFrameMenu(Graph& g, Result& r) {
     }
     if (ImGui::BeginPopup("FrameRename")) {
         if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-        ImGui::SetNextItemWidth(220);
+        ImGui::SetNextItemWidth(220 * style::scale());
         bool done = ImGui::InputText("##label", frameLabel_, sizeof(frameLabel_), ImGuiInputTextFlags_EnterReturnsTrue);
         if (Frame* f = g.findFrame(menuFrame_); f && f->label != frameLabel_) {
             f->label = frameLabel_;
@@ -2440,7 +2492,7 @@ void NodeEditor::drawFindMenu(Graph& g, Result& r) {
         const Hit& hit = hits[size_t(chosen)];
         if (hit.path.empty()) {
             select(hit.id);
-            frameSelected(g);
+            frameSelectedGlide(g);
         } else {
             r.findPath = hit.path;  // the App opens the group; it then selects and frames the node there
             r.findNode = hit.id;
@@ -2455,7 +2507,7 @@ void NodeEditor::drawPresetPopup(const Graph& g) {
     ImGui::TextDisabled("Save the %d selected node%s as a preset (Add > Presets)", int(selection_.size()),
                         selection_.size() == 1 ? "" : "s");
     if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-    ImGui::SetNextItemWidth(240);
+    ImGui::SetNextItemWidth(240 * style::scale());
     bool done = ImGui::InputText("##preset", presetName_, sizeof(presetName_), ImGuiInputTextFlags_EnterReturnsTrue);
     const bool exists = std::find(presetNames_.begin(), presetNames_.end(), std::string(presetName_)) != presetNames_.end();
     ImGui::SameLine();
@@ -2481,7 +2533,7 @@ void NodeEditor::drawRenamePopup(Graph& g, Result& r) {
     }
     ImGui::TextDisabled("Label for %s (empty = default)", n->info().displayName.c_str());
     if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-    ImGui::SetNextItemWidth(240);
+    ImGui::SetNextItemWidth(240 * style::scale());
     bool done = ImGui::InputText("##label", renameBuf_, sizeof(renameBuf_), ImGuiInputTextFlags_EnterReturnsTrue);
     if (n->label != renameBuf_) {
         n->label = renameBuf_;

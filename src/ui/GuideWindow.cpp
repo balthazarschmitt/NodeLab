@@ -1,4 +1,6 @@
 #include "ui/GuideWindow.h"
+#include "ui/Widgets.h"
+#include "ui/Style.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -450,7 +452,7 @@ void drawGuideWindow() {
     State& s = st();
     if (!s.open) return;
     ensureParsed();
-    ImGui::SetNextWindowSize(ImVec2(960, 700), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ui::windowSize(960, 700), ImGuiCond_FirstUseEver);
     if (s.focus) {
         ImGui::SetNextWindowFocus();
         s.focus = false;
@@ -462,7 +464,7 @@ void drawGuideWindow() {
     const auto terms = searchTerms();
     const auto& sections = s.guide.sections;
 
-    ImGui::SetNextItemWidth(340);
+    ImGui::SetNextItemWidth(340 * style::scale());
     ImGui::InputTextWithHint("##search", "Search (e.g. saturation, hsv, green screen)", s.search, sizeof(s.search));
     int matchCount = 0;
     if (!terms.empty()) {
@@ -473,7 +475,7 @@ void drawGuideWindow() {
         ImGui::TextDisabled("%d matching section%s", matchCount, matchCount == 1 ? "" : "s");
     }
 
-    ImGui::BeginChild("##contents", ImVec2(270, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
+    ImGui::BeginChild("##contents", ImVec2(270 * style::scale(), 0), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
     if (!terms.empty()) {
         for (int i = 0; i < int(sections.size()); ++i) {
             if (!matches(sections[i], terms)) continue;

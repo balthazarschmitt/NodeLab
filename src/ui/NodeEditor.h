@@ -71,6 +71,7 @@ public:
     // True while the user is mid-gesture (dragging, editing a value), so undo snapshots wait.
     bool showTimings = true;
     bool showMinimap = false;  // the overview in the canvas's corner (a preference)
+    bool animateView = true;   // framing glides to its view (off with Reduce Motion)
     // The graph drawn is a group's contents: the Add menu offers the group's Value Input / Output.
     bool insideGroup = false;
     bool interacting() const { return mode_ != Mode::None || editing_.node != 0 || activeNode_ != 0; }
@@ -178,6 +179,19 @@ private:
     ImVec2 pan_{40, 40};
     float zoom_ = 1.0f;
     int fitFrames_ = 3;  // frames left to re-fit (docked windows settle their size over a few frames)
+    // Framing the user asks for (Home, ".", the toolbar, Find) glides there: the view's centre
+    // moves and its zoom changes geometrically, eased out. Panning or zooming meanwhile stops it.
+    struct Glide {
+        bool active = false;
+        float t = 0, z0 = 1, z1 = 1;
+        ImVec2 c0{}, c1{};  // view centres in graph units
+        float lastZoom = 1;
+        ImVec2 lastPan{};   // what the glide set, to notice the user moving the view
+    } glide_;
+    bool glideNext_ = false;  // the next fit (fitFrames_) was asked for by the user
+    void startGlide(float oldZoom, ImVec2 oldPan);
+    void stepGlide();
+    void frameSelectedGlide(const Graph& g);
 
     // selection / ordering
     std::set<int> selection_;

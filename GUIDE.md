@@ -1579,7 +1579,8 @@ saved straight away, in `%APPDATA%\NodeLab\preferences.json`.
 
 - **Interface:** **Resolution Scale** (as in Blender: text and controls from 80% to 150%, on top
   of Windows' own display scaling), the layout preset, whether the Inspector is an overlay or a
-  panel, and node timings.
+  panel, node timings, and **Reduce Motion** (frame all and frame selected jump instead of
+  gliding).
 - **Themes:** Studio (the default: quiet greys, grey controls, the accent kept for state),
   Classic (NodeLab's look before 1.4), Blender, Darkroom (neutral greys that don't tint how a
   photo is judged), Midnight, High Contrast and Light. Every colour can be changed: the interface's
@@ -1625,7 +1626,7 @@ The Library panel along the bottom shows the folder's photos.
     shows that label. Clicking the lit one again shows all photos.
 - **Search** (the box on the Library toolbar): shows the photos whose file name, title, caption or
   keywords contain every word typed, ignoring case.
-- **Metadata** (the toolbar's **Metadata** button, or View > Metadata), as Lightroom's Metadata and
+- **Metadata** (the toolbar's info button, or View > Metadata), as Lightroom's Metadata and
   Keywording panels: the colour label, **Title**, **Caption** and **Keywords** of the selected
   photos, and the camera's details for one photo.
   - With several photos selected, a field they don't share shows "(mixed)"; typing replaces it in
@@ -1658,7 +1659,7 @@ The Library panel along the bottom shows the folder's photos.
   first time).
 - **Sort** (the menu on the Library toolbar, as Lightroom's): **File Name**, **Capture Time**,
   **File Type**, **Rating**, **Pick**, **Edit Time**, **Camera**, **Lens**, **ISO** or **Focal
-  Length**, and the **A-Z** button beside it reverses the order. Capture time and the camera
+  Length**, and the arrows button beside it reverses the order. Capture time and the camera
   details come from the EXIF (the file's date when a photo has none). The open photo and the
   selection stay as they are, and the order is remembered.
 - **Virtual copies** (Lightroom's): **Ctrl+'**, or right-click a thumbnail > **Create Virtual

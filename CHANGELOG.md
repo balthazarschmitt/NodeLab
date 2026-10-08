@@ -3,7 +3,7 @@
 NodeLab uses [semantic versioning](https://semver.org): minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
-## Unreleased
+## 1.6.0 (2026-10-07)
 
 ### New
 - **Library redesign** (Lightroom's Library): the Grid, Compare and Survey views have a header
@@ -13,7 +13,21 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
   subfolders, and the collections with their counts.
 - The grid has 3:2 cards in the theme's colours, dims rejected photos, counts the photos under
   it, and offers **Show All Photos** when the filter hides everything.
+- **Home**, **.** and the canvas toolbar's frame buttons glide the Node Editor's view to its
+  new place instead of jumping. **Reduce Motion** (Preferences > Interface) turns it off.
+- Scripted UI tests: `--theme NAME` and `--ui-scale X` run with a theme and a Resolution Scale.
 
+### Changed
+- No text overlaps or is cut off at any Resolution Scale: menus are as wide as their longest
+  item, fixed widths and floating windows grow with the scale, toolbars wrap onto a second row
+  when they run out of room, an Inspector name too long for its column goes above its control,
+  long file names on Library cards end in "...", and text on nodes keeps to the node's size.
+- The filmstrip toolbar is more compact (the photo's name is in the status bar; sort direction
+  and Metadata are icon buttons, as in the grid), so it fits on one row.
+- Temperature and Tint sliders no longer show a dark seam through their value.
+- The canvas toolbar and minimap are opaque, so nodes behind them don't show through.
+
+## 1.5.0 (2026-10-07)
 
 ### New
 - **Node editor redesign:** a dot grid, soft shadows, and headers tinted with the node's

@@ -1,4 +1,6 @@
 #include "ui/ParamWidgets.h"
+#include "ui/Widgets.h"
+#include "ui/Style.h"
 
 #include <algorithm>
 #include <cmath>
@@ -182,7 +184,7 @@ bool rampEditor(const char* id, nlohmann::json& rampJson) {
     bool changed = false;
 
     const char* interps[] = {"Linear", "Constant", "Ease", "Smooth"};
-    ImGui::SetNextItemWidth(120);
+    ImGui::SetNextItemWidth(ui::comboWidth(interps, 4, 120));
     if (ImGui::Combo("Interpolation", &ramp.interp, interps, 4)) changed = true;
     ImGui::SameLine();
     if (ImGui::SmallButton("Flip")) {
@@ -271,7 +273,7 @@ bool rampEditor(const char* id, nlohmann::json& rampJson) {
         std::copy(shown, shown + 4, s.c);
         changed = true;
     }
-    ImGui::SetNextItemWidth(120);
+    ImGui::SetNextItemWidth(120 * style::scale());
     if (ImGui::SliderFloat("Position", &s.pos, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) changed = true;
     ImGui::SameLine();
     ImGui::BeginDisabled(ramp.stops.size() <= 1);

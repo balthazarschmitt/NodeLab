@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <string>
+#include <vector>
 
 #include <imgui_internal.h>
 
@@ -34,6 +36,40 @@ std::string visible(const char* label) {
 }  // namespace
 
 ImU32 accent() { return ImGui::ColorConvertFloat4ToU32(theme::uiValue(theme::current(), theme::Accent)); }
+
+float comboWidth(const char* const* items, int count, float minWidth) {
+    float w = 0.0f;
+    for (int i = 0; i < count; ++i)
+        if (items[i]) w = std::max(w, ImGui::CalcTextSize(items[i]).x);
+    // Text, its padding on both sides, and the square arrow button.
+    const ImGuiStyle& s = ImGui::GetStyle();
+    return std::max(minWidth * style::scale(), w + s.FramePadding.x * 2.0f + ImGui::GetFrameHeight());
+}
+
+float comboWidth(const char* zeroSeparated, float minWidth) {
+    std::vector<const char*> items;
+    for (const char* p = zeroSeparated; *p; p += std::strlen(p) + 1) items.push_back(p);
+    return comboWidth(items.data(), int(items.size()), minWidth);
+}
+
+ImVec2 windowSize(float w, float h) {
+    const ImVec2 work = ImGui::GetMainViewport()->WorkSize;
+    return ImVec2(std::min(w * style::scale(), work.x * 0.9f), std::min(h * style::scale(), work.y * 0.9f));
+}
+
+std::string ellipsize(const std::string& text, float maxWidth) {
+    if (ImGui::CalcTextSize(text.c_str()).x <= maxWidth) return text;
+    const float dots = ImGui::CalcTextSize("...").x;
+    // Longest prefix that fits with the dots, by binary search over bytes (UTF-8 lead bytes only).
+    size_t lo = 0, hi = text.size();
+    while (lo < hi) {
+        const size_t mid = (lo + hi + 1) / 2;
+        if (ImGui::CalcTextSize(text.data(), text.data() + mid).x + dots <= maxWidth) lo = mid;
+        else hi = mid - 1;
+    }
+    while (lo > 0 && (static_cast<unsigned char>(text[lo]) & 0xC0) == 0x80) --lo;
+    return text.substr(0, lo) + "...";
+}
 
 bool IconButton(const char* icon, const char* name, bool on, const char* key, const char* tip) {
     const float h = ImGui::GetFrameHeight();

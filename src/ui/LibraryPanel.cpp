@@ -487,7 +487,7 @@ void LibraryPanel::contextMenu(int i, Actions& a) {
         for (const library::Collection& c : collections_)
             if (c.name != collection_ && ImGui::MenuItem(c.name.c_str())) addSelectionTo(c.name);
         if (!collections_.empty()) ImGui::Separator();
-        ImGui::SetNextItemWidth(180);
+        ImGui::SetNextItemWidth(180 * style::scale());
         if (ImGui::InputTextWithHint("##newCollectionCtx", "New collection", newCollection_, sizeof newCollection_,
                                      ImGuiInputTextFlags_EnterReturnsTrue) && newCollection_[0]) {
             addSelectionTo(newCollection_);
@@ -548,11 +548,24 @@ LibraryPanel::Actions LibraryPanel::draw(bool keys) {
     if (keys && io.KeyCtrl && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_G, false)) io.KeyShift ? unstack() : groupStack();
 
     toolbar(a);
-    ImGui::SameLine();
+    const float h = ImGui::GetFrameHeight(), gap = 2.0f * style::scale();
+    wrapNext(4 * h + 3 * gap);
     viewButtons();
 
     ImGui::BeginChild("##strip", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
     return drawStrip(a);
+}
+
+// Continues a toolbar row with an item `width` wide, or starts a new row when it wouldn't fit, so
+// a narrow panel or a large UI scale never pushes items off the edge.
+void LibraryPanel::wrapNext(float width) {
+    ImGui::SameLine();
+    if (ImGui::GetContentRegionAvail().x < width) ImGui::NewLine();
+}
+
+// A small button's width, for wrapNext.
+static float smallButtonW(const char* label) {
+    return ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
 }
 
 void LibraryPanel::toolbar(Actions& a) {
@@ -561,49 +574,53 @@ void LibraryPanel::toolbar(Actions& a) {
     const int shown = int(this->shown().size());
     ImGui::TextDisabled("%s", name.empty() ? dir_.c_str() : name.c_str());
     ImGui::SameLine();
+    // The photo's name is in the status bar; leaving it out keeps the toolbar on one row.
     if (current_ >= 0)
-        ImGui::TextDisabled("%d / %d   %s", current_ + 1, size(), entryName(photo(current_), copyOf(current_)).c_str());
+        ImGui::TextDisabled("%d / %d", current_ + 1, size());
     else
         ImGui::TextDisabled("%d photos", size());
     if (shown != size()) {
         ImGui::SameLine();
         ImGui::TextDisabled("(%d shown)", shown);
     }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(150);
+    const float filterW = ui::comboWidth(kFilters, IM_ARRAYSIZE(kFilters));
+    wrapNext(filterW);
+    ImGui::SetNextItemWidth(filterW);
     if (ImGui::Combo("##filter", &filter_, kFilters, IM_ARRAYSIZE(kFilters))) scrollToCurrent_ = true;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Library Filter: which photos the filmstrip shows");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(120);
+    // The sort menu and its direction stay together.
+    const float sortW = ui::comboWidth(kSorts, IM_ARRAYSIZE(kSorts));
+    wrapNext(sortW + 2 + ImGui::GetFrameHeight());
+    ImGui::SetNextItemWidth(sortW);
     if (ImGui::Combo("##sort", &sortBy, kSorts, IM_ARRAYSIZE(kSorts))) sort();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Sort by");
     ImGui::SameLine(0, 2);
-    if (ImGui::SmallButton(sortDescending ? "Z-A##sortDir" : "A-Z##sortDir")) {
+    if (ui::IconButton(ICON_SORT, "Sort Direction", sortDescending, nullptr,
+                       sortDescending ? "Descending (click for ascending)" : "Ascending (click for descending)")) {
         sortDescending = !sortDescending;
         sort();
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip(sortDescending ? "Descending (click for ascending)" : "Ascending (click for descending)");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(130);
+    wrapNext(110 * style::scale());
+    ImGui::SetNextItemWidth(110 * style::scale());
     if (ImGui::InputTextWithHint("##search", "Search", search_, sizeof search_)) scrollToCurrent_ = true;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show photos whose file name, title, caption or keywords contain every word");
-    ImGui::SameLine();
+    wrapNext(smallButtonW("Collections"));
     collectionsMenu(a);
-    ImGui::SameLine();
+    wrapNext(smallButtonW("Photo"));
     photoMenu();
-    ImGui::SameLine();
-    if (ImGui::SmallButton(showMetadata ? "Metadata <" : "Metadata >")) showMetadata = !showMetadata;
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Title, caption, keywords and colour label of the selected photos");
-    ImGui::SameLine();
+    wrapNext(ImGui::GetFrameHeight());
+    if (ui::IconButton(ICON_INFO, "Metadata", showMetadata, nullptr, "Title, caption, keywords and colour label of the selected photos"))
+        showMetadata = !showMetadata;
+    wrapNext(smallButtonW("Copy Edit"));
     if (ImGui::SmallButton("Copy Edit")) a.copy = true;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy this photo's edit (Ctrl+Shift+C)");
-    ImGui::SameLine();
+    wrapNext(smallButtonW("Paste Edit"));
     ImGui::BeginDisabled(!canPaste);
     if (ImGui::SmallButton("Paste Edit")) a.paste = true;
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Paste the copied edit onto the selected photos (Ctrl+Shift+V)");
-    ImGui::SameLine();
+    wrapNext(smallButtonW("Export Selected..."));
     if (ImGui::SmallButton("Export Selected...")) a.exportSelected = true;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Render the selected photos, each with its own edit, with the Export window's settings");
     if (dupRunning_) {
@@ -740,7 +757,8 @@ LibraryPanel::Actions LibraryPanel::drawGrid(bool keys) {
     filterBar();
     {
         const float sw = std::round(130.0f * style::scale());
-        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + ImGui::GetStyle().ItemSpacing.x, ImGui::GetContentRegionMax().x - sw));
+        wrapNext(sw);
+        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - sw));
         ImGui::SetNextItemWidth(sw);
         ImGui::SliderFloat("##size", &gridSize_, 100.0f, 360.0f, "Size %.0f");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Thumbnail size (Ctrl+wheel)");
@@ -846,9 +864,8 @@ LibraryPanel::Actions LibraryPanel::drawGrid(bool keys) {
                 dl->AddText(ImVec2(c0.x + 6, c0.y + 3), ImGui::GetColorU32(ImGuiCol_TextDisabled, fade), num);
                 const std::string fname = entryName(it.path, it.copy);
                 const float numW = ImGui::CalcTextSize(num).x + 14;
-                dl->PushClipRect(ImVec2(c0.x + numW, c0.y), ImVec2(c1.x - 4, c0.y + headH), true);
-                dl->AddText(ImVec2(c0.x + numW, c0.y + 3), ImGui::GetColorU32(ImGuiCol_Text, 0.85f * fade), fname.c_str());
-                dl->PopClipRect();
+                dl->AddText(ImVec2(c0.x + numW, c0.y + 3), ImGui::GetColorU32(ImGuiCol_Text, 0.85f * fade),
+                            ui::ellipsize(fname, c1.x - 4 - (c0.x + numW)).c_str());
 
                 const ImVec2 t0(c0.x + 6, p0.y + headH + 2), t1(c1.x - 6, p0.y + headH + 2 + thumbH);
                 drawThumb(dl, i, t0, t1);
@@ -1123,7 +1140,7 @@ void LibraryPanel::collectionsMenu(Actions& a) {
     }
     ImGui::Separator();
     ImGui::TextDisabled("Selected photos");
-    ImGui::SetNextItemWidth(220);
+    ImGui::SetNextItemWidth(220 * style::scale());
     if (ImGui::InputTextWithHint("##newCollection", "New collection (Enter)", newCollection_, sizeof newCollection_,
                                  ImGuiInputTextFlags_EnterReturnsTrue) && newCollection_[0]) {
         addSelectionTo(newCollection_);
@@ -1232,8 +1249,14 @@ void LibraryPanel::viewButtons() {
 }
 
 // A thin upright line between groups of a toolbar row.
-static void rowDivider() {
+// A divider between toolbar groups; when the next group (`next` wide) doesn't fit, a new row
+// starts instead.
+static void rowDivider(float next) {
     ImGui::SameLine();
+    if (ImGui::GetContentRegionAvail().x < next + 1 + ImGui::GetStyle().ItemSpacing.x) {
+        ImGui::NewLine();
+        return;
+    }
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const float h = ImGui::GetFrameHeight();
     ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x, p.y + h * 0.2f), ImVec2(p.x, p.y + h * 0.8f), ImGui::GetColorU32(ImGuiCol_Separator));
@@ -1260,7 +1283,10 @@ void LibraryPanel::header(Actions& a) {
     const char* labels[] = {"Collections", "Photo", "Copy Edit", "Paste Edit", "Export Selected..."};
     float w = ImGui::GetFrameHeight() + s.ItemSpacing.x;  // the Metadata toggle
     for (const char* l : labels) w += ImGui::CalcTextSize(l).x + s.FramePadding.x * 2 + s.ItemSpacing.x;
-    ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - w));
+    // Right-aligned, or on a row of their own when the name leaves no room.
+    ImGui::SameLine();
+    if (ImGui::GetContentRegionAvail().x < w) ImGui::NewLine();
+    ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - w));
     collectionsMenu(a);
     ImGui::SameLine();
     photoMenu();
@@ -1282,15 +1308,16 @@ void LibraryPanel::header(Actions& a) {
 }
 
 void LibraryPanel::filterBar() {
-    viewButtons();
-    rowDivider();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float h = ImGui::GetFrameHeight();
+    const float sw = std::round(h * 0.72f);
+    viewButtons();
+    // Each group moves to a new row when it doesn't fit (a narrow window, a large UI scale).
+    rowDivider(5 * sw);
     // Rating: N stars or more. Clicking the lit end star again shows all photos.
     const int stars = filter_ >= 4 && filter_ <= 8 ? filter_ - 3 : 0;
     int hoverStar = 0;
     const ImVec2 r0 = ImGui::GetCursorScreenPos();
-    const float sw = std::round(h * 0.72f);
     for (int k = 1; k <= 5; ++k) {
         ImGui::PushID(k);
         if (k > 1) ImGui::SameLine(0, 0);
@@ -1306,12 +1333,12 @@ void LibraryPanel::filterBar() {
         const ImU32 col = on ? (hoverStar ? ImGui::GetColorU32(ImGuiCol_Text) : ui::accent()) : ImGui::GetColorU32(ImGuiCol_TextDisabled);
         drawStar(dl, ImVec2(r0.x + sw * (k - 0.5f), r0.y + h * 0.5f), sw * 0.36f, col, on);
     }
-    ImGui::SameLine();
+    wrapNext(2 * h + 2);
     // Flags.
     if (ui::IconButton(ICON_FLAG, "Picked", filter_ == 1, nullptr, "Show picked photos")) filter_ = filter_ == 1 ? 0 : 1, scrollToCurrent_ = true;
     ImGui::SameLine(0, 2);
     if (ui::IconButton(ICON_FLAG_OFF, "Rejected", filter_ == 3, nullptr, "Show rejected photos")) filter_ = filter_ == 3 ? 0 : 3, scrollToCurrent_ = true;
-    ImGui::SameLine();
+    wrapNext((library::kLabelCount - 1) * sw);
     // Colour labels: a dot each, ringed when it filters.
     for (int l = 1; l < library::kLabelCount; ++l) {
         ImGui::PushID(100 + l);
@@ -1326,13 +1353,15 @@ void LibraryPanel::filterBar() {
         if (filter_ == f) dl->AddCircle(c, sw * 0.38f, ImGui::GetColorU32(ImGuiCol_Text), 0, 1.5f);
         ImGui::PopID();
     }
-    ImGui::SameLine();
     // Every filter, the ones above among them.
-    ImGui::SetNextItemWidth(ImGui::CalcTextSize("Hide Rejected").x + h + 8);
+    const float filterW = ui::comboWidth(kFilters, IM_ARRAYSIZE(kFilters));
+    wrapNext(filterW);
+    ImGui::SetNextItemWidth(filterW);
     if (ImGui::Combo("##filter", &filter_, kFilters, IM_ARRAYSIZE(kFilters))) scrollToCurrent_ = true;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Library Filter: which photos are shown");
-    rowDivider();
-    ImGui::SetNextItemWidth(ImGui::CalcTextSize("Capture Time").x + h + 8);
+    const float sortW = ui::comboWidth(kSorts, IM_ARRAYSIZE(kSorts));
+    rowDivider(sortW + 2 + h);
+    ImGui::SetNextItemWidth(sortW);
     if (ImGui::Combo("##sort", &sortBy, kSorts, IM_ARRAYSIZE(kSorts))) sort();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Sort by");
     ImGui::SameLine(0, 2);
@@ -1341,7 +1370,7 @@ void LibraryPanel::filterBar() {
         sortDescending = !sortDescending;
         sort();
     }
-    ImGui::SameLine();
+    wrapNext(std::round(180.0f * style::scale()));
     // Search, with its icon inside the field.
     const ImGuiStyle& s = ImGui::GetStyle();
     const ImVec2 sp = ImGui::GetCursorScreenPos();
@@ -1492,9 +1521,7 @@ void LibraryPanel::drawCaption(ImDrawList* dl, int i, ImVec2 p0, float w) const 
         x += ImGui::CalcTextSize(pick ? "Pick" : "Rejected").x + 8;
     }
     const std::string name = entryName(it.path, it.copy);
-    dl->PushClipRect(ImVec2(x, p0.y), ImVec2(p0.x + w, p0.y + lineH + 2), true);
-    dl->AddText(ImVec2(x, p0.y), IM_COL32(210, 210, 216, 255), name.c_str());
-    dl->PopClipRect();
+    dl->AddText(ImVec2(x, p0.y), IM_COL32(210, 210, 216, 255), ui::ellipsize(name, p0.x + w - x).c_str());
     for (int s = 0; s < 5; ++s)
         drawStar(dl, ImVec2(p0.x + 10 + s * 15.0f, p0.y + lineH + 10), 5.5f,
                  s < it.meta.rating ? IM_COL32(235, 235, 235, 255) : IM_COL32(95, 95, 103, 255), s < it.meta.rating);
@@ -1536,7 +1563,7 @@ LibraryPanel::Actions LibraryPanel::drawCompare(bool keys) {
         ImGui::SetTooltip("The Candidate becomes the Select, and the next photo the Candidate (Up)");
     ImGui::EndDisabled();
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(110);
+    ImGui::SetNextItemWidth(110 * style::scale());
     if (ImGui::SliderFloat("##zoom", &zoom_, 1.0f, 8.0f, "Zoom %.1fx", ImGuiSliderFlags_Logarithmic) && zoom_ <= 1.0f)
         centerX_ = centerY_ = 0.5f;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Both photos zoom and pan together (wheel, and drag)");
@@ -1743,7 +1770,7 @@ void LibraryPanel::endMain(bool side) {
 }
 
 void LibraryPanel::drawMetadataWindow(const char* title) {
-    ImGui::SetNextWindowSize(ImVec2(320, 480), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ui::windowSize(320, 480), ImGuiCond_FirstUseEver);
     if (ImGui::Begin(title, &showMetadata)) drawMetadata();
     ImGui::End();
 }
@@ -1776,10 +1803,13 @@ void LibraryPanel::drawMetadata() {
     ImGui::Separator();
 
     // ---- colour label
+    // The fields start after the longer of their names, so no scale or font overlaps them.
+    const float fieldX = ImGui::GetCursorPosX() + std::max(ImGui::CalcTextSize("Label").x, ImGui::CalcTextSize("Title").x) +
+                         ImGui::GetStyle().ItemSpacing.x * 2.0f;
     const int label = common([](const library::Meta& m) { return m.label; }) ? meta(sel[0]).label : -1;
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Label");
-    ImGui::SameLine(70);
+    ImGui::SameLine(fieldX);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::BeginCombo("##label", label < 0 ? "(mixed)" : library::labelName(label))) {
         for (int l = 0; l < library::kLabelCount; ++l) {
@@ -1796,7 +1826,7 @@ void LibraryPanel::drawMetadata() {
     // ---- title and caption: applied when the field is left (Enter, Tab or a click elsewhere)
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Title");
-    ImGui::SameLine(70);
+    ImGui::SameLine(fieldX);
     ImGui::SetNextItemWidth(-1);
     ImGui::InputTextWithHint("##title", sameTitle ? "" : "(mixed)", title_, sizeof title_);
     if (ImGui::IsItemDeactivatedAfterEdit())
@@ -1894,10 +1924,12 @@ void LibraryPanel::drawMetadata() {
         }
         const exif::PhotoInfo& in = it.info;
         if (ImGui::TreeNodeEx("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
-            auto row = [](const char* name, const std::string& value) {
+            // Values line up after the longest name.
+            const float valueX = ImGui::GetCursorPosX() + ImGui::CalcTextSize("Focal Length").x + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+            auto row = [&](const char* name, const std::string& value) {
                 if (value.empty()) return;
                 ImGui::TextDisabled("%s", name);
-                ImGui::SameLine(90);
+                ImGui::SameLine(valueX);
                 ImGui::TextUnformatted(value.c_str());
             };
             char buf[64];

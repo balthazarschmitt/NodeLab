@@ -132,6 +132,7 @@ private:
     // search (Lightroom's Library Filter bar).
     void header(Actions& a);
     void filterBar();
+    void wrapNext(float width);
     void drawSources(Actions& a);
     void collectionsMenu(Actions& a);
     void photoMenu();

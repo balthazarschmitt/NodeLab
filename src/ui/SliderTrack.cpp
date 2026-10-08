@@ -73,14 +73,18 @@ void draw(ImDrawList* dl, ImVec2 a, ImVec2 b, const ParamDesc& d, ImU32 base, fl
         colorAt(d, float(i) / kSeg, c);
         col[i] = toU32(c, base);
     }
-    // The end segments are plain rounded rects (multi-colour rects can't round their corners);
-    // they're narrow enough that their single colour doesn't show.
-    const float r = std::min(rounding, w / kSeg);
+    // Multi-colour rects can't round their corners, so the ends are plain rounded caps drawn first,
+    // and the gradient covers their inner halves: a cap's anti-aliased inner edge would otherwise
+    // show as a dark seam (through the value text at the right end).
+    const float r = std::min(rounding, w * 0.25f);
+    if (r > 0) {
+        dl->AddRectFilled(a, ImVec2(a.x + 2 * r, b.y), col[0], r, ImDrawFlags_RoundCornersLeft);
+        dl->AddRectFilled(ImVec2(b.x - 2 * r, a.y), b, col[kSeg], r, ImDrawFlags_RoundCornersRight);
+    }
+    const float x0 = a.x + r, gw = w - 2 * r;
     for (int i = 0; i < kSeg; ++i) {
-        const ImVec2 p0(a.x + w * i / kSeg, a.y), p1(a.x + w * (i + 1) / kSeg, b.y);
-        if (r > 0 && i == 0) dl->AddRectFilled(p0, p1, col[0], r, ImDrawFlags_RoundCornersLeft);
-        else if (r > 0 && i == kSeg - 1) dl->AddRectFilled(p0, p1, col[kSeg], r, ImDrawFlags_RoundCornersRight);
-        else dl->AddRectFilledMultiColor(p0, p1, col[i], col[i + 1], col[i + 1], col[i]);
+        const ImVec2 p0(x0 + gw * i / kSeg, a.y), p1(x0 + gw * (i + 1) / kSeg, b.y);
+        dl->AddRectFilledMultiColor(p0, p1, col[i], col[i + 1], col[i + 1], col[i]);
     }
 }
 
