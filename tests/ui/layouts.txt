@@ -1,0 +1,41 @@
+# build\Refractory.exe tests\ui\interact.refract --script tests\ui\layouts.txt
+# Custom layouts: arrange the panels (Node Focus with Original closed), save it with View > Layout >
+# Save Layout As..., go back to Default, then pick the saved one: the arrangement comes back.
+settle
+click "View"
+click "Layout"
+click "Node Focus"
+wait 3
+click "View"
+click "Original"
+wait 3
+shot build/smoke/layout1_arranged.png
+click "View"
+click "Layout"
+click "Save Layout As..."
+wait 3
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+text Focus Mine
+click "Save"
+wait 3
+click "View"
+click "Layout"
+click "Default"
+wait 3
+shot build/smoke/layout2_default.png
+click "View"
+click "Layout"
+expect "Focus Mine"
+shot build/smoke/layout3_menu.png
+click "Focus Mine"
+wait 3
+shot build/smoke/layout4_restored.png
+quit

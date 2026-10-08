@@ -170,6 +170,9 @@ private:
     // Result's floating icon bar over the view (viewMin..viewMax), with `caption` (what's shown,
     // or null) beside it. Sets toolHint_.
     void drawResultToolbar(Node* ov, ImVec2 viewMin, ImVec2 viewMax, const char* caption);
+    void drawLoupeMenu();
+    bool drawCustomGuides(float width);  // Preferences > Viewer; true when a guide changed
+    int openGuide_ = -1;  // a guide just added, whose settings open
     const char* toolHint_ = nullptr;  // the selected node's on-image controls, for the status bar
     // Toolbar's Add Mask: a new Basic before the Output, driven by a new mask (one undo step).
     void addMask(int kind);
@@ -313,6 +316,27 @@ private:
     int workspace_ = WsNodes;
     int developPreset_ = LayoutPhoto;
     int& workspacePreset() { return workspace_ == WsDevelop ? developPreset_ : layoutPreset_; }
+    // Layouts of one's own (View > Layout > Save Layout As...), listed after the presets as
+    // kLayouts + i: how a workspace's panels are docked (the split tree, with each split's ratio
+    // and each node's tabs, by panel name) and which panels are open. Either workspace can use one.
+    struct CustomLayout {
+        std::string name;
+        nlohmann::json dock;  // {"split": "x"|"y", "ratio", "a", "b"} or {"windows": [...], "selected"}
+        nlohmann::json open;  // panel name -> shown
+    };
+    std::vector<CustomLayout> customLayouts_;
+    int layoutCount() const { return kLayouts + int(customLayouts_.size()); }
+    const char* layoutName(int i) const {
+        return i < kLayouts ? kLayoutNames[i] : i < layoutCount() ? customLayouts_[i - kLayouts].name.c_str() : "";
+    }
+    int findLayout(const std::string& name) const;  // -1 when there's none of that name
+    std::vector<std::pair<const char*, bool*>> panelFlags();  // the panels a layout docks, by name
+    CustomLayout captureLayout();  // the current workspace's
+    void buildCustomLayout(const CustomLayout& l);
+    void deleteLayout(int i);
+    void drawSaveLayoutPopup();
+    bool openSaveLayout_ = false;
+    char layoutNameBuf_[64] = "";
     // A panel's window ID in the current workspace: "###Result" in Nodes (as layouts saved before
     // workspaces have it), "###Result.Develop" in Develop.
     std::string panelId(const std::string& base) const;

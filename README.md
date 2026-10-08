@@ -116,7 +116,7 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Frame | Ctrl+J around the selection; drag its title to move it with its nodes, corner to resize, double-click to rename, right-click for color |
 | Move nodes between frames | right-click a node → Move to Frame, or select nodes and right-click a frame title → Move Selected Nodes Here; Alt+P removes from frame |
 | Workspaces | The tabs in the menu bar: Library (an open folder's photos), Develop (photo, settings column, graph underneath) and Nodes; Ctrl+PgUp / Ctrl+PgDn step through them |
-| Panels | Drag a panel's tab to dock it elsewhere, or out of the window; View > Layout picks a preset for the current workspace (Default, Compositing, Photo, Side by Side, Node Focus); View > Reset Layout |
+| Panels | Drag a panel's tab to dock it elsewhere, or out of the window; View > Layout picks a preset for the current workspace (Default, Compositing, Photo, Side by Side, Node Focus) or one of your own (View > Layout > Save Layout As... keeps the panels' arrangement and which are open); View > Reset Layout |
 | Inspector | Floats in the Node Editor's corner while a node is selected; Preferences > Interface (or View > Inspector Overlay) makes it a panel. In Develop: histogram, EXIF and every node of the chain as a section (eye bypasses, arrow resets) |
 | Edit a value | Drag a slider; Ctrl+click it (or click a node's value box) to type; double-click it, Backspace over it, or right-click resets it |
 | Reset to defaults | Right-click a node → Reset to Defaults (keeps its file) |
@@ -130,7 +130,7 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Before / after | Result's icons, or Y with the mouse over the Result: the original left of a draggable divider, the edit right; `\` shows the original alone |
 | Transparency | Images with alpha are drawn over a checkerboard |
 | On-image controls | Select a Crop, gradient, shape or Brush Mask node and edit it on the Result: drag handles; Crop shows the whole frame (drag outside to straighten); Brush paints, Alt erases, `[` `]` size; O toggles the red mask overlay, or with Crop cycles its guide overlay (Shift+O turns it); Perspective: drag to draw Guided Upright guides, Alt+click removes |
-| Loupe overlay | View > Loupe Overlay: a grid and draggable guide lines over the Result |
+| Loupe overlay | View > Loupe Overlay, or the Overlays icon over the Result: a grid, draggable guide lines, and composition guides (Thirds, Golden Ratio, Golden Spiral and others, or your own grids from Preferences > Viewer); Shift+O turns the guide |
 | Spot removal | Select a Spot Removal node, click a blemish on the Result (the source is picked automatically, `/` finds another), or drag its source onto clean texture; drag a spot to move it, its edge to resize; Alt+click or Delete removes one; Detect Dust (Inspector) adds spots for sensor dust |
 | Auto tone | Basic's Inspector → Auto sets Exposure, Contrast, Highlights, Shadows, Whites and Blacks from the image |
 | Auto save | Every 5 minutes by default (Edit > Preferences > Save & Load), once a project has been saved (library photos always) |

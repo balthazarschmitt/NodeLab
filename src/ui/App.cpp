@@ -125,12 +125,14 @@ void App::loadPreferences() {
         reduceMotion_ = j.value("reduceMotion", reduceMotion_);
         autosave_ = j.value("autosave", autosave_);
         autosaveMinutes_ = std::clamp(j.value("autosaveMinutes", autosaveMinutes_), 1, 120);
-        const std::string layout = j.value("layout", std::string());
-        for (int i = 0; i < kLayouts; ++i)
-            if (layout == kLayoutNames[i]) layoutPreset_ = i;
-        const std::string develop = j.value("developLayout", std::string());
-        for (int i = 0; i < kLayouts; ++i)
-            if (develop == kLayoutNames[i]) developPreset_ = i;
+        if (const auto cl = j.find("customLayouts"); cl != j.end() && cl->is_array())
+            for (const auto& e : *cl)
+                if (e.is_object() && !e.value("name", std::string()).empty() && e.contains("dock") &&
+                    findLayout(e.value("name", std::string())) < 0)
+                    customLayouts_.push_back({e.value("name", std::string()), e["dock"],
+                                              e.value("open", nlohmann::json::object())});
+        if (const int i = findLayout(j.value("layout", std::string())); i >= 0) layoutPreset_ = i;
+        if (const int i = findLayout(j.value("developLayout", std::string())); i >= 0) developPreset_ = i;
         workspace_ = j.value("workspace", std::string()) == "Develop" ? WsDevelop : WsNodes;
         newView_ = j.value("newProjectView", std::string()) == "AgX" ? ColorManagement::AgX : ColorManagement::Standard;
         newLook_ = std::clamp(j.value("newProjectLook", 0), 0, 2);
@@ -155,6 +157,22 @@ void App::loadPreferences() {
         loupe_.grid = j.value("loupeGrid", false);
         loupe_.guides = j.value("loupeGuides", false);
         loupe_.gridSize = std::clamp(j.value("loupeGridSize", 50.0f), 8.0f, 400.0f);
+        if (const auto cg = j.find("compositionGuides"); cg != j.end() && cg->is_array())
+            for (const auto& e : *cg)
+                if (e.is_object()) {
+                    CustomGuide c;
+                    c.name = e.value("name", c.name);
+                    c.columns = std::clamp(e.value("columns", c.columns), 1, 64);
+                    c.rows = std::clamp(e.value("rows", c.rows), 1, 64);
+                    c.diagonals = e.value("diagonals", false);
+                    c.center = e.value("center", false);
+                    c.safeArea = std::clamp(e.value("safeArea", 0.0f), 0.0f, 45.0f);
+                    loupe_.custom.push_back(std::move(c));
+                }
+        loupe_.composition = j.value("loupeComposition", false);
+        loupe_.guide = std::clamp(j.value("loupeCompositionGuide", int(NodeOverlay::Thirds)), 0, loupe_.guideCount() - 1);
+        loupe_.turn = std::clamp(j.value("loupeCompositionTurn", 0), 0, 3);
+        loupe_.opacity = std::clamp(j.value("loupeCompositionOpacity", 0.5f), 0.1f, 1.0f);
         style::setUiScale(j.value("uiScale", 1.0f));
     } catch (const std::exception&) {
         // A damaged file keeps the defaults; it is rewritten on the next change.
@@ -169,6 +187,12 @@ void App::savePreferences() const {
     for (const theme::Theme& t : customThemes_) custom.push_back(t.toJson());
     nlohmann::json presets = nlohmann::json::array();
     for (const ExportPreset& p : exportPresets_) presets.push_back({{"name", p.name}, {"settings", p.settings.toJson()}});
+    nlohmann::json layouts = nlohmann::json::array();
+    for (const CustomLayout& l : customLayouts_) layouts.push_back({{"name", l.name}, {"dock", l.dock}, {"open", l.open}});
+    nlohmann::json guides = nlohmann::json::array();
+    for (const CustomGuide& c : loupe_.custom)
+        guides.push_back({{"name", c.name}, {"columns", c.columns}, {"rows", c.rows}, {"diagonals", c.diagonals},
+                          {"center", c.center}, {"safeArea", c.safeArea}});
     // A temporary file renamed over the old one, so a crash mid-write keeps the old preferences.
     const std::filesystem::path path = settingsDir() / "preferences.json", tmp = settingsDir() / "preferences.json.tmp";
     std::ofstream f(tmp, std::ios::trunc);
@@ -181,8 +205,9 @@ void App::savePreferences() const {
                         {"reduceMotion", reduceMotion_},
                         {"autosave", autosave_},
                         {"autosaveMinutes", autosaveMinutes_},
-                        {"layout", kLayoutNames[layoutPreset_]},
-                        {"developLayout", kLayoutNames[developPreset_]},
+                        {"layout", layoutName(layoutPreset_)},
+                        {"developLayout", layoutName(developPreset_)},
+                        {"customLayouts", layouts},
                         {"workspace", kWorkspaceNames[workspace_]},
                         {"newProjectView", newView_ == ColorManagement::AgX ? "AgX" : "Standard"},
                         {"newProjectLook", newLook_},
@@ -198,6 +223,11 @@ void App::savePreferences() const {
                         {"loupeGrid", loupe_.grid},
                         {"loupeGuides", loupe_.guides},
                         {"loupeGridSize", loupe_.gridSize},
+                        {"loupeComposition", loupe_.composition},
+                        {"loupeCompositionGuide", loupe_.guide},
+                        {"loupeCompositionTurn", loupe_.turn},
+                        {"loupeCompositionOpacity", loupe_.opacity},
+                        {"compositionGuides", guides},
                         {"uiScale", style::uiScale()}}
              .dump(2);
     f.close();
@@ -461,6 +491,11 @@ void App::drawFrame() {
     drawGuideWindow();
     drawExportWindow();
     drawPreferencesWindow();
+    drawSaveLayoutPopup();
+    if (prefsDirty_ && !ImGui::IsAnyItemActive()) {
+        savePreferences();
+        prefsDirty_ = false;
+    }
     pollExport();
     std::erase_if(viewers_, [](const std::unique_ptr<Viewer>& v) { return v->id != 0 && !v->open; });
 
@@ -620,6 +655,10 @@ void App::buildLayout() {
     ImGui::DockBuilderRemoveNode(dockId);
     ImGui::DockBuilderAddNode(dockId, ImGuiDockNodeFlags_DockSpace);
     ImGui::DockBuilderSetNodeSize(dockId, vp->WorkSize);
+    if (workspacePreset() >= kLayouts) {
+        if (workspacePreset() < layoutCount()) return buildCustomLayout(customLayouts_[workspacePreset() - kLayouts]);
+        workspacePreset() = workspace_ == WsDevelop ? LayoutPhoto : LayoutDefault;
+    }
     ImGuiID center = dockId;
     auto split = [](ImGuiID& node, ImGuiDir dir, float ratio) {
         return ImGui::DockBuilderSplitNode(node, dir, ratio, nullptr, &node);
@@ -683,6 +722,160 @@ void App::buildLayout() {
     // Where Original shares Result's node, Result is the tab in front.
     if (ImGuiDockNode* n = ImGui::DockBuilderGetNode(result)) n->SelectedTabId = ImHashStr(panelId("Result").c_str());
     showOriginal_ = showEditor_ = showInspector_ = showResult_ = showLibrary_ = true;
+}
+
+int App::findLayout(const std::string& name) const {
+    for (int i = 0; i < layoutCount(); ++i)
+        if (name == layoutName(i)) return i;
+    return -1;
+}
+
+std::vector<std::pair<const char*, bool*>> App::panelFlags() {
+    return {{"Original", &showOriginal_},   {"Result", &showResult_},
+            {"NodeEditor", &showEditor_},   {"Inspector", &showInspector_},
+            {"Library", &showLibrary_},     {"LibraryMetadata", &library_.showMetadata},
+            {"Snapshots", &showSnapshots_}, {"History", &showHistory_}};
+}
+
+App::CustomLayout App::captureLayout() {
+    CustomLayout l;
+    l.open = nlohmann::json::object();
+    // Each panel's dock node, from the window (a closed panel keeps the node it was docked in).
+    std::vector<std::pair<ImGuiID, const char*>> docked;
+    for (const auto& [name, shown] : panelFlags()) {
+        l.open[name] = *shown;
+        if (const ImGuiWindow* w = ImGui::FindWindowByID(ImHashStr(panelId(name).c_str())); w && w->DockId)
+            docked.emplace_back(w->DockId, name);
+    }
+    const std::function<nlohmann::json(const ImGuiDockNode*, int)> walk = [&](const ImGuiDockNode* n,
+                                                                              int depth) -> nlohmann::json {
+        if (n->IsSplitNode() && depth < 32) {
+            const int ax = n->SplitAxis == ImGuiAxis_X ? 0 : 1;
+            const float a = n->ChildNodes[0]->Size[ax], b = n->ChildNodes[1]->Size[ax];
+            return {{"split", ax == 0 ? "x" : "y"},
+                    {"ratio", a + b > 0 ? a / (a + b) : 0.5f},
+                    {"a", walk(n->ChildNodes[0], depth + 1)},
+                    {"b", walk(n->ChildNodes[1], depth + 1)}};
+        }
+        nlohmann::json windows = nlohmann::json::array();
+        std::string selected;
+        for (const auto& [id, name] : docked)
+            if (id == n->ID) {
+                windows.push_back(name);
+                if (n->SelectedTabId == ImHashStr(panelId(name).c_str())) selected = name;
+            }
+        return {{"windows", windows}, {"selected", selected}};
+    };
+    const ImGuiDockNode* root = ImGui::DockBuilderGetNode(dockSpaceId(workspace_));
+    l.dock = root ? walk(root, 0) : nlohmann::json::object();
+    return l;
+}
+
+// Rebuilds the dock tree captured by captureLayout in the current workspace. Nodes left without a
+// panel (the Inspector while it floats over the editor, panels from a newer version) are dropped,
+// so their space goes to the rest.
+void App::buildCustomLayout(const CustomLayout& l) {
+    const ImGuiID dockId = dockSpaceId(workspace_);
+    std::vector<std::string> known;
+    for (const auto& [name, shown] : panelFlags())
+        if (!(overlayInspector() && std::string(name) == "Inspector")) known.push_back(name);
+    auto usable = [&](const nlohmann::json& w) {
+        return w.is_string() && std::find(known.begin(), known.end(), w.get<std::string>()) != known.end();
+    };
+    const std::function<bool(const nlohmann::json&, int)> hasPanels = [&](const nlohmann::json& n, int depth) {
+        if (!n.is_object() || depth > 32) return false;
+        if (n.contains("split")) return hasPanels(n.value("a", nlohmann::json()), depth + 1) ||
+                                        hasPanels(n.value("b", nlohmann::json()), depth + 1);
+        const nlohmann::json w = n.value("windows", nlohmann::json::array());
+        return w.is_array() && std::any_of(w.begin(), w.end(), usable);
+    };
+    std::vector<std::pair<ImGuiID, std::string>> selected;
+    ImGuiID resultNode = dockId;
+    const std::function<void(const nlohmann::json&, ImGuiID, int)> build = [&](const nlohmann::json& n, ImGuiID id,
+                                                                               int depth) {
+        if (!n.is_object() || depth > 32) return;
+        if (n.contains("split")) {
+            const nlohmann::json a = n.value("a", nlohmann::json()), b = n.value("b", nlohmann::json());
+            const bool ha = hasPanels(a, depth + 1), hb = hasPanels(b, depth + 1);
+            if (ha && hb) {
+                const float ratio = std::clamp(n.value("ratio", 0.5f), 0.05f, 0.95f);
+                ImGuiID ia = 0, ib = 0;
+                ImGui::DockBuilderSplitNode(id, n.value("split", std::string()) == "y" ? ImGuiDir_Up : ImGuiDir_Left,
+                                            ratio, &ia, &ib);
+                build(a, ia, depth + 1);
+                build(b, ib, depth + 1);
+            } else if (ha || hb) {
+                build(ha ? a : b, id, depth + 1);
+            }
+            return;
+        }
+        const nlohmann::json w = n.value("windows", nlohmann::json::array());
+        if (!w.is_array()) return;
+        for (const nlohmann::json& name : w)
+            if (usable(name)) {
+                ImGui::DockBuilderDockWindow(panelId(name.get<std::string>()).c_str(), id);
+                if (name == "Result") resultNode = id;
+            }
+        const std::string sel = n.value("selected", std::string());
+        if (!sel.empty()) selected.emplace_back(id, sel);
+    };
+    build(l.dock, dockId, 0);
+    // Extra viewers sit with Result, as in the presets.
+    for (size_t i = 1; i < viewers_.size(); ++i)
+        ImGui::DockBuilderDockWindow(panelId("Viewer" + std::to_string(viewers_[i]->id)).c_str(), resultNode);
+    ImGui::DockBuilderFinish(dockId);
+    for (const auto& [id, name] : selected)
+        if (ImGuiDockNode* n = ImGui::DockBuilderGetNode(id)) n->SelectedTabId = ImHashStr(panelId(name).c_str());
+    for (const auto& [name, shown] : panelFlags())
+        if (const auto it = l.open.find(name); l.open.is_object() && it != l.open.end() && it->is_boolean()) *shown = *it;
+}
+
+void App::deleteLayout(int i) {
+    if (i < kLayouts || i >= layoutCount()) return;
+    customLayouts_.erase(customLayouts_.begin() + (i - kLayouts));
+    // A workspace using it goes back to its preset (its panels stay where they are); the ones
+    // after it move up.
+    for (int* p : {&layoutPreset_, &developPreset_})
+        if (*p == i) *p = p == &developPreset_ ? LayoutPhoto : LayoutDefault;
+        else if (*p > i) --*p;
+    savePreferences();
+}
+
+// View > Layout > Save Layout As...: names the current workspace's layout. A name already in the
+// list (not a preset's) is replaced.
+void App::drawSaveLayoutPopup() {
+    if (openSaveLayout_) {
+        ImGui::OpenPopup("Save Layout");
+        openSaveLayout_ = false;
+        const char* current = layoutName(workspacePreset());
+        std::snprintf(layoutNameBuf_, sizeof layoutNameBuf_, "%s",
+                      workspacePreset() >= kLayouts ? current : "My Layout");
+    }
+    if (!ImGui::BeginPopupModal("Save Layout", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    ImGui::TextUnformatted("Saves how the panels are arranged and which are open,\n"
+                           "listed with the presets in View > Layout.");
+    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
+    const bool enter = ImGui::InputText("Name", layoutNameBuf_, sizeof layoutNameBuf_, ImGuiInputTextFlags_EnterReturnsTrue);
+    const std::string name = layoutNameBuf_;
+    const int existing = findLayout(name);
+    const bool preset = existing >= 0 && existing < kLayouts;
+    if (preset) ImGui::TextDisabled("That's a preset's name.");
+    else if (existing >= 0) ImGui::TextDisabled("Replaces the layout of that name.");
+    const int button = ui::dialogButtons({"Save", "Cancel"});
+    if ((button == 0 || enter) && !name.empty() && !preset) {
+        CustomLayout l = captureLayout();
+        l.name = name;
+        if (existing >= 0) customLayouts_[existing - kLayouts] = std::move(l);
+        else customLayouts_.push_back(std::move(l));
+        workspacePreset() = findLayout(name);
+        savePreferences();
+        status_ = "Saved layout " + name;
+        ImGui::CloseCurrentPopup();
+    } else if (button == 1 || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 static constexpr ImGuiWindowFlags kCanvasFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
@@ -1141,6 +1334,35 @@ Node* App::overlayNode() {
     return n && NodeOverlay::supports(*n) ? n : nullptr;
 }
 
+// View > Loupe Overlay, and the Result toolbar's Overlays menu: Lightroom's grid and guides, and
+// composition guides (the crop tool's, then the user's own from Preferences > Viewer).
+void App::drawLoupeMenu() {
+    ImGui::SeparatorText("Grid and Guides");
+    bool changed = ImGui::MenuItem("Grid", nullptr, &loupe_.grid);
+    changed |= ImGui::MenuItem("Guides", nullptr, &loupe_.guides);
+    ImGui::SetNextItemWidth(160 * style::scale());
+    changed |= ImGui::SliderFloat("Grid Size", &loupe_.gridSize, 8.0f, 400.0f, "%.0f px", ImGuiSliderFlags_Logarithmic);
+    if (ImGui::MenuItem("Center Guides", nullptr, false, loupe_.guides)) loupe_.guideX = loupe_.guideY = 0.5f;
+    ImGui::SeparatorText("Composition");
+    if (ImGui::MenuItem("None", nullptr, !loupe_.composition)) loupe_.composition = false, changed = true;
+    for (int g = 0; g < loupe_.guideCount(); ++g) {
+        if (g == NodeOverlay::kCropGuideCount) ImGui::Separator();
+        ImGui::PushID(g);
+        if (ImGui::MenuItem(loupe_.guideName(g), nullptr, loupe_.composition && loupe_.guide == g))
+            loupe_.composition = true, loupe_.guide = g, changed = true;
+        ImGui::PopID();
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem("Cycle Orientation", "Shift+O", false, loupe_.composition && loupe_.guide < NodeOverlay::kCropGuideCount))
+        loupe_.cycleGuide(true), changed = true;
+    int pct = int(loupe_.opacity * 100.0f + 0.5f);
+    ImGui::SetNextItemWidth(160 * style::scale());
+    if (ImGui::SliderInt("Opacity", &pct, 10, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp))
+        loupe_.opacity = pct / 100.0f, changed = true;
+    if (ImGui::MenuItem("Custom Guides...")) showPreferences_ = true, prefsSection_ = 2;
+    if (changed) prefsDirty_ = true;
+}
+
 void App::drawResultToolbar(Node* ov, ImVec2 viewMin, ImVec2 viewMax, const char* caption) {
     Viewer& v = *viewers_[0];
     // Hotkeys while the pointer is over the Result viewer (J and O as in Lightroom).
@@ -1154,6 +1376,9 @@ void App::drawResultToolbar(Node* ov, ImVec2 viewMin, ImVec2 viewMax, const char
         if (ov && ov->info().type == crop::kType) {
             overlay_.cycleCropGuide(ImGui::GetIO().KeyShift);
             status_ = std::string("Crop overlay: ") + NodeOverlay::cropGuideName(overlay_.cropGuide);
+        } else if (ImGui::GetIO().KeyShift && loupe_.composition) {
+            loupe_.cycleGuide(true);
+            prefsDirty_ = true;
         } else {
             maskOverlay_ = !maskOverlay_;
         }
@@ -1178,7 +1403,7 @@ void App::drawResultToolbar(Node* ov, ImVec2 viewMin, ImVec2 viewMax, const char
     const ImGuiStyle& st = ImGui::GetStyle();
     const float h = ImGui::GetFrameHeight(), gap = 2.0f * style::scale(), pad = 3.0f * style::scale();
     const float margin = 8.0f * style::scale(), divider = st.ItemSpacing.x;
-    const int icons = 5 + (mask ? 1 : 0);
+    const int icons = 6 + (mask ? 1 : 0);
     const ImVec2 p0(viewMin.x + margin, viewMin.y + margin);
     const ImVec2 p1(p0.x + pad * 2 + icons * h + (icons - 1) * gap + divider, p0.y + pad * 2 + h);
     if (p1.x <= viewMax.x && p1.y <= viewMax.y) {
@@ -1215,6 +1440,11 @@ void App::drawResultToolbar(Node* ov, ImVec2 viewMin, ImVec2 viewMax, const char
                            "Split the view: the original left of the divider, the result right of it. Drag the divider "
                            "to move it; \\ shows the whole original"))
             splitView_ = !splitView_, beforeFull_ = false;
+        next();
+        if (ui::IconButton(ICON_GRID_SMALL, "Overlays", loupe_.any(), nullptr,
+                           "Composition guides (Thirds, Golden Ratio, Golden Spiral, your own grids), a grid and "
+                           "movable guides over the image"))
+            ImGui::OpenPopup("##loupe");
         if (mask) {
             next();
             if (ui::IconButton(ICON_EYE, "Mask Overlay", maskOverlay_, "O", "Tint the selected mask over the image"))
@@ -1229,6 +1459,11 @@ void App::drawResultToolbar(Node* ov, ImVec2 viewMin, ImVec2 viewMax, const char
                               ImGui::GetColorU32(ImGuiCol_PopupBg, 0.85f), st.FrameRounding);
             dl->AddText(nullptr, 0.0f, tp, ImGui::GetColorU32(ImGuiCol_Text), caption, nullptr, wrap);
         }
+    }
+    if (ImGui::BeginPopup("##loupe")) {
+        drawLoupeMenu();
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
     }
     if (openMaskMenu) ImGui::OpenPopup("##addmask");
     if (ImGui::BeginPopup("##addmask")) {
@@ -1630,11 +1865,7 @@ void App::drawMainMenu() {
         ImGui::MenuItem("History", nullptr, &showHistory_);
         // Lightroom's View > Loupe Overlay.
         if (ImGui::BeginMenu("Loupe Overlay")) {
-            ImGui::MenuItem("Grid", nullptr, &loupe_.grid);
-            ImGui::MenuItem("Guides", nullptr, &loupe_.guides);
-            ImGui::SetNextItemWidth(160 * style::scale());
-            ImGui::SliderFloat("Grid Size", &loupe_.gridSize, 8.0f, 400.0f, "%.0f px", ImGuiSliderFlags_Logarithmic);
-            if (ImGui::MenuItem("Center Guides", nullptr, false, loupe_.guides)) loupe_.guideX = loupe_.guideY = 0.5f;
+            drawLoupeMenu();
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Crop Guide Overlay")) {
@@ -1655,12 +1886,28 @@ void App::drawMainMenu() {
         }
         ImGui::Separator();
         if (ImGui::BeginMenu("Layout")) {
-            for (int i = 0; i < kLayouts; ++i)
-                if (ImGui::MenuItem(kLayoutNames[i], nullptr, workspacePreset() == i)) {
+            for (int i = 0; i < layoutCount(); ++i) {
+                if (i == kLayouts) ImGui::Separator();
+                ImGui::PushID(i);
+                if (ImGui::MenuItem(layoutName(i), nullptr, workspacePreset() == i)) {
                     workspacePreset() = i;
                     resetLayout_ = true;
                     savePreferences();
                 }
+                ImGui::PopID();
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Save Layout As...")) openSaveLayout_ = true;
+            if (ImGui::BeginMenu("Delete Layout", customLayouts_.size() > 0)) {
+                int remove = -1;
+                for (int i = kLayouts; i < layoutCount(); ++i) {
+                    ImGui::PushID(i);
+                    if (ImGui::MenuItem(layoutName(i))) remove = i;
+                    ImGui::PopID();
+                }
+                if (remove >= 0) deleteLayout(remove);
+                ImGui::EndMenu();
+            }
             ImGui::EndMenu();
         }
         if (ImGui::MenuItem("Reset Layout")) resetLayout_ = true;
@@ -2780,9 +3027,18 @@ void App::drawPreferencesWindow() {
             ImGui::SeparatorText("Layout");
             ImGui::SetNextItemWidth(combo);
             // The current workspace's preset (Develop and Nodes each have one).
-            if (ImGui::Combo("Preset", &workspacePreset(), kLayoutNames, kLayouts)) {
-                resetLayout_ = true;
-                changed = true;
+            if (ImGui::BeginCombo("Preset", layoutName(workspacePreset()))) {
+                for (int i = 0; i < layoutCount(); ++i) {
+                    if (i == kLayouts) ImGui::Separator();
+                    ImGui::PushID(i);
+                    if (ImGui::Selectable(layoutName(i), workspacePreset() == i)) {
+                        workspacePreset() = i;
+                        resetLayout_ = true;
+                        changed = true;
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::EndCombo();
             }
             ImGui::SameLine();
             if (ImGui::Button("Reset Layout")) resetLayout_ = true;
@@ -2900,6 +3156,7 @@ void App::drawPreferencesWindow() {
             colorRow(theme::ImageBackground);
             ImGui::TextDisabled("The view transform, histogram and clipping warnings are saved\n"
                                 "with each project (Color menu, and the Result viewer's toolbar).");
+            changed |= drawCustomGuides(combo);
             break;
         case 3:  // Compositor
             ImGui::SeparatorText("Performance");
@@ -2946,11 +3203,67 @@ void App::drawPreferencesWindow() {
     }
     ImGui::EndChild();
     ImGui::End();
-    if (changed) prefsDirty_ = true;
-    if (prefsDirty_ && !ImGui::IsAnyItemActive()) {
-        savePreferences();
-        prefsDirty_ = false;
+    if (changed) prefsDirty_ = true;  // saved by drawFrame once no widget is being dragged
+}
+
+// Preferences > Viewer: composition guides of one's own, listed after the built-in ones in the
+// Result viewer's Overlays menu. Editing one shows it, so the change can be seen.
+bool App::drawCustomGuides(float width) {
+    ImGui::SeparatorText("Composition Guides");
+    ImGui::TextDisabled("Grids of your own for the Result viewer's Overlays menu (View > Loupe Overlay).");
+    bool changed = false;
+    std::vector<CustomGuide>& list = loupe_.custom;
+    int remove = -1;
+    for (int i = 0; i < int(list.size()); ++i) {
+        CustomGuide& c = list[i];
+        const int index = NodeOverlay::kCropGuideCount + i;
+        ImGui::PushID(i);
+        if (i == openGuide_) ImGui::SetNextItemOpen(true), openGuide_ = -1;
+        const bool open = ImGui::TreeNodeEx("##guide", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", c.name.c_str());
+        if (open) {
+            bool edited = false;
+            char name[64];
+            std::snprintf(name, sizeof name, "%s", c.name.c_str());
+            ImGui::SetNextItemWidth(width);
+            if (ImGui::InputText("Name", name, sizeof name) && name[0]) c.name = name, edited = true;
+            ImGui::SetNextItemWidth(width);
+            edited |= ImGui::SliderInt("Columns", &c.columns, 1, 24, "%d", ImGuiSliderFlags_AlwaysClamp);
+            ImGui::SetNextItemWidth(width);
+            edited |= ImGui::SliderInt("Rows", &c.rows, 1, 24, "%d", ImGuiSliderFlags_AlwaysClamp);
+            edited |= ImGui::Checkbox("Diagonals", &c.diagonals);
+            ImGui::SameLine();
+            edited |= ImGui::Checkbox("Center Mark", &c.center);
+            ImGui::SetNextItemWidth(width);
+            edited |= ImGui::SliderFloat("Safe Area", &c.safeArea, 0.0f, 25.0f, c.safeArea > 0 ? "%.1f%%" : "Off",
+                                         ImGuiSliderFlags_AlwaysClamp);
+            ui::Tooltip("Safe Area", nullptr, "A frame this far in from each edge, as video's title-safe area");
+            const bool shown = loupe_.composition && loupe_.guide == index;
+            if (ImGui::Button(shown ? "Shown" : "Show")) edited = true;
+            ImGui::SameLine();
+            if (ImGui::Button("Delete")) remove = i;
+            if (edited) loupe_.composition = true, loupe_.guide = index, changed = true;
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
     }
+    if (remove >= 0) {
+        // Keep the shown guide (or fall back to Thirds when it's the one deleted).
+        const int index = NodeOverlay::kCropGuideCount + remove;
+        if (loupe_.guide == index) loupe_.guide = NodeOverlay::Thirds, loupe_.composition = false;
+        else if (loupe_.guide > index) --loupe_.guide;
+        list.erase(list.begin() + remove);
+        changed = true;
+    }
+    if (ImGui::Button("Add Guide")) {
+        CustomGuide c;
+        c.name = "Grid " + std::to_string(list.size() + 1);
+        list.push_back(c);
+        loupe_.composition = true;
+        loupe_.guide = loupe_.guideCount() - 1;
+        openGuide_ = int(list.size()) - 1;  // with its settings open
+        changed = true;
+    }
+    return changed;
 }
 
 // Lightroom's Preset list in the Export dialog: built-in presets, then the user's.

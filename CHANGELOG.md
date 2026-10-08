@@ -3,6 +3,23 @@
 Refractory uses [semantic versioning](https://semver.org): minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
+## 1.9.0 (2026-10-08)
+
+### Added
+- **Composition guides** over the Result viewer, without a Crop node: Thirds, Golden Ratio,
+  Golden Spiral, Diagonal, Triangle, Grid and Aspect Ratios, from a new **Overlays** icon on
+  the Result's toolbar (or View > Loupe Overlay). Shift+O turns the asymmetric ones; Opacity
+  sets how strongly they show.
+- **Custom guides** (Preferences > Viewer > Composition Guides): grids of your own with columns,
+  rows, diagonals, a centre mark and a safe-area frame, listed after the built-in guides.
+- **Custom layouts** (View > Layout > Save Layout As...): saves how the panels are docked, the
+  split sizes, tabs and which panels are open, listed with the presets (Default, Photo...).
+  Choosing one makes it the workspace's layout, used by Reset Layout and at start-up.
+  Delete Layout removes one.
+
+### Changed
+- Loupe overlay settings are saved as soon as they change.
+
 ## 1.8.0 (2026-10-08)
 
 ### Added

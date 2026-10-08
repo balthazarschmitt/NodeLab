@@ -1,5 +1,7 @@
 #pragma once
 #include <array>
+#include <string>
+#include <vector>
 
 #include "ui/ImageView.h"
 
@@ -70,16 +72,44 @@ private:
     bool spotClick_ = false;  // a spot was just added and its source not dragged (yet)
 };
 
-// Lightroom's Loupe Overlay for the Result viewer: a grid and a pair of guides (a horizontal and
-// a vertical line, dragged by either line or where they cross). Draws under the selected node's
-// controls, which get the mouse first.
+// A composition guide of one's own (Preferences > Viewer): columns x rows across the image, with
+// its diagonals, a centre mark and a safe-area frame if asked.
+struct CustomGuide {
+    std::string name = "Custom";
+    int columns = 4, rows = 4;
+    bool diagonals = false, center = false;
+    float safeArea = 0;  // a frame this many percent in from each edge, as video's title safe; 0 none
+};
+
+// Lightroom's Loupe Overlay for the Result viewer: a grid, a pair of guides (a horizontal and a
+// vertical line, dragged by either line or where they cross) and a composition guide. Draws under
+// the selected node's controls, which get the mouse first.
 class LoupeOverlay : public ImageOverlay {
 public:
     bool grid = false, guides = false;
     float gridSize = 50.0f;  // screen pixels between grid lines
     float guideX = 0.5f, guideY = 0.5f;  // image-relative
+    // Composition guide over the whole image: one of the crop tool's (NodeOverlay::CropGuide),
+    // or custom[guide - NodeOverlay::kCropGuideCount].
+    bool composition = false;
+    int guide = NodeOverlay::Thirds;
+    int turn = 0;  // orientation of the asymmetric ones, as NodeOverlay::cropGuideTurn
+    float opacity = 0.5f;
+    std::vector<CustomGuide> custom;
+    int guideCount() const { return NodeOverlay::kCropGuideCount + int(custom.size()); }
+    const char* guideName(int g) const {
+        return g < NodeOverlay::kCropGuideCount ? NodeOverlay::cropGuideName(g)
+               : g < guideCount()               ? custom[g - NodeOverlay::kCropGuideCount].name.c_str()
+                                                : "";
+    }
+    // Shows the next guide (Off after the last), or turns the current one.
+    void cycleGuide(bool turnIt) {
+        if (turnIt) turn = (turn + 1) % 4;
+        else if (!composition) composition = true, guide = 0;
+        else if (++guide >= guideCount()) composition = false, guide = 0;
+    }
     ImageOverlay* inner = nullptr;
-    bool any() const { return grid || guides; }
+    bool any() const { return grid || guides || composition; }
     bool update(ImDrawList* dl, const ImVec2& imgMin, const ImVec2& imgMax, bool hovered, bool active) override;
 
 private:

@@ -1,0 +1,29 @@
+# build\Refractory.exe tests\ui\interact.refract --script tests\ui\composition.txt
+# Composition guides over the Result viewer: the toolbar's Overlays menu picks a built-in guide,
+# Shift+O turns it, and Preferences > Viewer adds a guide of one's own.
+settle
+click "Overlays"
+wait 2
+shot build/smoke/comp0_menu.png
+click "Golden Spiral"
+settle
+shot build/smoke/comp1_spiral.png
+move "Overlays"
+moveat "##result" 0.5 0.5
+shift on
+key o
+shift off
+wait 2
+shot build/smoke/comp2_turned.png
+click "Overlays"
+wait 2
+click "Custom Guides..."
+wait 3
+click "Add Guide"
+wait 3
+dragat "Rows" 0.5 0.5 -60 0
+click "Diagonals"
+dragat "Safe Area" 0.5 0.5 40 0
+wait 3
+shot build/smoke/comp3_custom.png
+quit

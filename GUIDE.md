@@ -57,6 +57,14 @@ current workspace:
 
 **View > Reset Layout** puts the chosen layout back. Develop starts with Photo, Nodes with
 Default.
+
+**View > Layout > Save Layout As...** keeps your own arrangement: where each panel is docked, the
+sizes of the splits, which panels are tabs together (and which is in front), and which panels are
+open. It is listed after the presets, in View > Layout and in Preferences > Interface, and
+choosing it makes it the workspace's layout, so Reset Layout returns to it and Refractory starts
+with it. Saving under an existing name replaces that layout; **Delete Layout** removes one. A
+layout saved in one workspace can be used in the other. Floating panels aren't part of it, and
+the Inspector is left out while it floats over the Node Editor (Inspector Overlay).
 **View > New Viewer** opens an extra image panel that can show any node (see Viewing Intermediate
 Results below). **View > Node Timings** shows how long each node took on the right of its title (amber
 when it is 50 ms or more), so you can see what slows a graph down. Nodes that ran on the graphics card are
@@ -188,10 +196,20 @@ Some nodes are edited directly on the Result panel while they are selected:
 
 Middle-drag still pans and the wheel still zooms while these controls are shown.
 
-**Loupe Overlay** (View > Loupe Overlay), as in Lightroom: **Grid** draws a grid over the Result
-(Grid Size sets its spacing in screen pixels) and **Guides** a horizontal and a vertical line you
-can drag (drag where they cross to move both). Use them to check that horizons and verticals are
-straight. Center Guides puts them back in the middle.
+**Loupe Overlay** (View > Loupe Overlay, or the **Overlays** icon over the Result), as in
+Lightroom: **Grid** draws a grid over the Result (Grid Size sets its spacing in screen pixels) and
+**Guides** a horizontal and a vertical line you can drag (drag where they cross to move both). Use
+them to check that horizons and verticals are straight. Center Guides puts them back in the
+middle.
+
+Its **Composition** list lays a guide over the whole image, without a Crop node: **Thirds**,
+**Golden Ratio**, **Golden Spiral**, **Diagonal**, **Triangle**, **Grid** and **Aspect Ratios**,
+the crop tool's overlays. **Shift+O** over the Result (or Cycle Orientation) turns the
+asymmetric ones, such as the spiral; **Opacity** sets how strongly the lines show.
+**Custom Guides...** opens Preferences > Viewer, where **Add Guide** makes a guide of your own:
+a name, a number of **Columns** and **Rows**, **Diagonals**, a **Center Mark** and a **Safe
+Area** frame (a percentage in from each edge, as video's title-safe area). Your guides are
+listed after the built-in ones and kept in your preferences, with the guide last shown.
 
 **Add Mask** (the first icon over the Result) makes a local adjustment in one step, like Lightroom's
 "Create New Mask". It inserts a **Basic** labelled "Mask N" right before the Output and wires a

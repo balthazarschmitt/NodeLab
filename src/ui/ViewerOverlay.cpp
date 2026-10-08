@@ -65,8 +65,9 @@ void gridLines(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, int n, ImU32 
 
 // Lightroom's crop guide overlays inside the frame p0..p1. `turn` mirrors the asymmetric ones
 // (bit 0 left-right, bit 1 top-bottom).
-void drawCropGuide(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, int guide, int turn) {
-    const ImU32 col = IM_COL32(255, 255, 255, 110);
+// `alpha` is the lines' opacity (the spiral's is a little stronger).
+void drawCropGuide(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, int guide, int turn, int alpha = 110) {
+    const ImU32 col = IM_COL32(255, 255, 255, alpha);
     const float W = p1.x - p0.x, H = p1.y - p0.y;
     const bool fx = turn & 1, fy = turn & 2;
     // Frame-relative (0..1) to screen, mirrored by `turn`.
@@ -144,7 +145,7 @@ void drawCropGuide(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, int guide
                 const float t = j / 16.0f * kPi * 0.5f, c = std::cos(t), sn = std::sin(t);
                 pts[j] = at(cu + (su - cu) * c + (eu - cu) * sn, cv + (sv - cv) * c + (ev - cv) * sn);
             }
-            dl->AddPolyline(pts, 17, IM_COL32(255, 255, 255, 170), ImDrawFlags_None, 1.5f);
+            dl->AddPolyline(pts, 17, IM_COL32(255, 255, 255, std::min(255, alpha * 17 / 11)), ImDrawFlags_None, 1.5f);
         }
         break;
     }
@@ -160,6 +161,32 @@ void drawCropGuide(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, int guide
         break;
     }
     default: break;
+    }
+}
+
+// A custom guide (Preferences > Viewer) across p0..p1.
+void drawCustomGuide(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, const CustomGuide& g, int alpha) {
+    const ImU32 col = IM_COL32(255, 255, 255, alpha);
+    const float W = p1.x - p0.x, H = p1.y - p0.y;
+    const int cols = std::clamp(g.columns, 1, 64), rows = std::clamp(g.rows, 1, 64);
+    // Lines closer than a few pixels only grey the image out.
+    if (W / cols >= 3.0f)
+        for (int i = 1; i < cols; ++i) dl->AddLine(ImVec2(p0.x + W * i / cols, p0.y), ImVec2(p0.x + W * i / cols, p1.y), col);
+    if (H / rows >= 3.0f)
+        for (int i = 1; i < rows; ++i) dl->AddLine(ImVec2(p0.x, p0.y + H * i / rows), ImVec2(p1.x, p0.y + H * i / rows), col);
+    if (g.diagonals) {
+        dl->AddLine(p0, p1, col);
+        dl->AddLine(ImVec2(p1.x, p0.y), ImVec2(p0.x, p1.y), col);
+    }
+    if (g.center) {
+        const ImVec2 c((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
+        const float r = std::min(12.0f, std::min(W, H) * 0.1f);
+        dl->AddLine(ImVec2(c.x - r, c.y), ImVec2(c.x + r, c.y), col, 1.5f);
+        dl->AddLine(ImVec2(c.x, c.y - r), ImVec2(c.x, c.y + r), col, 1.5f);
+    }
+    if (g.safeArea > 0) {
+        const float f = std::clamp(g.safeArea, 0.0f, 45.0f) / 100.0f;
+        dl->AddRect(ImVec2(p0.x + W * f, p0.y + H * f), ImVec2(p1.x - W * f, p1.y - H * f), col);
     }
 }
 
@@ -757,6 +784,12 @@ bool LoupeOverlay::update(ImDrawList* dl, const ImVec2& a, const ImVec2& b, bool
             dl->AddLine(ImVec2(x, std::max(a.y, lo.y)), ImVec2(x, std::min(b.y, hi.y)), col);
         for (float y = a.y + std::max(0.0f, std::floor((lo.y - a.y) / s)) * s; y <= std::min(b.y, hi.y); y += s)
             dl->AddLine(ImVec2(std::max(a.x, lo.x), y), ImVec2(std::min(b.x, hi.x), y), col);
+    }
+    if (composition) {
+        const int alpha = int(std::clamp(opacity, 0.05f, 1.0f) * 255.0f + 0.5f);
+        if (guide >= NodeOverlay::kCropGuideCount && guide < guideCount())
+            drawCustomGuide(dl, a, b, custom[guide - NodeOverlay::kCropGuideCount], alpha);
+        else drawCropGuide(dl, a, b, std::clamp(guide, 0, NodeOverlay::kCropGuideCount - 1), turn, alpha);
     }
     const ImVec2 g(a.x + guideX * (b.x - a.x), a.y + guideY * (b.y - a.y));
     if (guides) {
