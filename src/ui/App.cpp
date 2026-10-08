@@ -122,6 +122,7 @@ void App::loadPreferences() {
         ml::setUseGpu(j.value("aiDevice", std::string("CPU")) == "GPU");
         inspectorOverlay_ = j.value("inspector", std::string("Overlay")) == "Overlay";
         editor_.showTimings = j.value("nodeTimings", editor_.showTimings);
+        editor_.showMinimap = j.value("minimap", editor_.showMinimap);
         autosave_ = j.value("autosave", autosave_);
         autosaveMinutes_ = std::clamp(j.value("autosaveMinutes", autosaveMinutes_), 1, 120);
         const std::string layout = j.value("layout", std::string());
@@ -175,6 +176,7 @@ void App::savePreferences() const {
                         {"aiDevice", ml::useGpu() ? "GPU" : "CPU"},
                         {"inspector", inspectorOverlay_ ? "Overlay" : "Panel"},
                         {"nodeTimings", editor_.showTimings},
+                        {"minimap", editor_.showMinimap},
                         {"autosave", autosave_},
                         {"autosaveMinutes", autosaveMinutes_},
                         {"layout", kLayoutNames[layoutPreset_]},
@@ -697,24 +699,34 @@ void App::drawEditorWindow() {
         editorMin_ = ImVec2(wp.x + c0.x, wp.y + c0.y);
         editorMax_ = ImVec2(wp.x + c1.x, wp.y + c1.y);
         editorViewport_ = ImGui::GetWindowViewport()->ID;
-        // Breadcrumb: Root > Group > ...; click a level to go back up.
+        // Breadcrumb: Root > Group > ...; click a level to go back up. Flat buttons with
+        // chevrons, the current level in semibold.
         if (!groupPath_.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled));
             if (ImGui::SmallButton("Root")) setGroupPath({});
+            ImGui::PopStyleColor();
             Graph* g = &graph_;
             for (size_t i = 0; i < groupPath_.size() && g; ++i) {
                 auto* grp = dynamic_cast<GroupNode*>(g->find(groupPath_[i]));
                 if (!grp) break;
-                ImGui::SameLine();
-                ImGui::TextDisabled(">");
-                ImGui::SameLine();
+                const bool current = i + 1 == groupPath_.size();
+                ImGui::SameLine(0, 0);
+                ImGui::TextDisabled(ICON_CHEVRON_RIGHT);
+                ImGui::SameLine(0, 0);
                 ImGui::PushID(int(i));
-                if (ImGui::SmallButton(grp->name.c_str()) && i + 1 < groupPath_.size())
+                if (current && style::fonts().semibold) ImGui::PushFont(style::fonts().semibold);
+                if (!current) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled));
+                if (ImGui::SmallButton(grp->name.c_str()) && !current)
                     setGroupPath(std::vector<int>(groupPath_.begin(), groupPath_.begin() + i + 1));
+                if (!current) ImGui::PopStyleColor();
+                if (current && style::fonts().semibold) ImGui::PopFont();
                 ImGui::PopID();
                 g = &grp->inner();
             }
+            ImGui::PopStyleColor();
             ImGui::SameLine();
-            ImGui::TextDisabled("  (Tab to exit group)");
+            ImGui::TextDisabled("  Tab to exit the group");
         }
 
         Graph& g = currentGraph();
@@ -803,7 +815,7 @@ void App::drawInspectorOverlay() {
                                        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
                                        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
                                        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize;
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 2.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
     if (ImGui::Begin("Inspector##overlay", nullptr, flags)) {
         // Clicking the editor raises it over everything docked; keep the overlay on top. Not
@@ -1153,8 +1165,8 @@ void App::drawResultToolbar(Node* ov, ImVec2 viewMin, ImVec2 viewMax, const char
     const ImVec2 p1(p0.x + pad * 2 + icons * h + (icons - 1) * gap + divider, p0.y + pad * 2 + h);
     if (p1.x <= viewMax.x && p1.y <= viewMax.y) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        dl->AddRectFilled(p0, p1, ImGui::GetColorU32(ImGuiCol_PopupBg, 0.92f), st.FrameRounding + pad);
-        dl->AddRect(p0, p1, ImGui::GetColorU32(ImGuiCol_Border), st.FrameRounding + pad);
+        dl->AddRectFilled(p0, p1, ImGui::GetColorU32(ImGuiCol_PopupBg, 0.92f), st.FrameRounding * 1.5f);
+        dl->AddRect(p0, p1, ImGui::GetColorU32(ImGuiCol_Border), st.FrameRounding * 1.5f);
         float x = p0.x + pad;
         const float y = p0.y + pad;
         auto next = [&] {

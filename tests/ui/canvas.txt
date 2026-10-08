@@ -1,0 +1,20 @@
+# build\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\canvas.txt
+# The Node Editor's toolbar (bottom left) and minimap (bottom right).
+settle
+click "Node Editor/Minimap"
+wait 3
+shot build/smoke/cv1_minimap.png
+# dragging in the minimap moves the view
+dragat "Node Editor/minimap" 0.3 0.3 20 10
+wait 3
+shot build/smoke/cv2_moved.png
+click "Node Editor/Frame All"
+wait 3
+shot build/smoke/cv3_framed.png
+click "Node Editor/Add Node"
+wait 3
+shot build/smoke/cv4_add.png
+key escape
+click "Node Editor/Minimap"
+wait 3
+quit

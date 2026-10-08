@@ -3,9 +3,16 @@
 NodeLab uses [semantic versioning](https://semver.org): minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
-## Unreleased
+## 1.5.0 (2026-10-07)
 
 ### New
+- **Node editor redesign:** a dot grid, soft shadows, and headers tinted with the node's
+  category under a band of its full colour (the Light theme keeps solid headers). Node
+  Timings sit on the right of the title, and an AI mask shows its progress there while the
+  model runs. Values on nodes match the Inspector's sliders (fill from zero, a dot when changed).
+- **Canvas toolbar** in the Node Editor's bottom-left corner: Add Node, Frame Selected, Frame All
+  and a **Minimap** of the graph (bottom right; click or drag in it to move the view).
+- The group breadcrumb is flatter, with the current group in semibold.
 - **Inspector redesign** (Lightroom's panels): sliders show their name inside and their value
   on the right, filled from zero; a changed setting's name turns bright with a dot. Drag moves
   a value from where it was, double-click resets it and Ctrl+click types one. Other settings
@@ -17,6 +24,7 @@ features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
 ### Changed
 - Double-clicking a slider resets it (it typed a value before; Ctrl+click types now).
+- Corners are less rounded throughout (controls, panels, popups, nodes and frames).
 
 ## 1.4.0 (2026-10-07)
 

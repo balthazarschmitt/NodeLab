@@ -14,6 +14,7 @@
 #include "graph/NodeRegistry.h"
 #include "graph/Recipes.h"
 #include "nodes/group/GroupNodes.h"
+#include "nodes/matte/AutoMask.h"
 #include "io/ImageIO.h"
 #include "io/ImageWrite.h"
 #include "io/Paths.h"
@@ -22,9 +23,12 @@
 #include "ui/Eyedropper.h"
 #include "ui/FileDialog.h"
 #include "ui/GuideWindow.h"
+#include "ui/Icons.h"
 #include "ui/SliderTrack.h"
+#include "ui/Style.h"
 #include "ui/UiItems.h"
 #include "ui/Theme.h"
+#include "ui/Widgets.h"
 
 namespace {
 
@@ -116,29 +120,51 @@ int pickPin(const Graph& g, const Node& n, bool inputs, PinType other) {
     return -1;
 }
 
-// Slider-like field: fill proportional to the value, label left, value right.
+// A value field drawn as the Inspector's sliders: the name left, the value right, and a fill
+// from zero for signed ranges (from the minimum otherwise). A changed value gets an accent dot.
 void drawValueField(ImDrawList* dl, const ImRect& box, const char* label, float v, const ParamDesc& d, float fs,
                     float zoom, bool hovered) {
     const float frac = d.max > d.min ? std::clamp((v - d.min) / (d.max - d.min), 0.0f, 1.0f) : 0.0f;
-    const float round = 3.0f * zoom;
+    const float round = 2.0f * zoom;
+    const float w = box.GetWidth();
     if (d.track != SliderTrack::None) {
         // Coloured track (Temperature, Hue...) with a marker at the value instead of a fill.
         slidertrack::draw(dl, box.Min, box.Max, d, theme::col(hovered ? theme::FieldHover : theme::Field), round);
-        slidertrack::marker(dl, box.Min.x + box.GetWidth() * frac, box.Min.y, box.Max.y, zoom);
+        slidertrack::marker(dl, box.Min.x + w * frac, box.Min.y, box.Max.y, zoom);
     } else {
         dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::FieldHover : theme::Field), round);
-        dl->AddRectFilled(box.Min, ImVec2(box.Min.x + box.GetWidth() * frac, box.Max.y),
-                          theme::col(hovered ? theme::SliderFillHover : theme::SliderFill), round);
+        const float zero = d.min < 0.0f && d.max > 0.0f ? (0.0f - d.min) / (d.max - d.min) : 0.0f;
+        float a = box.Min.x + w * zero, b = box.Min.x + w * frac;
+        if (a > b) std::swap(a, b);
+        if (b - a >= 0.5f) {
+            const ImDrawFlags corners = (a <= box.Min.x + 0.5f ? ImDrawFlags_RoundCornersLeft : 0) |
+                                        (b >= box.Max.x - 0.5f ? ImDrawFlags_RoundCornersRight : 0);
+            dl->AddRectFilled(ImVec2(a, box.Min.y), ImVec2(b, box.Max.y),
+                              theme::col(hovered ? theme::SliderFillHover : theme::SliderFill),
+                              corners ? round : 0.0f, corners ? corners : ImDrawFlags_RoundCornersNone);
+        }
+        if (zero > 0.0f) {
+            const float x = IM_ROUND(box.Min.x + w * zero);
+            const float h = box.GetHeight();
+            dl->AddLine(ImVec2(x, box.Min.y + h * 0.2f), ImVec2(x, box.Max.y - h * 0.2f), ImGui::GetColorU32(ImGuiCol_Text, 0.18f));
+        }
     }
     if (fs < 6.0f) return;
+    // The Inspector's formats: one decimal for wide slider ranges (-100..100), three otherwise.
+    const bool wide = d.hardMax > d.max || d.hardMin < d.min;
     char buf[32];
-    std::snprintf(buf, sizeof(buf), "%.3f", v);
+    std::snprintf(buf, sizeof(buf), !wide && d.max - d.min >= 20.0f ? "%.1f" : "%.3f", v);
+    if (buf[0] == '-' && std::strspn(buf + 1, "0.") == std::strlen(buf + 1)) std::memmove(buf, buf + 1, std::strlen(buf));
+    const float defV = d.def.is_number() ? d.def.get<float>() : 0.0f;
+    const bool edited = std::fabs(v - defV) > 1e-6f;
     ImFont* font = ImGui::GetFont();
     const ImVec2 vs = font->CalcTextSizeA(fs, FLT_MAX, 0, buf);
     const float ty = box.GetCenter().y - fs * 0.5f;
     const float pad = 6.0f * zoom;
+    const float r = std::min(fs * 0.12f, pad * 0.3f);
     ImVec4 clip(box.Min.x, box.Min.y, box.Max.x - vs.x - pad * 2, box.Max.y);
-    dl->AddText(font, fs, ImVec2(box.Min.x + pad, ty), theme::col(theme::FieldText), label, nullptr, 0.0f, &clip);
+    dl->AddText(font, fs, ImVec2(box.Min.x + pad + r, ty), theme::col(theme::FieldText), label, nullptr, 0.0f, &clip);
+    if (edited) dl->AddCircleFilled(ImVec2(box.Min.x + pad * 0.5f + r * 0.5f, box.GetCenter().y), r, ui::accent());
     dl->AddText(font, fs, ImVec2(box.Max.x - pad - vs.x, ty), theme::col(theme::FieldValue), buf);
 }
 
@@ -274,7 +300,13 @@ void NodeEditor::setViewState(const nlohmann::json& j) {
 
 // ---------------------------------------------------------------- hit testing
 
+bool NodeEditor::overOverlay(ImVec2 p) const {
+    return toolbarRect_.Contains(p) || minimapRect_.Contains(p);
+}
+
 int NodeEditor::hitNode(const Graph& g, ImVec2 p) const {
+    // The toolbar and minimap float over the canvas: nodes under them don't take the mouse.
+    if (overOverlay(p)) return 0;
     for (auto it = order_.rbegin(); it != order_.rend(); ++it) {
         const Node* n = g.find(*it);
         if (!n) continue;
@@ -285,6 +317,7 @@ int NodeEditor::hitNode(const Graph& g, ImVec2 p) const {
 }
 
 NodeEditor::PinRef NodeEditor::hitPin(const Graph& g, ImVec2 p) const {
+    if (overOverlay(p)) return {};
     const float r = std::max(8.0f, 9.0f * zoom_);
     for (auto it = order_.rbegin(); it != order_.rend(); ++it) {
         const Node* n = g.find(*it);
@@ -304,6 +337,7 @@ void NodeEditor::linkEnds(const Graph& g, const Link& l, ImVec2& a, ImVec2& b) c
 }
 
 int NodeEditor::hitLink(const Graph& g, ImVec2 p) const {
+    if (overOverlay(p)) return 0;
     const float tol = std::max(5.0f, 5.0f * zoom_);
     for (const Link& l : g.links()) {
         ImVec2 a, b, c1, c2;
@@ -318,13 +352,29 @@ int NodeEditor::hitLink(const Graph& g, ImVec2 p) const {
 // ---------------------------------------------------------------- drawing
 
 void NodeEditor::drawGrid(ImDrawList* dl) const {
+    // Dots at the grid's crossings (quieter than lines, as in Blender 4's node editor), every
+    // fourth one larger. The theme's grid colour is made for lines, so dots are lifted toward
+    // the label colour to show as well.
     float step = 24.0f * zoom_;
-    while (step < 10.0f) step *= 4.0f;
-    const ImU32 col = theme::col(theme::Grid);
-    for (float x = std::fmod(pan_.x, step); x < size_.x; x += step)
-        dl->AddLine(ImVec2(origin_.x + x, origin_.y), ImVec2(origin_.x + x, origin_.y + size_.y), col);
-    for (float y = std::fmod(pan_.y, step); y < size_.y; y += step)
-        dl->AddLine(ImVec2(origin_.x, origin_.y + y), ImVec2(origin_.x + size_.x, origin_.y + y), col);
+    while (step < 12.0f) step *= 4.0f;
+    const ImVec4 gc = ImGui::ColorConvertU32ToFloat4(theme::col(theme::Grid));
+    const ImVec4 lc = ImGui::ColorConvertU32ToFloat4(theme::col(theme::LabelText));
+    const ImU32 minor = ImGui::ColorConvertFloat4ToU32(ImLerp(gc, ImVec4(lc.x, lc.y, lc.z, gc.w), 0.25f));
+    const ImU32 major = ImGui::ColorConvertFloat4ToU32(ImLerp(gc, ImVec4(lc.x, lc.y, lc.z, gc.w), 0.4f));
+    const float r = std::max(1.0f, style::scale());
+    // Index of the first visible column and row, so "every fourth" stays fixed to the graph.
+    const float x0 = std::fmod(pan_.x, step), y0 = std::fmod(pan_.y, step);
+    const int ix0 = int(std::lround((x0 - pan_.x) / step)), iy0 = int(std::lround((y0 - pan_.y) / step));
+    int iy = iy0;
+    for (float y = y0; y < size_.y; y += step, ++iy) {
+        int ix = ix0;
+        for (float x = x0; x < size_.x; x += step, ++ix) {
+            const bool big = ((ix % 4) + 4) % 4 == 0 && ((iy % 4) + 4) % 4 == 0;
+            const float rr = big ? r * 1.5f : r;
+            const ImVec2 c(IM_ROUND(origin_.x + x), IM_ROUND(origin_.y + y));
+            dl->AddRectFilled(ImVec2(c.x - rr * 0.5f, c.y - rr * 0.5f), ImVec2(c.x + rr * 0.5f, c.y + rr * 0.5f), big ? major : minor);
+        }
+    }
 }
 
 void NodeEditor::drawLinks(ImDrawList* dl, const Graph& g) const {
@@ -448,7 +498,7 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
                 }
             }
             if (hovered && !path.empty()) ImGui::SetTooltip("%s", path.c_str());
-            dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::ButtonHover : theme::Button), 3 * z);
+            dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::ButtonHover : theme::Button), 2 * z);
             text(box.Min.x + 6 * z, label.c_str(), textCol);
             break;
         }
@@ -460,7 +510,7 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
                 enumParam_ = i;
                 ImGui::OpenPopup("##enum");
             }
-            dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::ButtonHover : theme::Button), 3 * z);
+            dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::ButtonHover : theme::Button), 2 * z);
             text(box.Min.x + 6 * z, opt, textCol);
             float ax = box.Max.x - 10 * z, ay = box.GetCenter().y, as = 3.5f * z;
             dl->AddTriangleFilled(ImVec2(ax - as, ay - as * 0.6f), ImVec2(ax + as, ay - as * 0.6f), ImVec2(ax, ay + as * 0.8f), textCol);
@@ -489,7 +539,7 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
             }
             const float sz = box.GetHeight() - 4 * z;
             ImVec2 c0(box.Min.x + 2 * z, box.GetCenter().y - sz * 0.5f), c1(c0.x + sz, c0.y + sz);
-            dl->AddRectFilled(c0, c1, theme::col(hovered ? theme::ButtonHover : theme::Button), 3 * z);
+            dl->AddRectFilled(c0, c1, theme::col(hovered ? theme::ButtonHover : theme::Button), 2 * z);
             if (n.paramB(i))
                 dl->AddRectFilled(ImVec2(c0.x + 3 * z, c0.y + 3 * z), ImVec2(c1.x - 3 * z, c1.y - 3 * z),
                                   theme::col(theme::CheckFill), 2 * z);
@@ -515,7 +565,7 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
                 break;
             }
             if (canInteract && button()) editing_ = EditState{n.id, i, 0, false};
-            dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::FieldHover : theme::Field), 3 * z);
+            dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::FieldHover : theme::Field), 2 * z);
             text(box.Min.x + 6 * z, n.paramS(i).c_str(), IM_COL32(200, 230, 200, 255));
             if (hovered) ImGui::SetTooltip("%s - click to edit", d.name.c_str());
             break;
@@ -539,7 +589,7 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
             break;
         }
         case ParamKind::Curve: {
-            dl->AddRectFilled(box.Min, box.Max, IM_COL32(26, 26, 30, 255), 3 * z);
+            dl->AddRectFilled(box.Min, box.Max, IM_COL32(26, 26, 30, 255), 2 * z);
             dl->AddLine(ImVec2(box.Min.x, box.Max.y), ImVec2(box.Max.x, box.Min.y), IM_COL32(60, 60, 68, 255));
             // Standard curves: r, g, b then master on top. Custom channels (hue curves, float curve)
             // come from the param's key list.
@@ -575,9 +625,9 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
             if (canInteract && button()) ImGui::OpenPopup("##color");
             const float sw = box.GetHeight() * 1.6f;
             ImRect swatch(ImVec2(box.Max.x - sw, box.Min.y), box.Max);
-            dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::FieldHover : theme::Field), 3 * z);
+            dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::FieldHover : theme::Field), 2 * z);
             dl->AddRectFilled(swatch.Min, swatch.Max,
-                              ImGui::GetColorU32(ImVec4(std::min(c[0], 1.0f), std::min(c[1], 1.0f), std::min(c[2], 1.0f), 1.0f)), 3 * z);
+                              ImGui::GetColorU32(ImVec4(std::min(c[0], 1.0f), std::min(c[1], 1.0f), std::min(c[2], 1.0f), 1.0f)), 2 * z);
             text(box.Min.x + 6 * z, d.name.c_str(), textCol);
             if (ImGui::BeginPopup("##color")) {
                 ImGuiColorEditFlags flags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoAlpha;
@@ -611,7 +661,7 @@ bool NodeEditor::drawParamRow(ImDrawList* dl, Node& n, int i, const ImRect& box,
                 }
             }
             if (hovered && !path.empty()) ImGui::SetTooltip("%s", path.c_str());
-            dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::ButtonHover : theme::Button), 3 * z);
+            dl->AddRectFilled(box.Min, box.Max, theme::col(hovered ? theme::ButtonHover : theme::Button), 2 * z);
             text(box.Min.x + 6 * z, label.c_str(), textCol);
             break;
         }
@@ -631,22 +681,74 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
     const bool showText = fs >= 5.0f;
     const bool interactive = z >= 0.45f;
     const ImVec4 clip(L.min.x, L.min.y, L.max.x, L.max.y);
-    const float round = 6.0f * z;
+    const float round = 3.0f * z;
     const bool selected = selection_.count(n.id) > 0;
     bool changed = false;
 
-    // body + title
-    dl->AddRectFilled(ImVec2(L.min.x + 3, L.min.y + 4), ImVec2(L.max.x + 3, L.max.y + 4), IM_COL32(0, 0, 0, 70), round);
+    // A soft shadow: a few widening, faint layers below the node.
+    const bool light = theme::current().light;
+    for (int k = 3; k >= 1; --k) {
+        const float e = float(k) * 2.0f * z;
+        dl->AddRectFilled(ImVec2(L.min.x - e * 0.5f, L.min.y - e * 0.25f + 2.0f * z), ImVec2(L.max.x + e * 0.5f, L.max.y + e),
+                          IM_COL32(0, 0, 0, light ? 14 : 26), round + e);
+    }
     dl->AddRectFilled(L.min, L.max, theme::col(theme::NodeBody), round);
     ImU32 titleCol = n.id == preview ? theme::col(theme::PreviewTitle) : categoryColor(info.category);
     if (n.muted) titleCol = theme::col(theme::MutedTitle);
-    dl->AddRectFilled(L.min, ImVec2(L.max.x, L.min.y + L.titleH), titleCol, round,
-                      bar ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersTop);
+    const ImDrawFlags titleCorners = bar ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersTop;
+    if (light) {
+        dl->AddRectFilled(L.min, ImVec2(L.max.x, L.min.y + L.titleH), titleCol, round, titleCorners);
+    } else {
+        // Dark themes tint the header with the category and keep its full colour for a band
+        // along the top, so a graph of many nodes stays calm but each still says what it is.
+        const ImVec4 body = ImGui::ColorConvertU32ToFloat4(theme::col(theme::NodeBody));
+        const ImVec4 cat = ImGui::ColorConvertU32ToFloat4(titleCol);
+        dl->AddRectFilled(L.min, ImVec2(L.max.x, L.min.y + L.titleH), ImGui::ColorConvertFloat4ToU32(ImLerp(body, cat, 0.38f)),
+                          round, titleCorners);
+        const float band = std::max(1.0f, 3.0f * z);
+        dl->PushClipRect(L.min, ImVec2(L.max.x, L.min.y + band), true);
+        dl->AddRectFilled(L.min, ImVec2(L.max.x, L.min.y + L.titleH), titleCol, round, titleCorners);
+        dl->PopClipRect();
+    }
     if (showText) {
+        // The header's right side: the node's last evaluation time ("GPU" when it ran there,
+        // amber when slow), or an AI mask's progress while its model runs.
+        std::string status;
+        ImU32 statusCol = theme::col(theme::TitleText) & 0x00FFFFFF;
+        statusCol |= ImU32(light ? 210 : 150) << IM_COL32_A_SHIFT;
+        if (const auto* ai = dynamic_cast<const AutoMaskNode*>(&n)) {
+            const AutoMaskNode::Progress pr = AutoMaskNode::progress();
+            if (pr.running && pr.model == ai->model().id) {
+                char buf[32];
+                if (pr.loading) std::snprintf(buf, sizeof buf, "AI loading");
+                else if (pr.expected > 0) std::snprintf(buf, sizeof buf, "AI %d%%", int(std::min(99.0, 100.0 * pr.seconds / pr.expected)));
+                else std::snprintf(buf, sizeof buf, "AI %.0f s", pr.seconds);
+                status = buf;
+                statusCol = ui::accent();
+            }
+        }
+        if (status.empty() && showTimings && !bar)
+            if (auto t = timings_.find(n.id); t != timings_.end()) {
+                char buf[32];
+                const auto gpu = gpuNodes_.find(n.id);
+                const bool onGpu = gpu != gpuNodes_.end() && gpu->second;
+                std::snprintf(buf, sizeof buf, t->second < 10.0 ? "%.1f ms%s" : "%.0f ms%s", t->second, onGpu ? " GPU" : "");
+                status = buf;
+                if (t->second >= 50.0) statusCol = light ? IM_COL32(150, 80, 0, 255) : IM_COL32(236, 170, 80, 255);
+            }
+        float right = L.max.x - (bar ? 14 : 8) * z;
+        if (!status.empty()) {
+            const float sfs = fs * 0.82f;
+            const ImVec2 ss = ImGui::GetFont()->CalcTextSizeA(sfs, FLT_MAX, 0, status.c_str());
+            dl->AddText(ImGui::GetFont(), sfs, ImVec2(right - ss.x, L.min.y + (L.titleH - sfs) * 0.5f + (light ? 0 : 1.0f * z)),
+                        statusCol, status.c_str(), nullptr, 0.0f, &clip);
+            right -= ss.x + 6 * z;
+        }
         std::string title = n.label.empty() ? info.displayName : n.label;
         if (n.muted) title += "  (muted)";
-        dl->AddText(ImGui::GetFont(), fs, ImVec2(L.min.x + (bar ? 14 : 8) * z, L.min.y + (L.titleH - fs) * 0.5f),
-                    n.muted ? IM_COL32(200, 170, 170, 255) : theme::col(theme::TitleText), title.c_str(), nullptr, 0.0f, &clip);
+        const ImVec4 titleClip(L.min.x, L.min.y, std::max(L.min.x, right), L.max.y);
+        dl->AddText(ImGui::GetFont(), fs, ImVec2(L.min.x + (bar ? 14 : 8) * z, L.min.y + (L.titleH - fs) * 0.5f + (light || bar ? 0 : 1.0f * z)),
+                    n.muted ? IM_COL32(200, 170, 170, 255) : theme::col(theme::TitleText), title.c_str(), nullptr, 0.0f, &titleClip);
     }
     if (uiitems::recording()) {
         // Script targets: "node:Title" is the title bar, "node:Title>Pin" an output, "node:Title<Pin" an
@@ -671,17 +773,6 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
     }
     dl->AddRect(L.min, L.max, selected ? theme::col(theme::Selection) : theme::col(theme::NodeOutline), round, 0,
                 selected ? 2.0f : 1.0f);
-    if (showTimings && showText)
-        if (auto t = timings_.find(n.id); t != timings_.end()) {
-            // Above the node like Blender's overlay; slow nodes stand out in amber.
-            char buf[32];
-            const auto g = gpuNodes_.find(n.id);
-            const bool onGpu = g != gpuNodes_.end() && g->second;
-            std::snprintf(buf, sizeof buf, t->second < 10.0 ? "%.1f ms%s" : "%.0f ms%s", t->second, onGpu ? "  GPU" : "");
-            const float tfs = fs * 0.85f;
-            dl->AddText(ImGui::GetFont(), tfs, ImVec2(L.min.x + 4 * z, L.min.y - tfs - 3 * z),
-                        t->second >= 50.0 ? IM_COL32(236, 170, 80, 255) : ImGui::GetColorU32(ImGuiCol_TextDisabled), buf);
-        }
 
     // Only the topmost node under the mouse gets interactive widgets, so overlapping nodes behave.
     const bool ownsMouse = hitNode(g, ImGui::GetIO().MousePos) == n.id;
@@ -753,6 +844,106 @@ bool NodeEditor::drawNode(ImDrawList* dl, Graph& g, Node& n, int preview, Result
     ImGui::PopID();
     if (changed) r.evalChanged = r.docChanged = true;
     return changed;
+}
+
+// ---------------------------------------------------------------- overlays
+
+void NodeEditor::layoutOverlays() {
+    // The toolbar: a pill of icons in the bottom-left corner (the top-left would cover the nodes
+    // a fitted graph starts with). Left out when the canvas is too small for it.
+    const float h = ImGui::GetFrameHeight(), gap = 2.0f * style::scale(), pad = 3.0f * style::scale();
+    const float margin = 8.0f * style::scale(), divider = ImGui::GetStyle().ItemSpacing.x;
+    constexpr int kIcons = 4;
+    const ImVec2 tsize(pad * 2 + kIcons * h + (kIcons - 1) * gap + divider, pad * 2 + h);
+    toolbarRect_ = {};
+    if (tsize.x + margin * 2 <= size_.x && tsize.y + margin * 2 <= size_.y) {
+        const ImVec2 p0(origin_.x + margin, origin_.y + size_.y - margin - tsize.y);
+        toolbarRect_ = ImRect(p0, p0 + tsize);
+    }
+    // The minimap: the bottom-right corner, about a sixth of the canvas.
+    minimapRect_ = {};
+    if (showMinimap) {
+        const ImVec2 msize(std::round(std::clamp(size_.x * 0.18f, 120.0f * style::scale(), 220.0f * style::scale())),
+                           std::round(std::clamp(size_.y * 0.18f, 80.0f * style::scale(), 150.0f * style::scale())));
+        if (msize.x + margin * 2 + tsize.x <= size_.x && msize.y + margin * 2 <= size_.y) {
+            const ImVec2 p1(origin_.x + size_.x - margin, origin_.y + size_.y - margin);
+            minimapRect_ = ImRect(p1 - msize, p1);
+        }
+    }
+}
+
+void NodeEditor::drawToolbar(const Graph& g) {
+    if (toolbarRect_.GetWidth() <= 0) return;
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float h = ImGui::GetFrameHeight(), gap = 2.0f * style::scale(), pad = 3.0f * style::scale();
+    const float divider = st.ItemSpacing.x;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p0 = toolbarRect_.Min, p1 = toolbarRect_.Max;
+    dl->AddRectFilled(p0, p1, ImGui::GetColorU32(ImGuiCol_PopupBg, 0.92f), st.FrameRounding * 1.5f);
+    dl->AddRect(p0, p1, ImGui::GetColorU32(ImGuiCol_Border), st.FrameRounding * 1.5f);
+    float x = p0.x + pad;
+    const float y = p0.y + pad;
+    auto next = [&] {
+        ImGui::SetCursorScreenPos(ImVec2(x, y));
+        x += h + gap;
+    };
+    next();
+    if (ui::IconButton(ICON_PLUS, "Add Node", false, "Shift+A", "Add a node in the middle of the view")) addRequested_ = true;
+    const float dx = x + (divider - gap) * 0.5f;
+    dl->AddLine(ImVec2(dx, y + h * 0.2f), ImVec2(dx, y + h * 0.8f), ImGui::GetColorU32(ImGuiCol_Separator));
+    x += divider;
+    next();
+    if (ui::IconButton(ICON_FIT, "Frame Selected", false, ".", "Zoom to the selected nodes")) frameSelected(g);
+    next();
+    if (ui::IconButton(ICON_HOME, "Frame All", false, "Home", "Zoom to the whole graph")) fitFrames_ = 1;
+    next();
+    if (ui::IconButton(ICON_MAP, "Minimap", showMinimap, nullptr, "An overview of the graph; drag in it to move the view"))
+        showMinimap = !showMinimap;
+}
+
+void NodeEditor::drawMinimap(const Graph& g) {
+    if (minimapRect_.GetWidth() <= 0) return;
+    // The graph's bounds (nodes and frames) and the view's, in grid units.
+    ImRect view(toGrid(origin_), toGrid(origin_ + size_));
+    ImRect bounds = view;
+    for (const auto& [id, n] : g.nodes()) bounds.Add(ImRect(n->x, n->y, n->x + kNodeW, n->y + nodeHeightGrid(*n)));
+    for (const Frame& f : g.frames()) bounds.Add(ImRect(f.x, f.y, f.x + f.w, f.y + f.h));
+    // While dragging, the map keeps the bounds it had when the drag began: they include the view,
+    // and following it would move the map under the mouse.
+    const ImGuiID mapId = ImGui::GetID("##minimap");
+    if (ImGui::GetActiveID() == mapId) bounds = minimapBounds_;
+    else minimapBounds_ = bounds;
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float pad = 6.0f * style::scale();
+    const ImRect inner(minimapRect_.Min + ImVec2(pad, pad), minimapRect_.Max - ImVec2(pad, pad));
+    const float s = std::min(inner.GetWidth() / std::max(bounds.GetWidth(), 1.0f), inner.GetHeight() / std::max(bounds.GetHeight(), 1.0f));
+    const ImVec2 off = inner.GetCenter() - bounds.GetCenter() * s;
+    auto map = [&](ImVec2 p) { return ImVec2(off.x + p.x * s, off.y + p.y * s); };
+
+    ImGui::SetCursorScreenPos(minimapRect_.Min);
+    ImGui::InvisibleButton("##minimap", minimapRect_.GetSize());
+    if (ImGui::IsItemActive() && s > 0.0f) {
+        // Drag (or click) to centre the view there.
+        const ImVec2 gp((ImGui::GetIO().MousePos.x - off.x) / s, (ImGui::GetIO().MousePos.y - off.y) / s);
+        pan_ = ImVec2(size_.x * 0.5f - gp.x * zoom_, size_.y * 0.5f - gp.y * zoom_);
+        fitFrames_ = 0;
+    }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(minimapRect_.Min, minimapRect_.Max, ImGui::GetColorU32(ImGuiCol_PopupBg, 0.92f), st.FrameRounding * 1.5f);
+    dl->AddRect(minimapRect_.Min, minimapRect_.Max, ImGui::GetColorU32(ImGuiCol_Border), st.FrameRounding * 1.5f);
+    dl->PushClipRect(minimapRect_.Min, minimapRect_.Max, true);
+    for (const Frame& f : g.frames())
+        dl->AddRectFilled(map(ImVec2(f.x, f.y)), map(ImVec2(f.x + f.w, f.y + f.h)),
+                          ImGui::ColorConvertFloat4ToU32(ImVec4(f.color[0], f.color[1], f.color[2], 0.35f)));
+    for (const auto& [id, n] : g.nodes()) {
+        const ImU32 c = n->muted ? theme::col(theme::MutedTitle) : categoryColor(n->info().category);
+        const ImVec2 a = map(ImVec2(n->x, n->y)), b = map(ImVec2(n->x + kNodeW, n->y + nodeHeightGrid(*n)));
+        dl->AddRectFilled(a, ImMax(b, a + ImVec2(2, 2)), selection_.count(id) ? theme::col(theme::Selection) : c, 1.0f);
+    }
+    const ImVec2 va = ImMax(map(view.Min), inner.Min - ImVec2(pad, pad)), vb = ImMin(map(view.Max), inner.Max + ImVec2(pad, pad));
+    dl->AddRectFilled(va, vb, ImGui::GetColorU32(ImGuiCol_Text, 0.06f));
+    dl->AddRect(va, vb, ui::accent(), 0.0f, 0, 1.5f * style::scale());
+    dl->PopClipRect();
 }
 
 // ---------------------------------------------------------------- gestures
@@ -872,6 +1063,7 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
     size_.x = std::max(size_.x, 1.0f);
     size_.y = std::max(size_.y, 1.0f);
     syncOrder(g);
+    layoutOverlays();
     if (frameSelectionNext_) {
         frameSelectionNext_ = false;
         fitFrames_ = 0;
@@ -943,11 +1135,13 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
         dl->AddRect(box.Min, box.Max, IM_COL32(100, 140, 220, 200));
     }
     if (g.nodes().empty()) {
-        const char* hint = "Right-click to add a node";
+        const char* hint = "Right-click or Shift+A to add a node";
         ImVec2 ts = ImGui::CalcTextSize(hint);
         dl->AddText(ImVec2(canvas.GetCenter().x - ts.x * 0.5f, canvas.GetCenter().y), ImGui::GetColorU32(ImGuiCol_TextDisabled), hint);
     }
     dl->PopClipRect();
+    drawToolbar(g);
+    drawMinimap(g);
 
     // ---- grab (G / Shift+D): selection follows the mouse until a click
     if (mode_ == Mode::Grab) {
@@ -1231,6 +1425,14 @@ NodeEditor::Result NodeEditor::draw(Graph& g, int& selected, int& preview, int& 
     if ((ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) || ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)) &&
         !io.WantTextInput && mode_ == Mode::None && ImGui::IsKeyChordPressed(ImGuiMod_Shift | ImGuiKey_A)) {
         menuPos_ = ImGui::GetMousePos();
+        search_[0] = 0;
+        menuConnect_ = {};
+        swapTargets_.clear();
+        ImGui::OpenPopup("AddNode");
+    }
+    if (std::exchange(addRequested_, false)) {
+        // The toolbar's Add: the menu opens over the canvas, and the node lands in its middle.
+        menuPos_ = canvasCenter();
         search_[0] = 0;
         menuConnect_ = {};
         swapTargets_.clear();
@@ -1638,10 +1840,10 @@ void NodeEditor::drawFrames(ImDrawList* dl, const Graph& g) const {
         ImVec2 a = toScreen(ImVec2(f.x, f.y)), b = toScreen(ImVec2(f.x + f.w, f.y + f.h));
         ImU32 body = ImGui::GetColorU32(ImVec4(f.color[0], f.color[1], f.color[2], 0.35f));
         ImU32 title = ImGui::GetColorU32(ImVec4(f.color[0] * 1.2f, f.color[1] * 1.2f, f.color[2] * 1.2f, 0.85f));
-        dl->AddRectFilled(a, b, body, 6 * z);
-        dl->AddRectFilled(a, ImVec2(b.x, a.y + kTitleH * z), title, 6 * z, ImDrawFlags_RoundCornersTop);
+        dl->AddRectFilled(a, b, body, 3 * z);
+        dl->AddRectFilled(a, ImVec2(b.x, a.y + kTitleH * z), title, 3 * z, ImDrawFlags_RoundCornersTop);
         const bool sel = f.id == selectedFrame_;
-        dl->AddRect(a, b, sel ? theme::col(theme::Selection) : IM_COL32(0, 0, 0, 80), 6 * z, 0, sel ? 2.0f : 1.0f);
+        dl->AddRect(a, b, sel ? theme::col(theme::Selection) : IM_COL32(0, 0, 0, 80), 3 * z, 0, sel ? 2.0f : 1.0f);
         if (fs >= 5.0f) {
             ImVec4 clip(a.x, a.y, b.x, b.y);
             dl->AddText(ImGui::GetFont(), fs * 1.1f, ImVec2(a.x + 8 * z, a.y + (kTitleH * z - fs * 1.1f) * 0.5f),

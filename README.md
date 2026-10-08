@@ -104,7 +104,8 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Select linked | L upstream, Shift+L downstream |
 | Cut wires / add reroutes | Ctrl+right-drag / Shift+right-drag across wires |
 | Preview another output | Ctrl+Shift+click a node cycles through its outputs |
-| Frame all / selected | Home / . |
+| Frame all / selected | Home / . (or the canvas toolbar) |
+| Minimap | Map icon in the canvas toolbar; drag in it to move the view |
 | Find a node | Ctrl+F (View > Find Node...): type part of a label or node name, Enter selects and frames it (opening the group it is in) |
 | Edit a value | Drag the field sideways (Shift = fine), or click it to type |
 | Preview any node | Ctrl+click it (again to clear) |

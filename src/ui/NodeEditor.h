@@ -70,6 +70,7 @@ public:
 
     // True while the user is mid-gesture (dragging, editing a value), so undo snapshots wait.
     bool showTimings = true;
+    bool showMinimap = false;  // the overview in the canvas's corner (a preference)
     // The graph drawn is a group's contents: the Add menu offers the group's Value Input / Output.
     bool insideGroup = false;
     bool interacting() const { return mode_ != Mode::None || editing_.node != 0 || activeNode_ != 0; }
@@ -140,6 +141,14 @@ private:
     void linkEnds(const Graph& g, const Link& l, ImVec2& a, ImVec2& b) const;
 
     void drawGrid(ImDrawList* dl) const;
+    // The toolbar and minimap over the canvas's bottom corners: their rects are laid out at the
+    // start of each frame, so hit tests can leave the nodes under them alone.
+    void layoutOverlays();
+    bool overOverlay(ImVec2 p) const;
+    void drawToolbar(const Graph& g);
+    void drawMinimap(const Graph& g);
+    ImRect toolbarRect_, minimapRect_, minimapBounds_;
+    bool addRequested_ = false;
     void drawFrames(ImDrawList* dl, const Graph& g) const;
     int hitFrameTitle(const Graph& g, ImVec2 p) const;
     int hitFrameCorner(const Graph& g, ImVec2 p) const;

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 # The app version. Bump it (and CHANGELOG.md) when a feature set lands; see CLAUDE.md.
-project(NodeLab VERSION 1.4.0 LANGUAGES C CXX)
+project(NodeLab VERSION 1.5.0 LANGUAGES C CXX)
 
 if(MINGW)
     # GCC on 64-bit Windows can't keep the stack aligned to 32 bytes, so AVX code that spills a

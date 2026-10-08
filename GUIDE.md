@@ -58,8 +58,8 @@ current workspace:
 **View > Reset Layout** puts the chosen layout back. Develop starts with Photo, Nodes with
 Default.
 **View > New Viewer** opens an extra image panel that can show any node (see Viewing Intermediate
-Results below). **View > Node Timings** shows how long each node took above it (amber when it is
-50 ms or more), so you can see what slows a graph down. Nodes that ran on the graphics card are
+Results below). **View > Node Timings** shows how long each node took on the right of its title (amber
+when it is 50 ms or more), so you can see what slows a graph down. Nodes that ran on the graphics card are
 marked **GPU**.
 
 ### A First Graph
@@ -1419,7 +1419,7 @@ Coordinates are relative to the image, so textures look the same in the preview 
 
 | Action | How |
 |---|---|
-| Add a node | Right-click empty space, or press Shift+A. Type to search, then press Enter or click, or browse the menus. Over a menu name or its list, the wheel steps through its nodes (Enter adds the highlighted one). |
+| Add a node | Right-click empty space, press Shift+A, or click + in the canvas's toolbar. Type to search, then press Enter or click, or browse the menus. Over a menu name or its list, the wheel steps through its nodes (Enter adds the highlighted one). |
 | Connect | Drag from an output pin to an input pin (or the other way round). |
 | Add a connected node | Drag a wire into empty space and pick a node from the menu. |
 | Insert into a wire | Drag a node onto a wire; it is connected when you release. |
@@ -1428,7 +1428,8 @@ Coordinates are relative to the image, so textures look the same in the preview 
 | Pull out of a chain | Alt+drag the node. |
 | Disconnect | Drag a wire off an input pin and drop it on empty space, or Ctrl+right-drag across wires (knife). |
 | Pan / zoom | Drag empty space or middle-drag; mouse wheel zooms. |
-| Frame all / selected | Home / . (period) |
+| Frame all / selected | Home / . (period), or the house and frame icons in the canvas's bottom-left toolbar. |
+| Minimap | The map icon in the toolbar shows an overview of the graph in the bottom-right corner; click or drag in it to move the view. |
 | Find a node | Ctrl+F, or View > Find Node... Type part of a label or node name; Enter (or a click) selects the node and frames it. Labelled nodes are listed first. Nodes inside groups are listed too, as "Group > Node", and picking one opens that group. |
 | Select | Click; Shift+click adds; Shift+drag box-selects; Ctrl+A selects all. |
 | Select linked | L (upstream) / Shift+L (downstream) |
