@@ -141,7 +141,7 @@ Mask renderText(const std::string& text, int font, float pixelHeight) {
 class WatermarkNode : public Node {
 public:
     enum { Text, Font, Size, Anchor, InsetX, InsetY, Opacity, Color, Shadow };
-    NODELAB_NODE({"xform.watermark", "Watermark", "Transform",
+    REFRACTORY_NODE({"xform.watermark", "Watermark", "Transform",
                   {{"Image", PinType::Image}, {"Logo", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Text("Text", "\xC2\xA9 Your Name"),

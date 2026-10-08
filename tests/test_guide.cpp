@@ -9,7 +9,7 @@
 TEST_CASE("the embedded guide documents every node") {
     const std::string_view guide = guideMarkdown();
     REQUIRE(guide.size() > 1000);
-    CHECK(guide.substr(0, 15) == "# NodeLab Guide");
+    CHECK(guide.rfind("# Refractory Guide", 0) == 0);
 
     // Node entries are titled by a line that is only bold text; "Split HSV / Combine HSV" covers
     // both nodes (Help > Guide jumps to it for either).

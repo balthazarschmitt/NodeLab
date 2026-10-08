@@ -2154,7 +2154,7 @@ nlohmann::json NodeEditor::selectionJson(const Graph& g) const {
 void NodeEditor::copySelection(const Graph& g) {
     if (selection_.empty()) return;
     nlohmann::json clip = selectionJson(g);
-    clip["nodelabClipboard"] = 1;
+    clip["refractoryClipboard"] = 1;
     ImGui::SetClipboardText(clip.dump().c_str());
 }
 
@@ -2162,7 +2162,7 @@ bool NodeEditor::paste(Graph& g) {
     const char* text = ImGui::GetClipboardText();
     if (!text) return false;
     nlohmann::json clip = nlohmann::json::parse(text, nullptr, false);
-    if (clip.is_discarded() || !clip.contains("nodelabClipboard")) return false;
+    if (clip.is_discarded() || !clip.contains("refractoryClipboard")) return false;
     return insertClip(g, clip, toGrid(ImGui::GetIO().MousePos));
 }
 

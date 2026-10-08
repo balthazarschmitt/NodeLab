@@ -1,6 +1,6 @@
 # Library views and metadata: copy a_scene.png, b_photo.jpg, a copy of it named
 # "c_photo copy.jpg" and the two CR3s (see library.txt) to build\smoke\libmeta, then
-#   NodeLab.exe build\smoke\libmeta --script tests\ui\library_views.txt
+#   Refractory.exe build\smoke\libmeta --script tests\ui\library_views.txt
 # Grid with labels; Compare (C) of the first two, zoomed; Survey (N); a stack (Ctrl+G);
 # the Metadata sidebar.
 settle

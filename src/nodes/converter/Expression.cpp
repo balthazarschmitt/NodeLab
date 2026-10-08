@@ -490,7 +490,7 @@ gpu::PointOp expressionOp(const std::vector<std::string>& sources, const std::ve
 
 class ExpressionNode : public Node {
 public:
-    NODELAB_NODE({"conv.expression", "Expression", "Converter",
+    REFRACTORY_NODE({"conv.expression", "Expression", "Converter",
                   {{"Image", PinType::Image}, {"In1", PinType::Channel, 1}, {"In2", PinType::Channel, 2}},
                   {{"Value", PinType::Channel}},
                   {ParamDesc::Text("Expression", "(r + g + b) / 3"), ParamDesc::FloatFree("In1", 0.0f, 0.0f, 1.0f),
@@ -520,7 +520,7 @@ public:
 
 class ImageExpressionNode : public Node {
 public:
-    NODELAB_NODE({"conv.image_expression", "Image Expression", "Converter",
+    REFRACTORY_NODE({"conv.image_expression", "Image Expression", "Converter",
                   {{"Image", PinType::Image}, {"In1", PinType::Channel, 3}, {"In2", PinType::Channel, 4}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Text("R", "r"), ParamDesc::Text("G", "g"), ParamDesc::Text("B", "b"),

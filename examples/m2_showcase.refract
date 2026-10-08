@@ -1,4 +1,4 @@
-{"app":"NodeLab","version":1,"graph":{"nextId":40,
+{"app":"Refractory","version":1,"graph":{"nextId":40,
  "nodes":[
   {"id":1,"type":"io.image_input","pos":[0,120],"params":{"File":"scene.png"}},
   {"id":2,"type":"color.curves","pos":[240,0],"params":{"Factor":1.0,"Curves":{"master":[[0,0],[0.25,0.18],[0.75,0.85],[1,1]],"r":[[0,0],[1,1]],"g":[[0,0],[1,1]],"b":[[0,0],[0.5,0.6],[1,1]]}}},

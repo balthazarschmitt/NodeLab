@@ -1,4 +1,4 @@
-# build\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\canvas.txt
+# build\Refractory.exe tests\ui\interact.refract --script tests\ui\canvas.txt
 # The Node Editor's toolbar (bottom left) and minimap (bottom right).
 settle
 click "Node Editor/Minimap"

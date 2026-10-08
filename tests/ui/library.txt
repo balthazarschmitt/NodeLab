@@ -1,6 +1,6 @@
 # Library: copy four photos to build\smoke\lib (they sort as a_scene.png, b_photo.jpg and two
 # CR3s), then
-#   NodeLab.exe build\smoke\lib --script tests\ui\library.txt
+#   Refractory.exe build\smoke\lib --script tests\ui\library.txt
 # Opens the folder (first photo), edits it, opens the second (autosaving the first), rates and
 # picks it, steps to the third and rates and rejects it, then copies the first photo's edit and
 # pastes it onto the last two.

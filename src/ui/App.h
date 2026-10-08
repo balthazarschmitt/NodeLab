@@ -29,7 +29,7 @@ public:
     App();
     ~App();
     struct RunOptions {
-        std::string project;     // .nlproj to open at startup
+        std::string project;     // .refract to open at startup
         std::string screenshot;  // debug: save a frame once evaluation settles, then exit
         std::string script;      // debug: UI automation script (see UiScript.h)
         bool gpu = false;        // debug: --device gpu, so automated runs use the GPU device too

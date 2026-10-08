@@ -500,13 +500,14 @@ std::vector<std::string> batchOutputPaths(const std::vector<NameSource>& sources
         }
     // A file already there is an earlier export, which a new export replaces, unless it's an
     // original: a Library photo (it has a sidecar), or the camera's JPEG beside a RAW. That one
-    // has the RAW's name and the camera's EXIF, where NodeLab's export of the RAW has its own
+    // has the RAW's name and the camera's EXIF, where Refractory's export of the RAW has its own
     // Software tag (and exports of PNGs and TIFFs have no camera EXIF).
     auto original = [&](const fs::path& p) {
         if (fs::exists(u8ToPath(library::sidecarPath(pathToU8(p))), ec)) return true;
         if (!sourceNames.count(key(fs::path(p).replace_extension()))) return false;
         exif::PhotoInfo info;
-        return exif::readInfo(pathToU8(p), info) && !info.make.empty() && info.software.rfind("NodeLab", 0) != 0;
+        return exif::readInfo(pathToU8(p), info) && !info.make.empty() && info.software.rfind("Refractory", 0) != 0 &&
+               info.software.rfind("NodeLab", 0) != 0;
     };
     auto taken = [&](const fs::path& p) {
         if (used.count(key(p)) || sourceFiles.count(key(p))) return true;

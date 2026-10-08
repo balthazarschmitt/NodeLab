@@ -1,4 +1,4 @@
-# build\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\interact.txt
+# build\Refractory.exe tests\ui\interact.refract --script tests\ui\interact.txt
 # View is fixed at zoom 1, pan 0 by the project; canvas origin is at (439, 72) in the docked default layout.
 settle
 

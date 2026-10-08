@@ -83,7 +83,7 @@ void autoUprightAngles(const std::vector<Segment>& segments, int w, int h, int m
 
 class PerspectiveNode : public Node {
 public:
-    NODELAB_NODE({perspective::kType, "Perspective", "Transform",
+    REFRACTORY_NODE({perspective::kType, "Perspective", "Transform",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Enum("Upright", perspective::UprightGuided, {"Off", "Guided", "Auto", "Level", "Vertical", "Full"}),
@@ -124,7 +124,7 @@ private:
 class LensProfileNode : public Node {
 public:
     enum { Distortion = 0, ChromaticAberration, Vignetting, Constrain };
-    NODELAB_NODE({"xform.lens_profile", "Lens Profile", "Transform",
+    REFRACTORY_NODE({"xform.lens_profile", "Lens Profile", "Transform",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Distortion", 100.0f, 0.0f, 200.0f), ParamDesc::Bool("Chromatic Aberration", true),

@@ -1,4 +1,4 @@
-# build-test\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\search.txt
+# build-test\Refractory.exe tests\ui\interact.refract --script tests\ui\search.txt
 settle
 click 800 480 1
 wait 5

@@ -97,7 +97,7 @@ TEST_CASE("Output Sharpening is off by default, and stronger for paper and highe
 TEST_CASE("batchOutputPath never overwrites the source") {
     ExportSettings s;
     s.nameTemplate = "{name}";
-    const fs::path dir = fs::temp_directory_path() / "nodelab_batch_name";
+    const fs::path dir = fs::temp_directory_path() / "refractory_batch_name";
     fs::create_directories(dir);
     const std::string src = writeSource(dir, "a.png", 0.5f);
     const std::string same = batchOutputPath(src, pathToU8(dir), s);
@@ -115,10 +115,10 @@ TEST_CASE("Batch exports keep the source's name but never replace an original") 
     old.fromJson({{"nameTemplate", "{name}_edit"}});
     CHECK(old.nameTemplate == "{name}_edit");
 
-    const fs::path dir = fs::temp_directory_path() / "nodelab_batch_collide";
+    const fs::path dir = fs::temp_directory_path() / "refractory_batch_collide";
     fs::remove_all(dir);
     fs::create_directories(dir / "out");
-    // A JPEG with an EXIF Make and Software, as a camera (or NodeLab exporting a RAW) writes it.
+    // A JPEG with an EXIF Make and Software, as a camera (or Refractory exporting a RAW) writes it.
     auto writeJpeg = [](const fs::path& p, const std::string& software) {
         tiff::Ifd ifd0;
         ifd0.ascii(0x010F, "Canon");
@@ -139,7 +139,7 @@ TEST_CASE("Batch exports keep the source's name but never replace an original") 
     auto outs = batchOutputPaths({{raw}}, pathToU8(dir), s);
     CHECK(u8ToPath(outs[0]).filename() == "a (2).jpg");
     // Exporting again replaces that export instead of adding " (3)".
-    writeJpeg(dir / "a (2).jpg", "NodeLab 1.3.0");
+    writeJpeg(dir / "a (2).jpg", "Refractory 1.3.0");
     outs = batchOutputPaths({{raw}}, pathToU8(dir), s);
     CHECK(u8ToPath(outs[0]).filename() == "a (2).jpg");
     // Both of the pair in one batch: neither export replaces the other's source.
@@ -147,9 +147,9 @@ TEST_CASE("Batch exports keep the source's name but never replace an original") 
     outs = batchOutputPaths({{raw}, {jpg}}, pathToU8(dir), s);
     CHECK(u8ToPath(outs[0]).filename() == "a (2).jpg");
     CHECK(u8ToPath(outs[1]).filename() == "a_edit.jpg");
-    // Where the JPEG beside the source is NodeLab's earlier export (of a RAW: its own Software
+    // Where the JPEG beside the source is Refractory's earlier export (of a RAW: its own Software
     // tag), or has no camera EXIF (an export of a PNG), re-exporting replaces it.
-    writeJpeg(dir / "a.jpg", "NodeLab 1.3.0");
+    writeJpeg(dir / "a.jpg", "Refractory 1.3.0");
     outs = batchOutputPaths({{raw}}, pathToU8(dir), s);
     CHECK(u8ToPath(outs[0]).filename() == "a.jpg");
     std::ofstream(dir / "a.jpg", std::ios::trunc) << "earlier export";
@@ -160,14 +160,14 @@ TEST_CASE("Batch exports keep the source's name but never replace an original") 
     std::ofstream(dir / "out" / "a.jpg") << "earlier export";
     outs = batchOutputPaths({{raw}}, pathToU8(dir / "out"), s);
     CHECK(u8ToPath(outs[0]).filename() == "a.jpg");
-    std::ofstream(dir / "out" / "a.jpg.nlproj") << "{}";
+    std::ofstream(dir / "out" / "a.jpg.refract") << "{}";
     outs = batchOutputPaths({{raw}}, pathToU8(dir / "out"), s);
     CHECK(u8ToPath(outs[0]).filename() == "a (2).jpg");
     fs::remove_all(dir);
 }
 
 TEST_CASE("Exporter runs a batch through the graph on a background thread") {
-    const fs::path dir = fs::temp_directory_path() / "nodelab_batch_run";
+    const fs::path dir = fs::temp_directory_path() / "refractory_batch_run";
     fs::remove_all(dir);
     fs::create_directories(dir / "out");
     const std::string a = writeSource(dir, "a.png", 1.0f, 40, 20);
@@ -211,7 +211,7 @@ TEST_CASE("Exporter can be cancelled") {
     g.addNode("io.output");
     Exporter ex;
     ex.cancel();
-    std::vector<ExportItem> items(50, ExportItem{"", pathToU8(fs::temp_directory_path() / "nodelab_never.png")});
+    std::vector<ExportItem> items(50, ExportItem{"", pathToU8(fs::temp_directory_path() / "refractory_never.png")});
     ex.start(g.toJson(), items, 0, ExportSettings{});
     ex.cancel();
     ex.wait();
@@ -219,7 +219,7 @@ TEST_CASE("Exporter can be cancelled") {
 }
 
 TEST_CASE("Filename templates expand tokens and make safe names") {
-    const fs::path dir = fs::temp_directory_path() / "nodelab_name_template";
+    const fs::path dir = fs::temp_directory_path() / "refractory_name_template";
     fs::remove_all(dir);
     fs::create_directories(dir / "Trip");
     const std::string src = writeSource(dir / "Trip", "IMG_7.png", 0.5f);
@@ -301,7 +301,7 @@ TEST_CASE("Photo info comes from EXIF, and names exports") {
         exif::infoFromTiff(block.data(), cut, part);
     }
 
-    const fs::path dir = fs::temp_directory_path() / "nodelab_exif_names";
+    const fs::path dir = fs::temp_directory_path() / "refractory_exif_names";
     fs::remove_all(dir);
     fs::create_directories(dir);
     const std::string png = writeSource(dir, "x.png", 0.5f);
@@ -329,7 +329,7 @@ TEST_CASE("Photo info comes from EXIF, and names exports") {
 }
 
 TEST_CASE("Multi-preset export writes every preset's file from one render, in its own folder") {
-    const fs::path dir = fs::temp_directory_path() / "nodelab_multi_preset";
+    const fs::path dir = fs::temp_directory_path() / "refractory_multi_preset";
     fs::remove_all(dir);
     fs::create_directories(dir / "out");
     const std::string a = writeSource(dir, "a.png", 1.0f, 40, 20);

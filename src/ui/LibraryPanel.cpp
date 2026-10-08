@@ -21,7 +21,7 @@
 
 namespace {
 
-// Lightroom's Library Filter, reduced to the attributes NodeLab keeps.
+// Lightroom's Library Filter, reduced to the attributes Refractory keeps.
 const char* const kFilters[] = {"All Photos", "Picked", "Hide Rejected", "Rejected",
                                 "1 Star or More", "2 Stars or More", "3 Stars or More",
                                 "4 Stars or More", "5 Stars", "Edited",

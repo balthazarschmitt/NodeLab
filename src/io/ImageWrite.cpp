@@ -155,7 +155,7 @@ bool writeFile(const std::string& pathU8, const std::vector<Span>& pieces, std::
     namespace fs = std::filesystem;
     const fs::path path = u8ToPath(pathU8);
     fs::path tmp = path;
-    tmp += ".nodelab-tmp";
+    tmp += ".refractory-tmp";
     bool ok;
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
@@ -573,7 +573,7 @@ bool writeTiff(const std::string& pathU8, const Image& img, const SaveOptions& o
     ifd.rational(283, 72, 1);
     ifd.shorts(284, {1});  // PlanarConfiguration: chunky
     ifd.shorts(296, {2});  // ResolutionUnit: inch
-    ifd.ascii(305, "NodeLab");
+    ifd.ascii(305, "Refractory");
     ifd.shorts(317, {2});                                 // Predictor: horizontal differencing
     if (comp == 4) ifd.shorts(338, {2});                  // ExtraSamples: unassociated alpha
     ifd.shorts(339, std::vector<uint32_t>(comp, 1));      // SampleFormat: unsigned integer

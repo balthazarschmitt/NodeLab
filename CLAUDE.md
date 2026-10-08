@@ -1,4 +1,4 @@
-# NodeLab
+# Refractory
 
 Node-based image editor (C++20, Dear ImGui docking branch + GLFW/OpenGL 3, CPU float pipeline).
 The user thinks in Blender's node editor and compositor; match Blender's behavior and names when
@@ -13,15 +13,15 @@ Nothing is installed system-wide.
 set PATH=C:\Projects\NodeLab\.toolchain\bin;%PATH%
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-build\nodelab_tests.exe
+build\refractory_tests.exe
 ```
 
 - **One build directory:** always build into `build/`. The user wants no other build folders, so don't
   create `build-dev/`, `build-test/` or similar.
-  - The user often has `build\NodeLab.exe` running. A pre-link step (`cmake/MoveAsideExe.cmake`)
-    renames the running exe to `NodeLab.old-<timestamp>.exe`, because Windows allows renaming a
+  - The user often has `build\Refractory.exe` running. A pre-link step (`cmake/MoveAsideExe.cmake`)
+    renames the running exe to `Refractory.old-<timestamp>.exe`, because Windows allows renaming a
     running exe but not overwriting it. The next build deletes old copies that are no longer running.
-  - Never kill the user's NodeLab process.
+  - Never kill the user's Refractory process.
 - **Dependencies:** FetchContent pulls glfw, imgui (v1.91.8-docking), nlohmann/json, stb, tinyexpr, zlib-ng,
   LibRaw (0.21.3) and doctest.
   - LibRaw has no CMake build; `CMakeLists.txt` lists its sources (from its `Makefile.dist`). It is
@@ -40,18 +40,18 @@ build\nodelab_tests.exe
 
 ## Versioning
 
-- **App version:** `project(NodeLab VERSION x.y.z)` in `CMakeLists.txt` is the single source.
-  - It reaches the code through `core/Version.h` (`kNodeLabVersion`, `kNodeLabCommit`, `versionString()`).
+- **App version:** `project(Refractory VERSION x.y.z)` in `CMakeLists.txt` is the single source.
+  - It reaches the code through `core/Version.h` (`kRefractoryVersion`, `kRefractoryCommit`, `versionString()`).
   - `cmake/GitVersion.cmake` stamps the git hash at build time, with `-dirty` for uncommitted changes.
-  - It appears in the window title, the Help menu, `NodeLab.exe --version`, and the exe's
-    Properties > Details (`cmake/NodeLab.rc.in`).
+  - It appears in the window title, the Help menu, `Refractory.exe --version`, and the exe's
+    Properties > Details (`cmake/Refractory.rc.in`).
 - **Bumping (semver):**
   - Minor (1.0.0 → 1.1.0) when a feature set lands; patch (1.0.0 → 1.0.1) for fixes only. A major
     bump is for breaking changes (projects that no longer load as before).
   - Bump when the user asks to commit a finished feature set, not on every commit.
-  - Update `CHANGELOG.md` under the new version, commit, then tag it: `git tag -a v1.1.0 -m "NodeLab 1.1.0"`.
+  - Update `CHANGELOG.md` under the new version, commit, then tag it: `git tag -a v1.1.0 -m "Refractory 1.1.0"`.
   - Add changes that aren't released yet under `## Unreleased` in `CHANGELOG.md`.
-- **Project file format:** `.nlproj` has `version` (the format, `kProjectVersion` in
+- **Project file format:** `.refract` has `version` (the format, `kProjectVersion` in
   `io/ProjectFile.h`) and `appVersion` (the app that saved it).
   - New node types or params don't need a format bump, because unknown params fall back to defaults.
   - Bump `kProjectVersion` only for changes older builds would misread, and make `loadProject`
@@ -59,12 +59,12 @@ build\nodelab_tests.exe
 
 ## Testing
 
-- **Unit tests:** `nodelab_tests.exe` (doctest), in `tests/test_*.cpp`.
+- **Unit tests:** `refractory_tests.exe` (doctest), in `tests/test_*.cpp`.
   - The full run takes about 40 s. `-tce="*GPU*,damaged*"` skips the GPU comparisons and decode
     fuzzing, about 3 s, for quick checks while iterating; run everything before finishing.
   - `test_golden.cpp` hashes every node's output (legacy and scene-linear) and the example
     projects against `tests/golden/`. A change that alters results on purpose regenerates them
-    with `NODELAB_GOLDEN_WRITE=1 nodelab_tests.exe -tc="golden*"`; legacy hashes must not change.
+    with `REFRACTORY_GOLDEN_WRITE=1 refractory_tests.exe -tc="golden*"`; legacy hashes must not change.
   - `test_nodes2.cpp` runs every registered node with image and channel inputs on every pin.
   - New nodes are covered automatically, but add behaviour checks for anything non-trivial.
   - `test_fuzz.cpp` runs every node on 1-pixel-wide images, params at their range ends, NaN and
@@ -72,24 +72,24 @@ build\nodelab_tests.exe
     non-finite output (except Math and Converter nodes). Its last case loads the example projects
     with random damage anywhere in their JSON.
   - `test_decode_fuzz.cpp` loads damaged JPEG/PNG files and ICC profiles. Set
-    `NODELAB_FUZZ_RUNS=5000` for a longer local hunt, and `NODELAB_FUZZ_RAW=<file>` to damage a
+    `REFRACTORY_FUZZ_RUNS=5000` for a longer local hunt, and `REFRACTORY_FUZZ_RAW=<file>` to damage a
     camera RAW too (opt-in, as it needs a real file).
   - `test_guide.cpp` fails if a node has no `**Display Name**` entry in GUIDE.md. Document new
     nodes there (and in the README node table). GUIDE.md is compiled into the exe
     (`cmake/EmbedText.cmake`) and shown by Help > Guide.
-- **Node list:** `NodeLab.exe --list-nodes` prints every node with its pins and params.
-- **Headless render:** `NodeLab.exe --render project.nlproj out.png` renders at full resolution and
+- **Node list:** `Refractory.exe --list-nodes` prints every node with its pins and params.
+- **Headless render:** `Refractory.exe --render project.refract out.png` renders at full resolution and
   also writes File Output nodes. The extension picks the format (.png/.jpg/.tif/.exr), and
   `--depth 16` (or 32 for full-float EXR) sets the bit depth. `--timings` prints evaluate and
   save times.
-- **Benchmark:** `NodeLab.exe --benchmark project.nlproj [--full] [--runs N]` prints the median ms
+- **Benchmark:** `Refractory.exe --benchmark project.refract [--full] [--runs N]` prints the median ms
   per node. Use it before and after performance work.
   - With `--device gpu`, per-node times are timer queries on queued work and can land on the
     wrong node (one that reads back waits for everything before it). Add `--sync` for each
     node's own time: it waits around every node and doesn't fuse.
-- **Screenshot of the UI:** `NodeLab.exe project.nlproj --screenshot shot.png`. Automated runs use
+- **Screenshot of the UI:** `Refractory.exe project.refract --screenshot shot.png`. Automated runs use
   the CPU device; add `--device gpu` to check the GPU path (evaluation and the viewer's display).
-- **Scripted UI tests:** `NodeLab.exe tests\ui\interact.nlproj --script tests\ui\<name>.txt`.
+- **Scripted UI tests:** `Refractory.exe tests\ui\interact.refract --script tests\ui\<name>.txt`.
   - Script commands are documented in `src/ui/UiScript.h`.
   - Prefer named targets over coordinates: `click "Inspector/Factor"`, `click "node:Curves"`,
     `drag "node:Invert.Factor" -50 0`, `moveat`/`clickat`/`dragat "T" fx fy` for a point inside an
@@ -99,7 +99,7 @@ build\nodelab_tests.exe
   - Input goes straight into ImGui and the real mouse is ignored.
   - Scripts save screenshots with `shot build/smoke/<file>.png`; read them to verify.
   - Coordinates assume the automated 1600x900 window, the Nodes workspace's default layout, and
-    `interact.nlproj`'s fixed graph view. The canvas origin is at (439, 72) at zoom 1.
+    `interact.refract`'s fixed graph view. The canvas origin is at (439, 72) at zoom 1.
 - **Don't drive the user's desktop.** Faking OS input (PostMessage, SendInput) or grabbing screen
   pixels breaks because the real mouse interferes, and it can capture the user's other windows.
   Use `--script` / `--screenshot`.
@@ -120,9 +120,9 @@ src/io        image load (stb; PngDecode with zlib-ng and JpegDecode, a parallel
               JPEG decoder, both bit-identical to stb), ImageWrite (PNG/JPEG/TIFF/EXR, ICC, parallel zlib-ng and JPEG strips; Tiff.h IFD writer),
               RawDecode (LibRaw), Exif (orientation, export EXIF), Icc (embedded input profiles), Export (Lanczos resize), ImageCache (proxies
               per edge; full-res decoded on demand, scaled levels kept for regions; RAW proxies from a
-              half-size decode), project files, Library (folder listing, sidecars `photo.ext.nlproj`
+              half-size decode), project files, Library (folder listing, sidecars `photo.ext.refract`
               with rating/flag/thumbnail in `ui.library`, default graph, paste edit, thumbnails),
-              Presets (`.nlpreset` node snippets in %APPDATA%\NodeLab\presets)
+              Presets (`.rfpreset` node snippets in %APPDATA%\Refractory\presets)
 src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (custom canvas), Inspector,
               Style (metrics on a 4 px grid, fonts, Resolution Scale), Widgets (IconButton, Toggle,
               Segmented, SectionHeader, Tooltip), Icons.h (Lucide code points, generated with
@@ -134,7 +134,7 @@ src/ui        App (docking, viewers, undo, groups nav, eyedropper), NodeEditor (
               histograms off the UI thread), SystemStats (status bar's RAM/CPU), LibraryPanel (filmstrip and Grid view, culling keys,
               thumbnail worker), FileDialog (Win32), UiScript
 src/ml        AI masks' models: Models (catalogue pinned by size and SHA-256, WinHTTP downloads into
-              %APPDATA%\NodeLab\models, NuGet DLLs read by HTTP range from their zips), Http,
+              %APPDATA%\Refractory\models, NuGet DLLs read by HTTP range from their zips), Http,
               Onnx (ONNX Runtime + DirectML loaded at run time with LoadLibrary; C API headers in
               third_party/onnxruntime). Nodes in nodes/matte/AutoMask (results cached by picture,
               on disk in models/cache)
@@ -147,7 +147,7 @@ src/gpu       Device (hidden GL 4.3 context sharing textures with the UI, textur
 ## Conventions
 
 - **Adding a node:**
-  1. Write a class with `NODELAB_NODE({type, name, category, inputs, outputs, params})` and `evaluate()`.
+  1. Write a class with `REFRACTORY_NODE({type, name, category, inputs, outputs, params})` and `evaluate()`.
   2. Register it in the family's `register*Nodes()`.
   3. Add a `**Display Name**` entry to GUIDE.md (enforced by `test_guide.cpp`).
   4. List it in the Add menu's layout in `graph/NodeMenu.cpp` (otherwise it lands at the end of
@@ -239,12 +239,12 @@ src/gpu       Device (hidden GL 4.3 context sharing textures with the UI, textur
   named through `App::panelId("Result")` (`###Result` in Nodes, `###Result.Develop` in Develop),
   so they dock independently. Hidden workspaces' dockspaces are kept alive with `KeepAliveOnly`.
   Automated runs start in Nodes.
-- **Preferences:** `App::loadPreferences`/`savePreferences` (`%APPDATA%\NodeLab\preferences.json`).
+- **Preferences:** `App::loadPreferences`/`savePreferences` (`%APPDATA%\Refractory\preferences.json`).
   Automated runs neither load nor save them, never auto save, and keep the Inspector as a docked panel, so their
   scripts' coordinates hold.
 - **AI masks:** the exe never links ONNX Runtime; `ml::run` loads it on first use. Tests point
   `ml::setFolder` at an empty folder (test_main), so nodes run without models; set
-  `NODELAB_ML_REAL=1` to test the installed ones. A model run can take a minute on the CPU, so
+  `REFRACTORY_ML_REAL=1` to test the installed ones. A model run can take a minute on the CPU, so
   don't run AI nodes in loops. Interactive evaluations (`EvalContext::interactive`, set by
   AsyncEvaluator) never wait for a model: `AutoMaskNode::infer` queues the run on its own thread
   (the evaluation cancel would restart it on every edit) and the node shows a stand-in until
@@ -281,8 +281,8 @@ src/gpu       Device (hidden GL 4.3 context sharing textures with the UI, textur
 
 ## Git
 
-- Branch `main`, remote `origin` = https://github.com/balthazarschmitt/NodeLab (public, MIT).
+- Branch `main`, remote `origin` = https://github.com/balthazarschmitt/Refractory (public, MIT).
 - `saves/` holds the user's own projects and exports: it is gitignored and must never be pushed.
-- Releases: `gh release create vX.Y.Z` with `NodeLab.exe`, `GUIDE.md` and a zip (exe, docs,
+- Releases: `gh release create vX.Y.Z` with `Refractory.exe`, `GUIDE.md` and a zip (exe, docs,
   LICENSE, examples). Push and release only when the user asks.
 - Commit when the user asks, with descriptive messages ending with the Co-Authored-By trailer.

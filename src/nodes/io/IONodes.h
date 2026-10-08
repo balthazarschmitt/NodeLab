@@ -5,7 +5,7 @@
 
 class ImageInputNode : public Node {
 public:
-    NODELAB_NODE({"io.image_input", "Image Input", "Input / Output",
+    REFRACTORY_NODE({"io.image_input", "Image Input", "Input / Output",
                   {},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Path("File"), ParamDesc::Enum("Color Space", 0, {"sRGB", "Linear Rec.709", "Non-Color"}),
@@ -52,7 +52,7 @@ public:
 
 class OutputNode : public Node {
 public:
-    NODELAB_NODE({"io.output", "Output", "Input / Output",
+    REFRACTORY_NODE({"io.output", "Output", "Input / Output",
                   {{"Image", PinType::Image}},
                   {},
                   {}})
@@ -62,7 +62,7 @@ public:
 
 class NumberNode : public Node {
 public:
-    NODELAB_NODE({"io.number", "Number", "Input / Output",
+    REFRACTORY_NODE({"io.number", "Number", "Input / Output",
                   {},
                   {{"Value", PinType::Number}},
                   {ParamDesc::Float("Value", 1.0f, -10.0f, 10.0f)}})

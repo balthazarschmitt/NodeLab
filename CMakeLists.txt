@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 # The app version. Bump it (and CHANGELOG.md) when a feature set lands; see CLAUDE.md.
-project(NodeLab VERSION 1.6.1 LANGUAGES C CXX)
+project(Refractory VERSION 1.7.0 LANGUAGES C CXX)
 
 if(MINGW)
     # GCC on 64-bit Windows can't keep the stack aligned to 32 bytes, so AVX code that spills a
@@ -17,7 +17,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
-option(NODELAB_BUILD_TESTS "Build unit tests" ON)
+option(REFRACTORY_BUILD_TESTS "Build unit tests" ON)
 
 include(FetchContent)
 # Portable CMake builds (e.g. WinLibs) ship without CA certificates; reuse Git for Windows' bundle.
@@ -90,7 +90,7 @@ FetchContent_Declare(zlib
 
 FetchContent_MakeAvailable(glfw json imgui stb tinyexpr tinyexr libraw zlib)
 
-# libwebp (BSD-3) for lossy WebP export and WebP import. Lossless export keeps NodeLab's own
+# libwebp (BSD-3) for lossy WebP export and WebP import. Lossless export keeps Refractory's own
 # encoder (WebpEncode.cpp), which is bit-exact and tested; libwebp adds the lossy mode.
 foreach(_opt ANIM_UTILS CWEBP DWEBP GIF2WEBP IMG2WEBP VWEBP WEBPINFO WEBPMUX EXTRAS)
     set(WEBP_BUILD_${_opt} OFF CACHE BOOL "" FORCE)
@@ -269,28 +269,28 @@ target_include_directories(tinyexr INTERFACE ${tinyexr_SOURCE_DIR})
 
 # ---------------------------------------------------------------- version info
 # Regenerated on every build so the commit hash is current; the file only changes when the hash does.
-set(NODELAB_VERSION_CPP ${CMAKE_BINARY_DIR}/generated/Version.cpp)
-add_custom_target(nodelab_version
+set(REFRACTORY_VERSION_CPP ${CMAKE_BINARY_DIR}/generated/Version.cpp)
+add_custom_target(refractory_version
     COMMAND ${CMAKE_COMMAND}
         -DSRC=${CMAKE_SOURCE_DIR}/cmake/Version.cpp.in
-        -DOUT=${NODELAB_VERSION_CPP}
+        -DOUT=${REFRACTORY_VERSION_CPP}
         -DGIT_DIR=${CMAKE_SOURCE_DIR}
         -DVERSION=${PROJECT_VERSION}
         -P ${CMAKE_SOURCE_DIR}/cmake/GitVersion.cmake
-    BYPRODUCTS ${NODELAB_VERSION_CPP}
+    BYPRODUCTS ${REFRACTORY_VERSION_CPP}
     COMMENT "Stamping version ${PROJECT_VERSION}")
 
 # GUIDE.md is compiled in so Help > Guide works without files next to the exe.
-set(NODELAB_GUIDE_CPP ${CMAKE_BINARY_DIR}/generated/Guide.cpp)
-add_custom_command(OUTPUT ${NODELAB_GUIDE_CPP}
-    COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_SOURCE_DIR}/GUIDE.md -DOUT=${NODELAB_GUIDE_CPP} -DNAME=kGuideMarkdown
+set(REFRACTORY_GUIDE_CPP ${CMAKE_BINARY_DIR}/generated/Guide.cpp)
+add_custom_command(OUTPUT ${REFRACTORY_GUIDE_CPP}
+    COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_SOURCE_DIR}/GUIDE.md -DOUT=${REFRACTORY_GUIDE_CPP} -DNAME=kGuideMarkdown
         -P ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
     DEPENDS ${CMAKE_SOURCE_DIR}/GUIDE.md ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
     COMMENT "Embedding GUIDE.md")
 
 # Fonts for Watermark when the system has none of its own (Dear ImGui's Roboto, Apache 2.0, and
 # Cousine, SIL OFL 1.1). EmbedText works on any bytes.
-set(NODELAB_FONTS_CPP ${CMAKE_BINARY_DIR}/generated/FontRoboto.cpp ${CMAKE_BINARY_DIR}/generated/FontCousine.cpp)
+set(REFRACTORY_FONTS_CPP ${CMAKE_BINARY_DIR}/generated/FontRoboto.cpp ${CMAKE_BINARY_DIR}/generated/FontCousine.cpp)
 add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/generated/FontRoboto.cpp
     COMMAND ${CMAKE_COMMAND} -DIN=${imgui_SOURCE_DIR}/misc/fonts/Roboto-Medium.ttf
         -DOUT=${CMAKE_BINARY_DIR}/generated/FontRoboto.cpp -DNAME=kFontRoboto -P ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
@@ -302,25 +302,25 @@ add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/generated/FontCousine.cpp
     DEPENDS ${imgui_SOURCE_DIR}/misc/fonts/Cousine-Regular.ttf ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
     COMMENT "Embedding Cousine")
 # The interface's icons: a Lucide subset (ISC), made by tools/lucide_icons.py.
-set(NODELAB_ICONS_CPP ${CMAKE_BINARY_DIR}/generated/FontLucide.cpp)
-add_custom_command(OUTPUT ${NODELAB_ICONS_CPP}
-    COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_SOURCE_DIR}/third_party/lucide/lucide-nodelab.ttf
-        -DOUT=${NODELAB_ICONS_CPP} -DNAME=kFontLucide -P ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
-    DEPENDS ${CMAKE_SOURCE_DIR}/third_party/lucide/lucide-nodelab.ttf ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
+set(REFRACTORY_ICONS_CPP ${CMAKE_BINARY_DIR}/generated/FontLucide.cpp)
+add_custom_command(OUTPUT ${REFRACTORY_ICONS_CPP}
+    COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_SOURCE_DIR}/third_party/lucide/lucide-refractory.ttf
+        -DOUT=${REFRACTORY_ICONS_CPP} -DNAME=kFontLucide -P ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
+    DEPENDS ${CMAKE_SOURCE_DIR}/third_party/lucide/lucide-refractory.ttf ${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake
     COMMENT "Embedding Lucide icons")
 
 # Windows can't overwrite a running exe but can rename it; move the old one aside before linking
-# so a single build/ folder works while NodeLab is open.
-function(nodelab_allow_relink target)
+# so a single build/ folder works while Refractory is open.
+function(refractory_allow_relink target)
     add_custom_command(TARGET ${target} PRE_LINK
         COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:${target}> -P ${CMAKE_SOURCE_DIR}/cmake/MoveAsideExe.cmake)
 endfunction()
 
 # ---------------------------------------------------------------- core library (no GUI)
-add_library(nodelab_core STATIC
-    ${NODELAB_VERSION_CPP}
-    ${NODELAB_GUIDE_CPP}
-    ${NODELAB_FONTS_CPP}
+add_library(refractory_core STATIC
+    ${REFRACTORY_VERSION_CPP}
+    ${REFRACTORY_GUIDE_CPP}
+    ${REFRACTORY_FONTS_CPP}
     src/core/Value.cpp
     src/gpu/GL.cpp
     src/gpu/Device.cpp
@@ -384,20 +384,20 @@ add_library(nodelab_core STATIC
     src/ml/Onnx.cpp
     src/nodes/texture/TextureNodes.cpp
     src/nodes/utility/UtilityNodes.cpp)
-target_include_directories(nodelab_core PUBLIC src)
+target_include_directories(refractory_core PUBLIC src)
 # ONNX Runtime's C API header (MIT): the runtime itself is loaded at run time (src/ml/Onnx.cpp).
-target_include_directories(nodelab_core PRIVATE third_party/onnxruntime)
-add_dependencies(nodelab_core nodelab_version)
-target_link_libraries(nodelab_core PUBLIC nlohmann_json::nlohmann_json stb tinyexpr tinyexr libraw zlib glfw OpenGL::GL)
-target_link_libraries(nodelab_core PRIVATE webp jxl jxl_threads avif)
+target_include_directories(refractory_core PRIVATE third_party/onnxruntime)
+add_dependencies(refractory_core refractory_version)
+target_link_libraries(refractory_core PUBLIC nlohmann_json::nlohmann_json stb tinyexpr tinyexr libraw zlib glfw OpenGL::GL)
+target_link_libraries(refractory_core PRIVATE webp jxl jxl_threads avif)
 if(WIN32)
-    target_compile_definitions(nodelab_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_definitions(refractory_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
     # winhttp: AI model downloads (src/ml/Http.cpp); shell32: the Recycle Bin (src/io/Library.cpp)
-    target_link_libraries(nodelab_core PUBLIC winhttp shell32)
+    target_link_libraries(refractory_core PUBLIC winhttp shell32)
 endif()
 
 # ---------------------------------------------------------------- application
-add_executable(NodeLab
+add_executable(Refractory
     src/main.cpp
     src/ui/App.cpp
     src/ui/SystemStats.cpp
@@ -412,30 +412,30 @@ add_executable(NodeLab
     src/ui/UiScript.cpp
     src/ui/Style.cpp
     src/ui/Widgets.cpp
-    ${NODELAB_ICONS_CPP}
+    ${REFRACTORY_ICONS_CPP}
     src/ui/ParamWidgets.cpp
     src/ui/SliderTrack.cpp
     src/ui/ViewerOverlay.cpp
     src/ui/NodeInspectors.cpp)
-target_link_libraries(NodeLab PRIVATE nodelab_core imgui)
-nodelab_allow_relink(NodeLab)
+target_link_libraries(Refractory PRIVATE refractory_core imgui)
+refractory_allow_relink(Refractory)
 if(WIN32)
     enable_language(RC)
-    configure_file(cmake/NodeLab.rc.in ${CMAKE_BINARY_DIR}/generated/NodeLab.rc @ONLY)
-    target_sources(NodeLab PRIVATE ${CMAKE_BINARY_DIR}/generated/NodeLab.rc)
+    configure_file(cmake/Refractory.rc.in ${CMAKE_BINARY_DIR}/generated/Refractory.rc @ONLY)
+    target_sources(Refractory PRIVATE ${CMAKE_BINARY_DIR}/generated/Refractory.rc)
 endif()
 if(WIN32)
-    target_link_libraries(NodeLab PRIVATE comdlg32 ole32 uuid)
+    target_link_libraries(Refractory PRIVATE comdlg32 ole32 uuid)
 endif()
 if(MINGW)
-    target_link_options(NodeLab PRIVATE -static -static-libgcc -static-libstdc++)
+    target_link_options(Refractory PRIVATE -static -static-libgcc -static-libstdc++)
     if(CMAKE_BUILD_TYPE STREQUAL "Release")
-        target_link_options(NodeLab PRIVATE -mwindows)
+        target_link_options(Refractory PRIVATE -mwindows)
     endif()
 endif()
 
 # ---------------------------------------------------------------- tests
-if(NODELAB_BUILD_TESTS)
+if(REFRACTORY_BUILD_TESTS)
     FetchContent_Declare(doctest
         GIT_REPOSITORY https://github.com/doctest/doctest.git
         GIT_TAG v2.4.11
@@ -444,15 +444,15 @@ if(NODELAB_BUILD_TESTS)
     FetchContent_MakeAvailable(doctest)
 
     enable_testing()
-    add_executable(nodelab_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp tests/test_groups.cpp tests/test_nodes2.cpp tests/test_version.cpp tests/test_guide.cpp tests/test_layout.cpp tests/test_export.cpp tests/test_develop.cpp tests/test_ir_tools.cpp tests/test_expression_vm.cpp tests/test_parallel.cpp tests/test_colorpipe.cpp tests/test_develop_linear.cpp tests/test_raw_exif.cpp tests/test_image_write.cpp tests/test_roi.cpp tests/test_icc.cpp tests/test_gpu.cpp tests/test_denoise.cpp tests/test_masks.cpp tests/test_library.cpp tests/test_prefs.cpp tests/test_fuzz.cpp tests/test_jpeg_decode.cpp
+    add_executable(refractory_tests tests/test_main.cpp tests/test_core.cpp tests/test_nodes.cpp tests/test_groups.cpp tests/test_nodes2.cpp tests/test_version.cpp tests/test_guide.cpp tests/test_layout.cpp tests/test_export.cpp tests/test_develop.cpp tests/test_ir_tools.cpp tests/test_expression_vm.cpp tests/test_parallel.cpp tests/test_colorpipe.cpp tests/test_develop_linear.cpp tests/test_raw_exif.cpp tests/test_image_write.cpp tests/test_roi.cpp tests/test_icc.cpp tests/test_gpu.cpp tests/test_denoise.cpp tests/test_masks.cpp tests/test_library.cpp tests/test_prefs.cpp tests/test_fuzz.cpp tests/test_jpeg_decode.cpp
     tests/test_png_decode.cpp tests/test_decode_fuzz.cpp tests/test_node_menu.cpp tests/test_retouch.cpp tests/test_presets.cpp tests/test_automask.cpp tests/test_grain.cpp tests/test_golden.cpp tests/test_tiff_exr.cpp tests/test_perspective.cpp tests/test_lens_profile.cpp tests/test_compose.cpp tests/test_develop_tools.cpp tests/test_webp.cpp tests/test_codecs.cpp tests/test_history.cpp tests/test_photomerge.cpp tests/test_library_meta.cpp src/ui/Theme.cpp)
-    target_include_directories(nodelab_tests PRIVATE ${doctest_SOURCE_DIR})
+    target_include_directories(refractory_tests PRIVATE ${doctest_SOURCE_DIR})
     # Tests that load the shipped example projects find them here.
-    target_compile_definitions(nodelab_tests PRIVATE NODELAB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-    target_link_libraries(nodelab_tests PRIVATE nodelab_core imgui)
-    nodelab_allow_relink(nodelab_tests)
+    target_compile_definitions(refractory_tests PRIVATE REFRACTORY_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    target_link_libraries(refractory_tests PRIVATE refractory_core imgui)
+    refractory_allow_relink(refractory_tests)
     if(MINGW)
-        target_link_options(nodelab_tests PRIVATE -static -static-libgcc -static-libstdc++)
+        target_link_options(refractory_tests PRIVATE -static -static-libgcc -static-libstdc++)
     endif()
-    add_test(NAME nodelab_tests COMMAND nodelab_tests)
+    add_test(NAME refractory_tests COMMAND refractory_tests)
 endif()

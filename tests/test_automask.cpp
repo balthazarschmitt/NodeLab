@@ -1,5 +1,5 @@
 // AI masks (Select Subject, Select Sky): the model downloads' checksums, the nodes without their
-// models, the Add Mask recipes, and (opt-in, NODELAB_ML_REAL=1) the installed models themselves.
+// models, the Add Mask recipes, and (opt-in, REFRACTORY_ML_REAL=1) the installed models themselves.
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -88,7 +88,7 @@ TEST_CASE("The model catalogue is pinned") {
 }
 
 TEST_CASE("Select Subject and Select Sky without their models give an empty mask") {
-    if (std::getenv("NODELAB_ML_REAL")) return;  // the models are installed for that run
+    if (std::getenv("REFRACTORY_ML_REAL")) return;  // the models are installed for that run
     REQUIRE(!ml::available("subject"));          // test_main points the models folder at an empty one
     CHECK(ml::downloadSize("sky") > 100'000'000);
     for (const char* type : {"matte.select_subject", "matte.select_sky", "matte.select_people", "matte.select_landscape",
@@ -139,9 +139,9 @@ TEST_CASE("Add Mask's Subject, Sky and Background read the image being adjusted"
     CHECK(g2.inputLink(m.mask, 0)->fromNode == in2->id);
 }
 
-// Opt-in: runs the installed models (`NodeLab.exe --install-model sky`, and subject).
+// Opt-in: runs the installed models (`Refractory.exe --install-model sky`, and subject).
 TEST_CASE("The installed models run and find the sky") {
-    if (!std::getenv("NODELAB_ML_REAL")) return;
+    if (!std::getenv("REFRACTORY_ML_REAL")) return;
     // The masks this run stores go into the real models folder's disk cache: remove them after,
     // so the user's own cached masks aren't pushed out and the next run starts from scratch.
     const std::filesystem::path cache = u8ToPath(ml::folder()) / "cache";

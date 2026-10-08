@@ -1,5 +1,5 @@
 # Library Grid: copy photos to build\smoke\lib (see library.txt), then
-#   NodeLab.exe build\smoke\lib --script tests\ui\grid.txt
+#   Refractory.exe build\smoke\lib --script tests\ui\grid.txt
 # G opens the grid; a click selects, Ctrl+click adds, a star click rates, 2 rates the
 # selection, P picks it; a double-click opens a photo and leaves the grid.
 settle

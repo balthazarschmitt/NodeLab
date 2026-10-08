@@ -1,6 +1,6 @@
 #pragma once
-// The formats NodeLab reads and writes through libraries: lossy WebP (libwebp; lossless WebP is
-// NodeLab's own WebpEncode), JPEG XL (libjxl) and AVIF (libavif with libaom). ImageWrite and
+// The formats Refractory reads and writes through libraries: lossy WebP (libwebp; lossless WebP is
+// Refractory's own WebpEncode), JPEG XL (libjxl) and AVIF (libavif with libaom). ImageWrite and
 // ImageIO call these; everything about colour tagging and metadata placement is decided here.
 #include <cstddef>
 #include <cstdint>

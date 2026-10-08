@@ -138,7 +138,7 @@ TEST_CASE("ICC matrix/TRC profiles parse to a Rec.709 conversion") {
 
 TEST_CASE("Images with an embedded P3 or Adobe RGB profile decode through it") {
     const Bytes p3 = icc::buildMatrixTrc("Display P3", kP3, -1);
-    for (const fs::path& path : {pngWithProfile("nodelab_icc_p3.png", p3), jpegWithProfile("nodelab_icc_p3.jpg", p3)}) {
+    for (const fs::path& path : {pngWithProfile("refractory_icc_p3.png", p3), jpegWithProfile("refractory_icc_p3.jpg", p3)}) {
         CAPTURE(path.string());
         CHECK(icc::embeddedProfile(path.string()) == p3);
         CHECK(embeddedProfileInfo(path.string()) == "Display P3");
@@ -163,14 +163,14 @@ TEST_CASE("Images with an embedded P3 or Adobe RGB profile decode through it") {
     }
 
     // Adobe RGB has a 2.2 curve: mid grey decodes darker than through sRGB's.
-    const fs::path adobe = pngWithProfile("nodelab_icc_adobe.png", icc::buildMatrixTrc("Adobe RGB (1998)", kAdobe, 563.0 / 256.0));
+    const fs::path adobe = pngWithProfile("refractory_icc_adobe.png", icc::buildMatrixTrc("Adobe RGB (1998)", kAdobe, 563.0 / 256.0));
     std::string err;
     auto img = loadImage(adobe.string(), err, withProfile(true));
     REQUIRE(img);
     CHECK(img->pixel(1)[1] == doctest::Approx(std::pow(128.0f / 255.0f, 563.0f / 256.0f)).epsilon(0.002));
 
     // An sRGB-tagged file decodes exactly like an untagged one.
-    const fs::path srgb = pngWithProfile("nodelab_icc_srgb.png", srgbIccProfile());
+    const fs::path srgb = pngWithProfile("refractory_icc_srgb.png", srgbIccProfile());
     auto a = loadImage(srgb.string(), err, withProfile(true));
     auto b = loadImage(srgb.string(), err, withProfile(false));
     REQUIRE(a);
@@ -227,7 +227,7 @@ TEST_CASE("Exports in wider colour spaces embed their profile and read back to t
         std::copy(grey, grey + 4, scene.pixel(1));
         auto sp = std::make_shared<const Image>(scene);
 
-        const fs::path path = fs::temp_directory_path() / ("nodelab_space_" + std::to_string(space) + ".png");
+        const fs::path path = fs::temp_directory_path() / ("refractory_space_" + std::to_string(space) + ".png");
         SaveOptions opt;
         opt.depth = 16;
         opt.space = space;
@@ -259,7 +259,7 @@ TEST_CASE("HDR PNG export: Rec.2100 PQ with a cICP chunk, highlights kept above 
     CHECK(d->pixel(1)[0] > d->pixel(0)[0] + 0.1f);
     CHECK(d->pixel(1)[0] < 1.0f);
 
-    const fs::path path = fs::temp_directory_path() / "nodelab_hdr.png";
+    const fs::path path = fs::temp_directory_path() / "refractory_hdr.png";
     SaveOptions opt;
     opt.depth = 16;
     opt.space = outspace::Rec2100PQ;

@@ -1,4 +1,4 @@
-# build\NodeLab.exe tests\ui\curves.nlproj --script tests\ui\curves.txt
+# build\Refractory.exe tests\ui\curves.refract --script tests\ui\curves.txt
 # Select Curves, scroll the Inspector down to the curve, and edit it.
 settle
 click "node:Curves"

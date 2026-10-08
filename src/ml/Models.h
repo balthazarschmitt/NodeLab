@@ -1,6 +1,6 @@
 #pragma once
 // AI models for auto masks (Select Subject, Select Sky), like Lightroom's and darktable's: they
-// aren't part of NodeLab.exe but downloaded on request into %APPDATA%\NodeLab\models, together
+// aren't part of Refractory.exe but downloaded on request into %APPDATA%\Refractory\models, together
 // with the ONNX Runtime that runs them (ml/Onnx.h). Every file is pinned by size and SHA-256.
 #include <cstdint>
 #include <string>
@@ -30,7 +30,7 @@ constexpr const char* kRuntime = "runtime";
 const std::vector<ModelSpec>& catalogue();
 const ModelSpec* findModel(const std::string& id);
 
-// The models folder (%APPDATA%\NodeLab\models), created on demand. Tests point it elsewhere.
+// The models folder (%APPDATA%\Refractory\models), created on demand. Tests point it elsewhere.
 std::string folder();
 void setFolder(const std::string& dirU8);
 std::string filePath(const FileSpec& f);

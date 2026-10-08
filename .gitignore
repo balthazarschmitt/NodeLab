@@ -1,6 +1,7 @@
 build*/
 cmake-build-*/
 .idea/
+*.refract.tmp
 *.nlproj.tmp
 .toolchain/
 saves/

@@ -1,4 +1,4 @@
-# build\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\guide.txt
+# build\Refractory.exe tests\ui\interact.refract --script tests\ui\guide.txt
 settle
 # select the Invert node and press F1: the guide opens at its entry
 click 700 342

@@ -79,7 +79,7 @@ void gpuChannelOp(EvalContext& ctx, const Node& node, gpu::PointOp op, std::vect
 
 class ColorRampNode : public Node {
 public:
-    NODELAB_NODE({"conv.color_ramp", "Color Ramp", "Converter",
+    REFRACTORY_NODE({"conv.color_ramp", "Color Ramp", "Converter",
                   {{"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}, {"Alpha", PinType::Channel}},
                   {ParamDesc::Float("Factor", 0.5f, 0.0f, 1.0f), ParamDesc::Ramp("Ramp")}})
@@ -142,7 +142,7 @@ vec4 ramp(float t) {
 
 class ColorKeyNode : public Node {
 public:
-    NODELAB_NODE({"conv.color_key", "Color Key", "Converter",
+    REFRACTORY_NODE({"conv.color_key", "Color Key", "Converter",
                   {{"Image", PinType::Image}},
                   {{"Mask", PinType::Channel}, {"Image", PinType::Image}},
                   {ParamDesc::Float("Hue", 120.0f, 0.0f, 360.0f).withTrack(SliderTrack::Hue), ParamDesc::Float("Hue Range", 30.0f, 0.0f, 180.0f),
@@ -195,7 +195,7 @@ public:
 
 class MapRangeNode : public Node {
 public:
-    NODELAB_NODE({"conv.map_range", "Map Range", "Converter",
+    REFRACTORY_NODE({"conv.map_range", "Map Range", "Converter",
                   {{"Value", PinType::Channel, 0}, {"From Min", PinType::Channel, 1}, {"From Max", PinType::Channel, 2},
                    {"To Min", PinType::Channel, 3}, {"To Max", PinType::Channel, 4}},
                   {{"Value", PinType::Channel}},
@@ -237,7 +237,7 @@ public:
 
 class ClampNode : public Node {
 public:
-    NODELAB_NODE({"conv.clamp", "Clamp", "Converter",
+    REFRACTORY_NODE({"conv.clamp", "Clamp", "Converter",
                   {{"Value", PinType::Channel, 0}, {"Min", PinType::Channel, 1}, {"Max", PinType::Channel, 2}},
                   {{"Value", PinType::Channel}},
                   {ParamDesc::FloatFree("Value", 0.5f, 0.0f, 1.0f), ParamDesc::FloatFree("Min", 0.0f, 0.0f, 1.0f),
@@ -259,7 +259,7 @@ public:
 
 class ThresholdNode : public Node {
 public:
-    NODELAB_NODE({"conv.threshold", "Threshold", "Converter",
+    REFRACTORY_NODE({"conv.threshold", "Threshold", "Converter",
                   {{"Value", PinType::Channel, 0}, {"Threshold", PinType::Channel, 1}, {"Softness", PinType::Channel, 2}},
                   {{"Mask", PinType::Channel}},
                   {ParamDesc::Float("Value", 0.5f, 0.0f, 1.0f), ParamDesc::Float("Threshold", 0.5f, 0.0f, 1.0f),
@@ -286,7 +286,7 @@ public:
         Add, Subtract, Multiply, Divide, Power, Logarithm, SquareRoot, Absolute, Minimum, Maximum, LessThan,
         GreaterThan, Modulo, Floor, Ceil, Round, Fract, Sine, Cosine, Snap, PingPong
     };
-    NODELAB_NODE({"conv.math", "Math", "Converter",
+    REFRACTORY_NODE({"conv.math", "Math", "Converter",
                   {{"A", PinType::Channel, 0}, {"B", PinType::Channel, 1}},
                   {{"Value", PinType::Channel}},
                   {ParamDesc::FloatFree("A", 0.5f, 0.0f, 1.0f), ParamDesc::FloatFree("B", 0.5f, 0.0f, 1.0f),

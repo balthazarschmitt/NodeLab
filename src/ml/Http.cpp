@@ -51,10 +51,10 @@ std::string get(const std::string& url, const std::string& range, const Sink& si
 
     // Automatic proxy (Windows 8.1+) finds the system's proxy settings; older systems fall back
     // to the default (WinHTTP's own) configuration.
-    Handle session(WinHttpOpen(L"NodeLab", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
+    Handle session(WinHttpOpen(L"Refractory", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
                                WINHTTP_NO_PROXY_BYPASS, 0));
     if (!session.h)
-        session.h = WinHttpOpen(L"NodeLab", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME,
+        session.h = WinHttpOpen(L"Refractory", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME,
                                 WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session.h) return lastError("WinHttpOpen");
     // Resolve, connect, send, receive (ms): generous, since a stalled download can be cancelled.

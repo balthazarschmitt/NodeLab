@@ -1,4 +1,4 @@
-# build\NodeLab.exe tests\ui\pick.nlproj --script tests\ui\pick.txt
+# build\Refractory.exe tests\ui\pick.refract --script tests\ui\pick.txt
 settle
 # select Difference Key, press its Pick button, hover the red square in the Original
 click "node:Difference Key"

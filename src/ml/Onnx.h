@@ -1,6 +1,6 @@
 #pragma once
 // Runs the AI models (ml/Models.h) with ONNX Runtime, loaded at run time from the models folder:
-// NodeLab.exe is linked statically and must start without it. The DirectML provider runs models
+// Refractory.exe is linked statically and must start without it. The DirectML provider runs models
 // on the GPU, and the CPU takes over when it can't.
 #include <atomic>
 #include <cstdint>

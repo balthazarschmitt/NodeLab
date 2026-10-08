@@ -1,4 +1,4 @@
-// Generated from cmake/NodeLab.rc.in - shows up under the exe's Properties > Details.
+// Generated from cmake/Refractory.rc.in - shows up under the exe's Properties > Details.
 #include <winver.h>
 
 VS_VERSION_INFO VERSIONINFO
@@ -11,11 +11,11 @@ BEGIN
     BEGIN
         BLOCK "040904B0"
         BEGIN
-            VALUE "FileDescription", "NodeLab node-based image editor"
+            VALUE "FileDescription", "Refractory node-based image editor"
             VALUE "FileVersion", "@PROJECT_VERSION@"
-            VALUE "ProductName", "NodeLab"
+            VALUE "ProductName", "Refractory"
             VALUE "ProductVersion", "@PROJECT_VERSION@"
-            VALUE "OriginalFilename", "NodeLab.exe"
+            VALUE "OriginalFilename", "Refractory.exe"
         END
     END
     BLOCK "VarFileInfo"

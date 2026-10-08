@@ -1,4 +1,4 @@
-# build\NodeLab.exe tests\ui\develop.nlproj --script tests\ui\named.txt
+# build\Refractory.exe tests\ui\develop.refract --script tests\ui\named.txt
 # Named script targets (UiItems): nodes on the canvas, menus, Inspector widgets.
 settle
 click "node:Color Mixer"

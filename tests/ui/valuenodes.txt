@@ -1,4 +1,4 @@
-# NodeLab.exe tests\ui\interact.nlproj --script tests\ui\valuenodes.txt
+# Refractory.exe tests\ui\interact.refract --script tests\ui\valuenodes.txt
 # Group a node, enter it, and add a Value Input from Add > Group.
 settle
 drag 739 345 789 115

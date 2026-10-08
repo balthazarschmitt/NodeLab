@@ -1,4 +1,4 @@
-# NodeLab.exe tests\ui\interact.nlproj --script tests\ui\find.txt
+# Refractory.exe tests\ui\interact.refract --script tests\ui\find.txt
 # Ctrl+F lists the graph's nodes; typing filters, Enter selects and frames the pick.
 settle
 move 800 480

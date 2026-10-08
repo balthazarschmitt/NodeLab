@@ -108,7 +108,7 @@ std::vector<uint8_t> fromRaw(const raw::Metadata& m, int w, int h) {
     if (!m.make.empty()) ifd0.ascii(0x010F, m.make);
     if (!m.model.empty()) ifd0.ascii(0x0110, m.model);
     ifd0.shorts(0x0112, {1});
-    ifd0.ascii(0x0131, std::string("NodeLab ") + kNodeLabVersion);
+    ifd0.ascii(0x0131, std::string("Refractory ") + kRefractoryVersion);
     if (m.timestamp > 0) {
         // LibRaw turns the camera's local "YYYY:MM:DD HH:MM:SS" into a time_t with mktime, so
         // localtime gives the same wall-clock time back.

@@ -9,7 +9,7 @@
 #include "graph/NodeRegistry.h"
 
 // Declares staticInfo()/info() for a node class from a NodeInfo initializer.
-#define NODELAB_NODE(...)                                         \
+#define REFRACTORY_NODE(...)                                         \
     static const NodeInfo& staticInfo() {                         \
         static const NodeInfo inf = __VA_ARGS__;                  \
         return inf;                                               \

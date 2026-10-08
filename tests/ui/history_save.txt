@@ -1,6 +1,6 @@
-# History saved with the project: copy tests\ui\interact.nlproj to build\smoke\hist.nlproj, then
-#   NodeLab.exe build\smoke\hist.nlproj --script tests\ui\history_save.txt
-#   NodeLab.exe build\smoke\hist.nlproj --script tests\ui\history_reopen.txt
+# History saved with the project: copy tests\ui\interact.refract to build\smoke\hist.refract, then
+#   Refractory.exe build\smoke\hist.refract --script tests\ui\history_save.txt
+#   Refractory.exe build\smoke\hist.refract --script tests\ui\history_reopen.txt
 # This adds a Gamma, changes it and saves (Ctrl+S).
 settle
 move 740 350

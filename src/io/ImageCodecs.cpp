@@ -55,7 +55,7 @@ struct AvifImageFree {
     void operator()(avifImage* i) const { avifImageDestroy(i); }
 };
 
-// The ICC profile for what an AVIF's CICP names, for the spaces NodeLab exports; empty for sRGB
+// The ICC profile for what an AVIF's CICP names, for the spaces Refractory exports; empty for sRGB
 // and for unknown ones (read as sRGB).
 Bytes cicpProfile(int primaries, int transfer) {
     switch (primaries) {
@@ -108,7 +108,7 @@ bool webpLossy(const Pixels& px, int quality, std::vector<webp::Chunk>& chunks, 
         err = "WebP encoding failed (" + std::to_string(code) + ")";
         return false;
     }
-    // libwebp writes a whole file; keep its image chunks for NodeLab's container, which adds the
+    // libwebp writes a whole file; keep its image chunks for Refractory's container, which adds the
     // profile and metadata.
     chunks.clear();
     for (webp::Chunk& c : riffChunks(writer.mem, writer.size))

@@ -1,4 +1,4 @@
-# build\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\history.txt
+# build\Refractory.exe tests\ui\interact.refract --script tests\ui\history.txt
 # The History panel's named steps, and the Export window's Also export row.
 settle
 move 740 350

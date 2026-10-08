@@ -34,7 +34,7 @@ Image pattern(int w, int h) {
 }
 
 Bytes encode(const Image& img, FileFormat format, int depth, bool lossless = true) {
-    const fs::path p = fs::temp_directory_path() / (std::string("nodelab_fuzz_src") + formatExtension(format));
+    const fs::path p = fs::temp_directory_path() / (std::string("refractory_fuzz_src") + formatExtension(format));
     SaveOptions o;
     o.format = format;
     o.depth = depth;
@@ -77,10 +77,10 @@ Bytes mutate(const Bytes& good, std::mt19937& rng) {
 }
 
 void loadDamaged(const Bytes& good, const char* ext, uint32_t seed, int runs) {
-    // NODELAB_FUZZ_RUNS sets a longer run for local hunting.
-    if (const char* n = std::getenv("NODELAB_FUZZ_RUNS")) runs = std::atoi(n);
+    // REFRACTORY_FUZZ_RUNS sets a longer run for local hunting.
+    if (const char* n = std::getenv("REFRACTORY_FUZZ_RUNS")) runs = std::atoi(n);
     std::mt19937 rng(seed);
-    const fs::path p = fs::temp_directory_path() / (std::string("nodelab_fuzz") + ext);
+    const fs::path p = fs::temp_directory_path() / (std::string("refractory_fuzz") + ext);
     {
         // The undamaged file must load, or the runs test nothing.
         std::ofstream f(p, std::ios::binary | std::ios::trunc);
@@ -152,10 +152,10 @@ TEST_CASE("damaged ICC profiles parse or fail cleanly") {
     }
 }
 
-// Opt-in, because it needs a camera file: NODELAB_FUZZ_RAW=<a RAW> runs LibRaw and our highlight
-// reconstruction on damaged copies of it (NODELAB_FUZZ_RUNS of them, 30 by default).
+// Opt-in, because it needs a camera file: REFRACTORY_FUZZ_RAW=<a RAW> runs LibRaw and our highlight
+// reconstruction on damaged copies of it (REFRACTORY_FUZZ_RUNS of them, 30 by default).
 TEST_CASE("damaged RAW files load or fail cleanly") {
-    const char* src = std::getenv("NODELAB_FUZZ_RAW");
+    const char* src = std::getenv("REFRACTORY_FUZZ_RAW");
     if (!src) return;
     std::vector<char> f;
     REQUIRE(readFileBytes(src, f));

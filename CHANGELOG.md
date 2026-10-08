@@ -1,7 +1,26 @@
 # Changelog
 
-NodeLab uses [semantic versioning](https://semver.org): minor versions add
+Refractory uses [semantic versioning](https://semver.org): minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
+
+## 1.7.0 (2026-10-08)
+
+### Changed
+- **NodeLab is now Refractory.** The app, the exe (`Refractory.exe`), the window title, the
+  guide, the exe's Properties and the GitHub repository
+  ([balthazarschmitt/Refractory](https://github.com/balthazarschmitt/Refractory)) carry the new
+  name. Node types are unchanged, so every project renders as before.
+- New projects save as `.refract`, presets as `.rfpreset`, and Library sidecars as
+  `<photo>.refract`.
+- Settings live in `%APPDATA%\Refractory`. On first start the old `%APPDATA%\NodeLab` folder
+  (preferences, layout, presets, collections, lens profiles and AI models) moves there.
+- Environment variables are renamed from `NODELAB_*` to `REFRACTORY_*`.
+
+### Compatibility
+- NodeLab projects (`.nlproj`) and presets (`.nlpreset`) still open, list and delete. File >
+  Open and drag and drop accept both extensions.
+- A photo's NodeLab sidecar (`photo.jpg.nlproj`) is read in the Library and renamed to
+  `photo.jpg.refract` the next time that photo is saved.
 
 ## 1.6.1 (2026-10-07)
 

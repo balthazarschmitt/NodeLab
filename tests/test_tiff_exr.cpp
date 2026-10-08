@@ -294,7 +294,7 @@ TEST_CASE("TIFF and OpenEXR exports load back") {
     for (auto [format, depth, tol] : {std::tuple{FileFormat::TIFF, 8, 0.5 / 255}, std::tuple{FileFormat::TIFF, 16, 0.5 / 65535},
                                       std::tuple{FileFormat::EXR, 16, 2e-3}, std::tuple{FileFormat::EXR, 32, 1e-6}}) {
         CAPTURE(depth);
-        const fs::path p = tempFile(format == FileFormat::EXR ? "nodelab_rt.exr" : "nodelab_rt.tif");
+        const fs::path p = tempFile(format == FileFormat::EXR ? "refractory_rt.exr" : "refractory_rt.tif");
         SaveOptions o;
         o.format = format, o.depth = depth;
         std::string err;
@@ -314,7 +314,7 @@ TEST_CASE("OpenEXR keeps values above 1 and legacy projects get them sRGB-encode
     Image src = gradient(16, 8, false);
     for (float& v : src.px) v *= 4.0f;
     for (size_t i = 3; i < src.px.size(); i += 4) src.px[i] = 1.0f;
-    const fs::path p = tempFile("nodelab_hdr.exr");
+    const fs::path p = tempFile("refractory_hdr.exr");
     SaveOptions o;
     o.format = FileFormat::EXR, o.depth = 32;
     std::string err;
@@ -342,7 +342,7 @@ TEST_CASE("TIFF variants other programs write decode to the same pixels") {
         tiffdec::Decoded d;
         std::string err;
         REQUIRE_MESSAGE(tiffdec::decode(f.data(), f.size(), d, err), err);
-        auto img = loadBytes(f, "nodelab_variant.tif", DecodeOptions{false, true});
+        auto img = loadBytes(f, "refractory_variant.tif", DecodeOptions{false, true});
         Image expect = want;
         if (s.spp == 1)  // grey: the first channel everywhere, opaque
             for (size_t i = 0; i < expect.px.size(); i += 4)
@@ -385,19 +385,19 @@ TEST_CASE("TIFF variants other programs write decode to the same pixels") {
         Image pre = rgba;
         for (size_t i = 0; i < pre.px.size(); i += 4)
             for (int c = 0; c < 3; ++c) pre.px[i + size_t(c)] *= pre.px[i + 3];
-        auto img = loadBytes(makeTiff(s, w, h, samplesOf(pre, 4)), "nodelab_premul.tif", DecodeOptions{false, true});
+        auto img = loadBytes(makeTiff(s, w, h, samplesOf(pre, 4)), "refractory_premul.tif", DecodeOptions{false, true});
         CHECK(maxDiff(*img, rgba) < 2e-4);
     }
     SUBCASE("WhiteIsZero and palette") {
         TiffSpec s;
         s.photometric = 0, s.spp = 1;
-        auto img = loadBytes(makeTiff(s, w, h, samplesOf(rgb, 1)), "nodelab_wiz.tif", DecodeOptions{false, true});
+        auto img = loadBytes(makeTiff(s, w, h, samplesOf(rgb, 1)), "refractory_wiz.tif", DecodeOptions{false, true});
         CHECK(img->px[0] == doctest::Approx(1.0f));  // stored 0 is white
         s.photometric = 3;
         std::vector<uint16_t> map(3 * 256);
         for (int i = 0; i < 256; ++i) map[size_t(i)] = uint16_t(i * 257), map[256 + size_t(i)] = 0, map[512 + size_t(i)] = 65535;
         std::vector<float> idx(size_t(w) * h, 51.0f);
-        auto pal = loadBytes(makeTiff(s, w, h, idx, map), "nodelab_pal.tif", DecodeOptions{false, true});
+        auto pal = loadBytes(makeTiff(s, w, h, idx, map), "refractory_pal.tif", DecodeOptions{false, true});
         CHECK(pal->px[0] == doctest::Approx(0.2f));
         CHECK(pal->px[1] == 0.0f);
         CHECK(pal->px[2] == 1.0f);
@@ -419,7 +419,7 @@ TEST_CASE("float TIFFs read as linear data and sRGB ones through the curve") {
     TiffSpec s;
     s.bits = 32, s.isFloat = true;
     const Bytes f = makeTiff(s, 8, 4, samplesOf(rgb, 3));
-    const fs::path p = tempFile("nodelab_float.tif");
+    const fs::path p = tempFile("refractory_float.tif");
     writeBytes(p, f);
     CHECK(isLinearImageFile(pathToU8(p)));
     std::string err;

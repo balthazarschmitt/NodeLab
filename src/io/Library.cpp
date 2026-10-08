@@ -63,7 +63,7 @@ bool readJson(const std::string& pathU8, nlohmann::json& j) {
     } catch (const std::exception&) {
         return false;
     }
-    return j.is_object() && j.value("app", "") == "NodeLab";
+    return j.is_object() && isProjectApp(j.value("app", ""));
 }
 
 // Like saveProject: a temp file renamed over the old one, so a crash never leaves half a file.
@@ -122,7 +122,7 @@ std::string xmpPacket(const Meta& m) {
     std::string x;
     // The BOM in "begin" is how readers tell the packet's encoding (UTF-8).
     x += "<?xpacket begin=\"\xEF\xBB\xBF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n";
-    x += "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"NodeLab\">\n";
+    x += "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"Refractory\">\n";
     x += " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n";
     x += "  <rdf:Description rdf:about=\"\"\n";
     x += "    xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\"\n";
@@ -237,8 +237,23 @@ bool matchesSearch(const std::string& photoU8, const Meta& m, const std::string&
     return true;
 }
 
+static std::string sidecarName(const std::string& photoU8, int copy, const char* ext) {
+    return copy > 0 ? photoU8 + ".copy" + std::to_string(copy) + ext : photoU8 + ext;
+}
+
 std::string sidecarPath(const std::string& photoU8, int copy) {
-    return copy > 0 ? photoU8 + ".copy" + std::to_string(copy) + ".nlproj" : photoU8 + ".nlproj";
+    const std::string side = sidecarName(photoU8, copy, kProjectExt), old = sidecarName(photoU8, copy, kLegacyProjectExt);
+    std::error_code ec;
+    return !fs::exists(u8ToPath(side), ec) && fs::is_regular_file(u8ToPath(old), ec) ? old : side;
+}
+
+std::string sidecarSavePath(const std::string& photoU8, int copy) {
+    const std::string side = sidecarName(photoU8, copy, kProjectExt), old = sidecarName(photoU8, copy, kLegacyProjectExt);
+    std::error_code ec;
+    if (!fs::exists(u8ToPath(side), ec) && fs::is_regular_file(u8ToPath(old), ec)) fs::rename(u8ToPath(old), u8ToPath(side), ec);
+    // If the rename failed (the file is in use), the edit still goes to the new name; the old
+    // sidecar is then shadowed by it.
+    return side;
 }
 
 bool hasSidecar(const std::string& photoU8, int copy) {
@@ -269,7 +284,8 @@ std::vector<Entry> listEntries(const std::string& dirU8) {
     std::error_code ec;
     for (const auto& e : fs::directory_iterator(u8ToPath(dirU8), ec)) {
         const std::string name = pathToU8(e.path().filename());
-        constexpr std::string_view ext = ".nlproj";
+        std::string_view ext = kProjectExt;
+        if (name.size() <= ext.size() || lower(name.substr(name.size() - ext.size())) != ext) ext = kLegacyProjectExt;
         if (name.size() <= ext.size() || lower(name.substr(name.size() - ext.size())) != ext) continue;
         const std::string stem = name.substr(0, name.size() - ext.size());  // photo.ext.copyN
         const size_t dot = stem.rfind('.');
@@ -285,6 +301,8 @@ std::vector<Entry> listEntries(const std::string& dirU8) {
         auto it = copies.find(lower(pathToU8(u8ToPath(p).filename())));
         if (it == copies.end()) continue;
         std::sort(it->second.begin(), it->second.end());
+        // A copy with both a .refract and a NodeLab .nlproj sidecar is listed once.
+        it->second.erase(std::unique(it->second.begin(), it->second.end()), it->second.end());
         for (int n : it->second) out.push_back({p, n});
     }
     return out;
@@ -348,7 +366,7 @@ bool readMeta(const std::string& photoU8, Meta& out, int copy) {
 }
 
 bool writeMeta(const std::string& photoU8, const Meta& m, std::string& err, int copy) {
-    const std::string side = sidecarPath(photoU8, copy);
+    const std::string side = sidecarSavePath(photoU8, copy);
     if (!hasSidecar(photoU8, copy)) {
         Graph g;
         defaultGraph(g, photoU8);
@@ -446,9 +464,10 @@ bool pasteEdit(const nlohmann::json& graph, const std::string& sourceU8, const s
     m.thumb.clear();
     nlohmann::json ui = nlohmann::json::object();
     nlohmann::json old;
-    if (readJson(sidecarPath(targetU8, targetCopy), old) && old.contains("ui") && old["ui"].is_object()) ui = old["ui"];
+    const std::string side = sidecarSavePath(targetU8, targetCopy);
+    if (readJson(side, old) && old.contains("ui") && old["ui"].is_object()) ui = old["ui"];
     ui["library"] = m.toJson();
-    return saveProject(sidecarPath(targetU8, targetCopy), g, ui, err);
+    return saveProject(side, g, ui, err);
 }
 
 // ---------------------------------------------------------------- collections
@@ -462,7 +481,7 @@ fs::path collectionsPath() {
     if (!gCollectionsFile.empty()) return u8ToPath(gCollectionsFile);
     fs::path p;
 #ifdef _WIN32
-    if (const wchar_t* appdata = _wgetenv(L"APPDATA")) p = fs::path(appdata) / "NodeLab" / "collections.json";
+    if (const fs::path a = appDataDir(); !a.empty()) p = a / "collections.json";
 #endif
     return p.empty() ? fs::current_path() / "collections.json" : p;
 }
@@ -510,7 +529,7 @@ bool saveCollections(const std::vector<Collection>& c, std::string& err) {
     const fs::path path = collectionsPath();
     std::error_code ec;
     fs::create_directories(path.parent_path(), ec);
-    // writeJson wants a NodeLab file; this one is plain.
+    // writeJson wants a Refractory file; this one is plain.
     fs::path tmp = path;
     tmp += ".tmp";
     {

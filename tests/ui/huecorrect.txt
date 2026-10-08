@@ -1,4 +1,4 @@
-# build\NodeLab.exe examples\effects.nlproj --script tests\ui\huecorrect.txt
+# build\Refractory.exe examples\effects.refract --script tests\ui\huecorrect.txt
 settle
 click "node:Hue Correct"
 wait 4

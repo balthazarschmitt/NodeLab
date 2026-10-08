@@ -326,7 +326,7 @@ void complete(Plane4& full, const std::vector<uint8_t>& hole) {
 
 class RemoveNode : public Node {
 public:
-    NODELAB_NODE({"filter.remove", "Remove", "Filter",
+    REFRACTORY_NODE({"filter.remove", "Remove", "Filter",
                   {{"Image", PinType::Image}, {"Mask", PinType::Channel}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Grow", 2.0f, 0.0f, 50.0f)}})

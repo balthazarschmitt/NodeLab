@@ -67,7 +67,7 @@ private:
     bool started_ = false;
 };
 
-// NodeLab.exe --render project.nlproj out.png [--depth N] [--quality Q] [--device gpu [--precision half]] [--timings] :
+// Refractory.exe --render project.refract out.png [--depth N] [--quality Q] [--device gpu [--precision half]] [--timings] :
 // evaluate at full resolution without a window. The extension picks the format (.png, .jpg, .tif, .exr, .webp, .jxl,
 // .avif); --depth 16 for 16-bit PNG/TIFF/JPEG XL (10-bit AVIF), 32 for full-float EXR. --quality sets
 // JPEG's quality and makes WebP, JPEG XL and AVIF lossy at it (they're lossless without it).
@@ -135,7 +135,7 @@ static int renderHeadless(const std::string& project, const std::string& outPath
     return 0;
 }
 
-// NodeLab.exe --benchmark project.nlproj [--full] [--runs N] : evaluates the Output node from an
+// Refractory.exe --benchmark project.refract [--full] [--runs N] : evaluates the Output node from an
 // empty cache N times (after one warm-up run that also loads the images) and prints per-node and
 // total median milliseconds. Proxy resolution unless --full. --device gpu runs GPU nodes there
 // (marked "gpu"), with --precision full or half (the default, like Precision: Auto). --sync waits
@@ -202,7 +202,7 @@ static int benchmarkHeadless(const std::string& project, bool full, int runs, bo
     return 0;
 }
 
-// NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr|--webp|--jxl|--avif] [--depth N] [--quality Q] in1 in2 ... : runs
+// Refractory.exe --batch project.refract outDir [--png|--jpg|--tif|--exr|--webp|--jxl|--avif] [--depth N] [--quality Q] in1 in2 ... : runs
 // each source image through the project (fed into its first Image Input) and writes
 // outDir/<name>.<ext>, or as the project's filename template names it. Unset options come
 // from the project's Export settings.
@@ -256,7 +256,7 @@ static int batchHeadless(const std::string& project, const std::string& outDir, 
 
 // The Release exe is a GUI app (-mwindows) with no console; when started from a terminal for a
 // command-line mode, reattach to that terminal so printf output shows up.
-// NodeLab.exe --list-nodes : every registered node with its pins and params (for keeping GUIDE.md
+// Refractory.exe --list-nodes : every registered node with its pins and params (for keeping GUIDE.md
 // in sync). Hidden internal nodes are skipped.
 static void listNodes() {
     const NodeRegistry& reg = NodeRegistry::instance();
@@ -290,7 +290,7 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
     // argv is in the ANSI code page, which can't hold every file name (a photo named in another
     // script, opened from Explorer, arrived mangled). Rebuild it as UTF-8, which every path
-    // in NodeLab is, from the wide command line.
+    // in Refractory is, from the wide command line.
     std::vector<std::string> utf8Args;
     std::vector<char*> utf8Argv;
     int wideCount = 0;
@@ -309,7 +309,7 @@ int main(int argc, char** argv) {
 #endif
     if (argc >= 2 && (std::string(argv[1]) == "--version" || std::string(argv[1]) == "-v")) {
         attachParentConsole();
-        std::printf("NodeLab %s\n", versionString().c_str());
+        std::printf("Refractory %s\n", versionString().c_str());
         return 0;
     }
     registerAllNodes();
@@ -318,7 +318,7 @@ int main(int argc, char** argv) {
         listNodes();
         return 0;
     }
-    // NodeLab.exe --install-model subject|subject-light|sky|scene|face : downloads an AI model (and the runtime) as the
+    // Refractory.exe --install-model subject|subject-light|sky|scene|face : downloads an AI model (and the runtime) as the
     // Inspector's Download button does.
     if (argc >= 3 && std::string(argv[1]) == "--install-model") {
         attachParentConsole();
@@ -363,7 +363,7 @@ int main(int argc, char** argv) {
         return benchmarkHeadless(argv[2], full, runs, sync, dev);
     }
 
-    // NodeLab.exe --gpu-info : the GPU device NodeLab would use, or why there is none.
+    // Refractory.exe --gpu-info : the GPU device Refractory would use, or why there is none.
     if (argc >= 2 && std::string(argv[1]) == "--gpu-info") {
         attachParentConsole();
         char gpuArg[] = "gpu", devArg[] = "--device";

@@ -97,7 +97,7 @@ std::string folder() {
         p = u8ToPath(folderOverride());
     } else {
 #ifdef _WIN32
-        if (const wchar_t* appdata = _wgetenv(L"APPDATA")) p = fs::path(appdata) / "NodeLab" / "models";
+        if (const fs::path a = appDataDir(); !a.empty()) p = a / "models";
 #endif
         if (p.empty()) p = fs::current_path() / "models";
     }

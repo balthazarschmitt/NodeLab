@@ -1,4 +1,4 @@
-# NodeLab.exe tests\ui\spots.nlproj --script tests\ui\spots.txt
+# Refractory.exe tests\ui\spots.refract --script tests\ui\spots.txt
 # Spot Removal: select the node, click the sun to add a spot (it gets an automatic source), press
 # "/" for another, then drag the source onto the sky.
 settle

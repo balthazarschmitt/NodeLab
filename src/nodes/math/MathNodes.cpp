@@ -10,7 +10,7 @@ namespace {
 
 class MixNode : public Node {
 public:
-    NODELAB_NODE({"math.mix", "Mix", "Mix",
+    REFRACTORY_NODE({"math.mix", "Mix", "Mix",
                   {{"A", PinType::Image}, {"B", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Factor", 0.5f, 0.0f, 1.0f)}})
@@ -133,7 +133,7 @@ vec3 blendMode(int mode, vec3 a, vec3 b) {
 
 class BlendNode : public Node {
 public:
-    NODELAB_NODE({"math.blend", "Blend", "Mix",
+    REFRACTORY_NODE({"math.blend", "Blend", "Mix",
                   {{"A", PinType::Image}, {"B", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f),

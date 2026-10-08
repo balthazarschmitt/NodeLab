@@ -1,4 +1,4 @@
-# NodeLab
+# Refractory
 
 Node-based image manipulation. Import a photo, wire color data between nodes, and see the original
 (left) and the result (right) update live. Aimed at channel mixing, IR/UV camera emulation, and
@@ -6,7 +6,7 @@ glitch/experimental looks.
 
 ## Download
 
-Get `NodeLab.exe` from the [latest release](https://github.com/balthazarschmitt/NodeLab/releases/latest).
+Get `Refractory.exe` from the [latest release](https://github.com/balthazarschmitt/Refractory/releases/latest).
 It's a single portable exe for 64-bit Windows 10/11 (OpenGL 3.0 or newer) and needs no install.
 The zip also has the guide, the changelog and example projects. Help > Guide shows the same guide
 inside the app.
@@ -14,12 +14,12 @@ inside the app.
 The AI masks (Select Subject, Select Sky, Select People, Select Landscape, Select Objects)
 download their models on first use, from the Inspector: about 240 MB for Subject, 190 MB for Sky,
 340 MB for People and 110 MB for Landscape and Objects (one model), into
-`%APPDATA%\NodeLab\models`. The People and scene models' licences allow non-commercial use only.
+`%APPDATA%\Refractory\models`. The People and scene models' licences allow non-commercial use only.
 
 ## Build (Windows)
 
 Requires CMake ≥ 3.24 and a C++20 compiler. CLion's bundled MinGW toolchain works out of the box:
-open the folder in CLion, pick the `NodeLab` target, Run. Dependencies (GLFW, Dear ImGui,
+open the folder in CLion, pick the `Refractory` target, Run. Dependencies (GLFW, Dear ImGui,
 nlohmann/json, stb, tinyexpr, LibRaw, zlib-ng, libwebp, libjxl, libavif with libaom, doctest) are
 downloaded by CMake on first configure. libaom's assembly needs NASM or YASM on the PATH.
 
@@ -33,7 +33,7 @@ Command line:
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-build\NodeLab.exe
+build\Refractory.exe
 ```
 
 **Portable toolchain (no install):** a WinLibs GCC 16 + CMake + Ninja bundle is unpacked in
@@ -47,33 +47,33 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TLS_CAINFO="C:/P
 
 The Release exe is statically linked, so no extra DLLs are needed to run it.
 
-Always build into the one `build/` folder. Rebuilding works while `build\NodeLab.exe` is open: the
-running copy is renamed to `NodeLab.old-*.exe` and deleted by a later build once it has closed.
+Always build into the one `build/` folder. Rebuilding works while `build\Refractory.exe` is open: the
+running copy is renamed to `Refractory.old-*.exe` and deleted by a later build once it has closed.
 
-Version: `NodeLab.exe --version` (also in the window title, Help menu and the exe's Properties).
+Version: `Refractory.exe --version` (also in the window title, Help menu and the exe's Properties).
 See [CHANGELOG.md](CHANGELOG.md).
 
-Headless render: `NodeLab.exe --render project.nlproj out.png [--depth 16] [--quality Q]` (the extension picks
+Headless render: `Refractory.exe --render project.refract out.png [--depth 16] [--quality Q]` (the extension picks
 PNG, JPEG, TIFF, OpenEXR, WebP, JPEG XL or AVIF; `--depth 32` for full-float EXR; `--quality` makes WebP, JPEG XL
 and AVIF lossy; `--timings` prints evaluate and save times)
-Headless batch: `NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr|--webp|--jxl|--avif] [--depth N] [--quality Q] a.jpg b.jpg ...`
+Headless batch: `Refractory.exe --batch project.refract outDir [--png|--jpg|--tif|--exr|--webp|--jxl|--avif] [--depth N] [--quality Q] a.jpg b.jpg ...`
 (each source goes into the project's first Image Input and is saved as `outDir\<name>.<ext>`)
-Benchmark: `NodeLab.exe --benchmark project.nlproj [--full] [--runs N] [--sync]` (median ms per node)
+Benchmark: `Refractory.exe --benchmark project.refract [--full] [--runs N] [--sync]` (median ms per node)
 GPU compositing: `--device gpu|cpu` and `--precision half|full` for `--render` and `--benchmark`
 (both use the CPU unless given `--device gpu`; `--precision` is full for `--render` and half for
-`--benchmark` by default; the app itself uses the GPU, View > Compositor); `NodeLab.exe --gpu-info` names the GPU device or says why
+`--benchmark` by default; the app itself uses the GPU, View > Compositor); `Refractory.exe --gpu-info` names the GPU device or says why
 there is none. In the app: View > Compositor.
-AI models: `NodeLab.exe --install-model subject|sky` downloads one (and the ONNX Runtime) without
+AI models: `Refractory.exe --install-model subject|sky` downloads one (and the ONNX Runtime) without
 the UI.
-Open an image directly (also works with Windows' Open with): `NodeLab.exe photo.CR2` starts a new
+Open an image directly (also works with Windows' Open with): `Refractory.exe photo.CR2` starts a new
 project with it.
 
-Screenshot of the UI (debug aid): `NodeLab.exe project.nlproj --screenshot shot.png`
+Screenshot of the UI (debug aid): `Refractory.exe project.refract --screenshot shot.png`
 Scripted UI test (feeds input straight to ImGui, ignores the real mouse; see `src/ui/UiScript.h`):
-`NodeLab.exe examples\demo.nlproj --script tests\ui\fanout_addnode.txt`
+`Refractory.exe examples\demo.refract --script tests\ui\fanout_addnode.txt`
 
-Try `examples/demo.nlproj`: the red channel drives saturation, so only red things stay colorful.
-`examples/infrared_foliage.nlproj` turns a colour photo into lilac-white infrared foliage under a
+Try `examples/demo.refract`: the red channel drives saturation, so only red things stay colorful.
+`examples/infrared_foliage.refract` turns a colour photo into lilac-white infrared foliage under a
 dark sky, as one group with sliders (see Help > Guide > Recipes).
 
 ## Using it
@@ -111,7 +111,7 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Preview any node | Ctrl+click it (again to clear) |
 | Group / ungroup | Ctrl+G / Ctrl+Alt+G; Tab (or double-click) enters a group, Tab leaves |
 | Group pins | Select the group (or its Group Input/Output inside) and edit in the Inspector; Channel and Number inputs have a Default / Min / Max and show a slider on the group node. Inside a group, Add > Group > Value Input / Value Output adds a socket as its own node (F2 renames it) |
-| Presets | Right-click a node > Save as Preset...; Add > Presets inserts it into any project (files in `%APPDATA%\NodeLab\presets`) |
+| Presets | Right-click a node > Save as Preset...; Add > Presets inserts it into any project (files in `%APPDATA%\Refractory\presets`) |
 | Frame | Ctrl+J around the selection; drag its title to move it with its nodes, corner to resize, double-click to rename, right-click for color |
 | Move nodes between frames | right-click a node → Move to Frame, or select nodes and right-click a frame title → Move Selected Nodes Here; Alt+P removes from frame |
 | Workspaces | The tabs in the menu bar: Library (an open folder's photos), Develop (photo, settings column, graph underneath) and Nodes; Ctrl+PgUp / Ctrl+PgDn step through them |
@@ -135,7 +135,7 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Auto save | Every 5 minutes by default (Edit > Preferences > Save & Load), once a project has been saved (library photos always) |
 | Add Mask | Result toolbar → Add Mask (Shift+M over the Result), or M linear, Shift+R radial, K brush (also Luminance Range and the AI masks Subject, Sky and Background): inserts a Basic labelled "Mask N" before the Output, driven by a new mask; the Inspector shows the mask with the Basic's sliders below it |
 | Import image | File > Import Image, or drop a file on the window |
-| Library | File > Open Folder (Ctrl+Shift+O), drop a folder on the window, or `NodeLab.exe <folder>`: a filmstrip of the folder's photos. Click or ←/→ to open one; its edit is saved automatically in `<photo>.nlproj` beside it. New photos start as Image Input → Denoise → Basic → Output |
+| Library | File > Open Folder (Ctrl+Shift+O), drop a folder on the window, or `Refractory.exe <folder>`: a filmstrip of the folder's photos. Click or ←/→ to open one; its edit is saved automatically in `<photo>.refract` beside it. New photos start as Image Input → Denoise → Basic → Output |
 | Culling | In the Library: 0-5 rate, P pick, X reject, U unflag, 6-9 colour labels; Ctrl+click / Shift+click select several; the filter menu shows picks, stars, rejects, labels, edited photos or duplicates |
 | Library metadata | The Library toolbar's info button (or View > Metadata): title, caption, keywords and colour label of the selected photos; the Search box finds photos by name, title, caption or keyword. Exports carry them, with the rating, as XMP |
 | Collections and stacks | The Library's Collections menu: named lists of photos from any folders. Ctrl+G stacks the selected photos, S expands / collapses, Ctrl+Shift+G unstacks |
@@ -164,8 +164,12 @@ Conversions are automatic:
 Most sliders on a node are Channel inputs too. For example, Split RGB → R into Saturation → Amount
 makes the saturation follow the red channel pixel by pixel.
 
-Projects (`.nlproj`) are JSON. Image paths are stored relative to the project file. The panel
-layout is saved per user in `%APPDATA%\NodeLab\layout.ini`.
+Projects (`.refract`) are JSON. Image paths are stored relative to the project file. The panel
+layout is saved per user in `%APPDATA%\Refractory\layout.ini`.
+
+Refractory was called NodeLab before 1.7. Its projects (`.nlproj`), presets (`.nlpreset`) and
+Library sidecars still open; a sidecar is renamed to `.refract` the next time its photo is saved.
+On first start, `%APPDATA%\NodeLab` (preferences, presets, models) moves to `%APPDATA%\Refractory`.
 
 ## Nodes
 
@@ -211,12 +215,12 @@ src/ui      App window, node editor (custom canvas), inspector, image views and 
 tests       doctest unit tests (tests/golden: hashes that keep legacy renders byte-identical)
 ```
 
-Adding a node: write a class with a `NODELAB_NODE({...})` descriptor and `evaluate()`, then
+Adding a node: write a class with a `REFRACTORY_NODE({...})` descriptor and `evaluate()`, then
 `r.add<YourNode>()` in its family's register function.
 
 ## License
 
-NodeLab is released under the [MIT License](LICENSE). The release exe statically links GLFW (zlib),
+Refractory is released under the [MIT License](LICENSE). The release exe statically links GLFW (zlib),
 Dear ImGui (MIT), nlohmann/json (MIT), stb (public domain / MIT), tinyexpr (zlib), zlib-ng (zlib),
 libwebp (BSD-3), libjxl with highway, brotli and skcms (BSD-3, Apache 2.0 / BSD-3, MIT, BSD-3),
 libavif (BSD-2), libaom (BSD-2 plus the Alliance for Open Media patent licence)

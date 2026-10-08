@@ -1,4 +1,4 @@
-"""Builds NodeLab's icon font: a subset of Lucide (https://lucide.dev, ISC licence) with only the
+"""Builds Refractory's icon font: a subset of Lucide (https://lucide.dev, ISC licence) with only the
 icons the interface uses, and src/ui/Icons.h with their code points.
 
     python tools/lucide_icons.py <lucide-static package folder>
@@ -131,7 +131,7 @@ def main():
     sub = subset.Subsetter(options)
     sub.populate(unicodes=points)
     sub.subset(font)
-    subset.save_font(font, str(out_dir / "lucide-nodelab.ttf"), options)
+    subset.save_font(font, str(out_dir / "lucide-refractory.ttf"), options)
     (out_dir / "LICENSE").write_text((pkg / "LICENSE").read_text())
 
     lines = [
@@ -153,7 +153,7 @@ def main():
         "",
     ]
     (root / "src" / "ui" / "Icons.h").write_text("\n".join(lines), newline="\n")
-    print("%d icons, %d bytes" % (len(ICONS), (out_dir / "lucide-nodelab.ttf").stat().st_size))
+    print("%d icons, %d bytes" % (len(ICONS), (out_dir / "lucide-refractory.ttf").stat().st_size))
 
 
 if __name__ == "__main__":

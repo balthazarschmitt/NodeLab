@@ -92,7 +92,7 @@ TEST_CASE("EXIF orientations turn the stored pixels upright") {
 }
 
 TEST_CASE("JPEG EXIF orientation is read, and applied only in scene-linear projects") {
-    const fs::path path = fs::temp_directory_path() / "nodelab_exif.jpg";
+    const fs::path path = fs::temp_directory_path() / "refractory_exif.jpg";
     for (bool be : {false, true}) {
         CAPTURE(be);
         writeJpegWithOrientation(path, 6, be);
@@ -113,7 +113,7 @@ TEST_CASE("JPEG EXIF orientation is read, and applied only in scene-linear proje
     Image plain(2, 2);
     REQUIRE(saveImage(path.string(), plain, err));
     CHECK(exif::jpegOrientation(path.string()) == 1);
-    CHECK(exif::jpegOrientation((fs::temp_directory_path() / "nodelab_missing.jpg").string()) == 1);
+    CHECK(exif::jpegOrientation((fs::temp_directory_path() / "refractory_missing.jpg").string()) == 1);
     fs::remove(path);
 }
 
@@ -126,7 +126,7 @@ TEST_CASE("RAW files are recognised by extension and fail cleanly when broken") 
     CHECK(isImageFile("a.png"));
     CHECK_FALSE(isImageFile("a.txt"));
 
-    const fs::path path = fs::temp_directory_path() / "nodelab_broken.cr2";
+    const fs::path path = fs::temp_directory_path() / "refractory_broken.cr2";
     {
         std::ofstream f(path, std::ios::binary);
         f << "definitely not a raw file";
@@ -136,7 +136,7 @@ TEST_CASE("RAW files are recognised by extension and fail cleanly when broken") 
     CHECK_FALSE(err.empty());
     fs::remove(path);
     err.clear();
-    CHECK(raw::load((fs::temp_directory_path() / "nodelab_missing.cr2").string(), err, raw::Blend, false) == nullptr);
+    CHECK(raw::load((fs::temp_directory_path() / "refractory_missing.cr2").string(), err, raw::Blend, false) == nullptr);
     CHECK_FALSE(err.empty());
 }
 
@@ -194,12 +194,12 @@ TEST_CASE("Choosing a RAW sets darktable-style Baseline Exposure defaults that o
     CHECK(img->pixel(0)[0] == 0.25f);  // the cached source is untouched
 }
 
-// Opt-in, because it needs a camera file: NODELAB_FUZZ_RAW=<a RAW>. A half-size decode of a sensor
+// Opt-in, because it needs a camera file: REFRACTORY_FUZZ_RAW=<a RAW>. A half-size decode of a sensor
 // with an odd width or height (CR3s are 5999x3999) left its last row and column a colour short,
 // a green or yellow line on the preview's edge, and the EOS 70D's junk last row made a cyan line at
 // any size. Each edge must look like the lines next to it.
 TEST_CASE("RAW decodes have no off-colour edge lines") {
-    const char* src = std::getenv("NODELAB_FUZZ_RAW");
+    const char* src = std::getenv("REFRACTORY_FUZZ_RAW");
     if (!src) return;
     for (const bool half : {true, false}) {
     CAPTURE(half);

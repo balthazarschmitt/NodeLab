@@ -35,7 +35,7 @@ TEST_CASE("sRGB images decode to linear light on load, alpha untouched") {
         p[0] = p[1] = p[2] = levels[x];
         p[3] = 0.5f;
     }
-    const fs::path path = fs::temp_directory_path() / "nodelab_colorpipe.png";
+    const fs::path path = fs::temp_directory_path() / "refractory_colorpipe.png";
     std::string err;
     REQUIRE(saveImage(path.string(), img, err));
     auto raw = loadImage(path.string(), err, false);
@@ -141,7 +141,7 @@ TEST_CASE("Legacy graphs have no colour management block; scene-linear ones roun
 TEST_CASE("Only scene-linear projects need the newer project format") {
     Graph g;
     g.addNode("color.exposure");
-    const fs::path path = fs::temp_directory_path() / "nodelab_colorpipe.nlproj";
+    const fs::path path = fs::temp_directory_path() / "refractory_colorpipe.refract";
     auto savedVersion = [&] {
         std::string err;
         REQUIRE(saveProject(path.string(), g, nlohmann::json::object(), err));

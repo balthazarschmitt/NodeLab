@@ -1,4 +1,4 @@
-# NodeLab.exe tests\ui\develop.nlproj --script tests\ui\beforeafter.txt
+# Refractory.exe tests\ui\develop.refract --script tests\ui\beforeafter.txt
 # Y over the Result splits Before / After; dragging the divider moves it without panning.
 settle
 move 1384 700

@@ -1,5 +1,5 @@
 # Pre-link step: Windows won't let the linker overwrite a running exe, but it does allow renaming
-# one. Move the old exe aside so `build/` can always be rebuilt while NodeLab is open.
+# one. Move the old exe aside so `build/` can always be rebuilt while Refractory is open.
 # Input: EXE (full path of the exe about to be linked).
 # file(REMOVE) would abort on a locked file, so deletions go through `cmake -E rm`, whose failure is ignored.
 if(NOT EXISTS "${EXE}")
@@ -23,5 +23,5 @@ endif()
 string(TIMESTAMP _stamp "%Y%m%d%H%M%S")
 file(RENAME "${EXE}" "${_dir}/${_name}.old-${_stamp}.exe" RESULT _rc)
 if(NOT _rc EQUAL 0)
-    message(FATAL_ERROR "Cannot replace ${EXE} (${_rc}); close NodeLab and rebuild.")
+    message(FATAL_ERROR "Cannot replace ${EXE} (${_rc}); close Refractory and rebuild.")
 endif()

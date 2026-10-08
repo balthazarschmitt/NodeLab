@@ -313,7 +313,7 @@ static void autoMask(AutoMaskNode& n, const ParamRow& row) {
         ImGui::ProgressBar(st.total ? float(double(st.done) / double(st.total)) : 0.0f, ImVec2(-1, 0), text);
         if (ImGui::Button("Cancel")) ml::cancelInstall();
     } else if (!ml::available(id)) {
-        ImGui::TextUnformatted("This node needs an AI model, which isn't part of NodeLab.exe. Until it is "
+        ImGui::TextUnformatted("This node needs an AI model, which isn't part of Refractory.exe. Until it is "
                                "downloaded the mask is empty.");
         ImGui::TextDisabled("%s (%s licence)", spec->source, spec->license);
         if (st.id == id && !st.error.empty()) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", st.error.c_str());
@@ -415,7 +415,7 @@ static void lensProfile(LensProfileNode& n, const ParamRow& row, bool& changed, 
         ImGui::ProgressBar(st.total ? float(st.done) / float(st.total) : 0.0f, ImVec2(-1, 0), text);
         if (ImGui::Button("Cancel")) lensdb::cancelDownload();
     } else if (!lensdb::installed()) {
-        ImGui::TextUnformatted("Finding a profile needs lensfun's lens database, which isn't part of NodeLab.exe.");
+        ImGui::TextUnformatted("Finding a profile needs lensfun's lens database, which isn't part of Refractory.exe.");
         ImGui::TextDisabled("lensfun.github.io (CC BY-SA 3.0), about 3 MB.");
         if (!st.error.empty()) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", st.error.c_str());
         if (ImGui::Button("Download Lens Database")) lensdb::startDownload();

@@ -3,13 +3,13 @@
 
 // The version comes from project(VERSION) in CMakeLists.txt; the commit hash is captured at build
 // time (cmake/GitVersion.cmake), with "-dirty" when built from uncommitted changes.
-extern const char* const kNodeLabVersion;    // "0.3.0"
-extern const char* const kNodeLabCommit;     // "a1ccfa3" / "a1ccfa3-dirty" / "unknown"
-extern const char* const kNodeLabBuildDate;  // __DATE__ of the generated file
+extern const char* const kRefractoryVersion;    // "0.3.0"
+extern const char* const kRefractoryCommit;     // "a1ccfa3" / "a1ccfa3-dirty" / "unknown"
+extern const char* const kRefractoryBuildDate;  // __DATE__ of the generated file
 
 // "0.3.0 (a1ccfa3, Sep 29 2026)"
 inline std::string versionString() {
-    return std::string(kNodeLabVersion) + " (" + kNodeLabCommit + ", " + kNodeLabBuildDate + ")";
+    return std::string(kRefractoryVersion) + " (" + kRefractoryCommit + ", " + kRefractoryBuildDate + ")";
 }
 
 // Compares dotted versions numerically ("0.10.0" > "0.9.2"). Missing parts count as 0.

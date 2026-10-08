@@ -48,7 +48,7 @@ constexpr GLenum SHADER_STORAGE_BUFFER = 0x90D2, STATIC_DRAW = 0x88E4, DYNAMIC_R
                   PIXEL_PACK_BUFFER = 0x88EB, STREAM_READ = 0x88E1;
 constexpr GLbitfield MAP_READ_BIT = 0x0001;
 
-#define NODELAB_GL_FUNCS(X)                                                                         \
+#define REFRACTORY_GL_FUNCS(X)                                                                         \
     X(void, GenTextures, (GLsizei n, GLuint* t))                                                    \
     X(void, DeleteTextures, (GLsizei n, const GLuint* t))                                           \
     X(void, BindTexture, (GLenum target, GLuint t))                                                 \
@@ -100,11 +100,11 @@ constexpr GLbitfield MAP_READ_BIT = 0x0001;
     X(void, GetQueryObjectui64v, (GLuint, GLenum, GLuint64*))                                        \
     X(void, CopyImageSubData, (GLuint, GLenum, GLint, GLint, GLint, GLint, GLuint, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei))
 
-#define NODELAB_GL_DECLARE(ret, name, args) \
+#define REFRACTORY_GL_DECLARE(ret, name, args) \
     using PFN_##name = ret(APIENTRY*) args;  \
     extern PFN_##name name;
-NODELAB_GL_FUNCS(NODELAB_GL_DECLARE)
-#undef NODELAB_GL_DECLARE
+REFRACTORY_GL_FUNCS(REFRACTORY_GL_DECLARE)
+#undef REFRACTORY_GL_DECLARE
 
 // Loads every function above from the current context. False if any is missing.
 bool load(const char** missing = nullptr);

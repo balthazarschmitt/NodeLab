@@ -1,4 +1,4 @@
-# build\NodeLab.exe tests\ui\develop.nlproj --script tests\ui\workspaces.txt
+# build\Refractory.exe tests\ui\develop.refract --script tests\ui\workspaces.txt
 # Workspace tabs: Develop has its own layout (photo, Inspector panel, graph below), Nodes keeps its own.
 settle
 click "node:Basic"

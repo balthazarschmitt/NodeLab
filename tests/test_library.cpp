@@ -45,21 +45,21 @@ const Node* firstOf(const Graph& g, const std::string& type) { return g.find(g.f
 }  // namespace
 
 TEST_CASE("Library lists a folder's images by name, without sidecars") {
-    Folder f("nodelab_lib_list");
+    Folder f("refractory_lib_list");
     const std::string b = f.photo("b.png"), a = f.photo("A.png"), c = f.photo("c.jpg");
     std::ofstream(f.dir / "notes.txt") << "x";
     std::string err;
-    REQUIRE(library::writeMeta(b, library::Meta{3}, err));  // makes b.png.nlproj
+    REQUIRE(library::writeMeta(b, library::Meta{3}, err));  // makes b.png.refract
     const auto list = library::listFolder(pathToU8(f.dir));
     REQUIRE(list.size() == 3);
     CHECK(list[0] == a);
     CHECK(list[1] == b);
     CHECK(list[2] == c);
-    CHECK(library::sidecarPath(b) == b + ".nlproj");
+    CHECK(library::sidecarPath(b) == b + ".refract");
 }
 
 TEST_CASE("Library meta round-trips through the sidecar and keeps its graph") {
-    Folder f("nodelab_lib_meta");
+    Folder f("refractory_lib_meta");
     const std::string p = f.photo("p.png");
     library::Meta m;
     CHECK_FALSE(library::readMeta(p, m));
@@ -103,9 +103,9 @@ TEST_CASE("Library meta round-trips through the sidecar and keeps its graph") {
 // A damaged sidecar holds the user's edit: rating the photo must not replace it with the default
 // graph (it used to, whenever the sidecar didn't parse).
 TEST_CASE("Rating a photo never replaces a sidecar it can't read") {
-    Folder f("nodelab_lib_damaged");
+    Folder f("refractory_lib_damaged");
     const std::string p = f.photo("p.png");
-    const std::string damaged = "{\"app\": \"NodeLab\", \"graph\": {\"nodes\": [ CUT OFF";
+    const std::string damaged = "{\"app\": \"Refractory\", \"graph\": {\"nodes\": [ CUT OFF";
     {
         std::ofstream out(u8ToPath(library::sidecarPath(p)), std::ios::binary);
         out << damaged;
@@ -140,7 +140,7 @@ TEST_CASE("Library default graph: Denoise and Basic, with RAW defaults for RAWs"
 }
 
 TEST_CASE("Paste edit points the edit at each photo and keeps its rating") {
-    Folder f("nodelab_lib_paste");
+    Folder f("refractory_lib_paste");
     const std::string src = f.photo("src.png"), dst = f.photo("dst.png", 0.9f);
     Graph g;
     library::defaultGraph(g, src);
@@ -171,7 +171,7 @@ TEST_CASE("Paste edit points the edit at each photo and keeps its rating") {
 }
 
 TEST_CASE("Library thumbnails: the photo, and the edit rendered through the view") {
-    Folder f("nodelab_lib_thumb");
+    Folder f("refractory_lib_thumb");
     const std::string p = f.photo("t.png", 1.0f);
     std::string err;
     ImagePtr t = library::loadThumbnail(p, 8, err);
@@ -201,7 +201,7 @@ TEST_CASE("base64 round-trips") {
 }
 
 TEST_CASE("Export Selected renders each photo with its own edit") {
-    Folder f("nodelab_lib_export");
+    Folder f("refractory_lib_export");
     const std::string a = f.photo("a.png", 0.2f), b = f.photo("b.png", 0.2f);
     // b's edit inverts; a has no sidecar (the default graph).
     Graph g;
@@ -235,14 +235,14 @@ TEST_CASE("Export Selected renders each photo with its own edit") {
 }
 
 TEST_CASE("Virtual copies: their own edits next to the photo") {
-    Folder f("nodelab_lib_copies");
+    Folder f("refractory_lib_copies");
     const std::string a = f.photo("a.png"), b = f.photo("b.png");
     std::string err;
     // A copy of a photo without a sidecar starts from the default graph.
     REQUIRE(library::createVirtualCopy(a, 0, err) == 1);
     CHECK(library::hasSidecar(a, 1));
     CHECK_FALSE(library::hasSidecar(a, 0));
-    CHECK(library::sidecarPath(a, 1) == a + ".copy1.nlproj");
+    CHECK(library::sidecarPath(a, 1) == a + ".copy1.refract");
 
     // A copy of copy 1 starts from its edit, and gets the next number.
     Graph g;
@@ -281,4 +281,51 @@ TEST_CASE("Virtual copies: their own edits next to the photo") {
     CHECK(library::listEntries(pathToU8(f.dir)).size() == 3);
     // The next copy takes the free number.
     CHECK(library::createVirtualCopy(a, 0, err) == 1);
+}
+
+TEST_CASE("NodeLab's sidecars (.nlproj) are read, and renamed to .refract when saved") {
+    Folder f("refractory_lib_legacy");
+    const std::string a = f.photo("a.png"), b = f.photo("b.png");
+    // Sidecars as NodeLab (before 1.7) wrote them: a rated edit of a, and a virtual copy of b.
+    std::string err;
+    REQUIRE(library::writeMeta(a, library::Meta{4}, err));
+    REQUIRE(library::createVirtualCopy(b, 0, err) == 1);
+    fs::rename(u8ToPath(a + ".refract"), u8ToPath(a + ".nlproj"));
+    fs::rename(u8ToPath(b + ".copy1.refract"), u8ToPath(b + ".copy1.nlproj"));
+    nlohmann::json j;
+    {
+        std::ifstream in(u8ToPath(a + ".nlproj"));
+        in >> j;
+    }
+    j["app"] = "NodeLab";
+    std::ofstream(u8ToPath(a + ".nlproj")) << j.dump();
+
+    CHECK(library::hasSidecar(a));
+    CHECK(library::sidecarPath(a) == a + ".nlproj");
+    library::Meta m;
+    REQUIRE(library::readMeta(a, m));
+    CHECK(m.rating == 4);
+    Graph g;
+    nlohmann::json ui;
+    CHECK(loadProject(library::sidecarPath(a), g, ui, err));
+    CHECK(g.firstOfType("io.image_input") != 0);
+    // The virtual copy is listed once, from its old sidecar.
+    const auto entries = library::listEntries(pathToU8(f.dir));
+    REQUIRE(entries.size() == 3);
+    CHECK(entries[2].photo == b);
+    CHECK(entries[2].copy == 1);
+
+    // Saving (a rating here) moves the sidecar to the new name, keeping its contents.
+    m.rating = 2;
+    REQUIRE(library::writeMeta(a, m, err));
+    CHECK_FALSE(fs::exists(u8ToPath(a + ".nlproj")));
+    CHECK(library::sidecarPath(a) == a + ".refract");
+    REQUIRE(library::readMeta(a, m));
+    CHECK(m.rating == 2);
+    CHECK(library::sidecarSavePath(b, 1) == b + ".copy1.refract");
+    CHECK(fs::exists(u8ToPath(b + ".copy1.refract")));
+    CHECK_FALSE(fs::exists(u8ToPath(b + ".copy1.nlproj")));
+    CHECK(isProjectPath(a + ".NLPROJ"));
+    CHECK(isProjectPath(a + ".refract"));
+    CHECK_FALSE(isProjectPath(a));
 }

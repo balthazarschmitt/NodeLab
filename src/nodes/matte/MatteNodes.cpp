@@ -190,7 +190,7 @@ protected:
 
 class BoxMaskNode : public ShapeMaskNode {
 public:
-    NODELAB_NODE({"matte.box_mask", "Box Mask", "Matte",
+    REFRACTORY_NODE({"matte.box_mask", "Box Mask", "Matte",
                   {{"Mask", PinType::Channel}, {"Value", PinType::Channel, 6}},
                   {{"Mask", PinType::Channel}},
                   SHAPE_PARAMS})
@@ -202,7 +202,7 @@ public:
 
 class EllipseMaskNode : public ShapeMaskNode {
 public:
-    NODELAB_NODE({"matte.ellipse_mask", "Ellipse Mask", "Matte",
+    REFRACTORY_NODE({"matte.ellipse_mask", "Ellipse Mask", "Matte",
                   {{"Mask", PinType::Channel}, {"Value", PinType::Channel, 6}},
                   {{"Mask", PinType::Channel}},
                   SHAPE_PARAMS})
@@ -215,7 +215,7 @@ public:
 // Lightroom's Radial Gradient: an ellipse mask with a wide feather. Operation "Not" is its Invert.
 class RadialGradientNode : public ShapeMaskNode {
 public:
-    NODELAB_NODE({"matte.radial_gradient", "Radial Gradient", "Matte",
+    REFRACTORY_NODE({"matte.radial_gradient", "Radial Gradient", "Matte",
                   {{"Mask", PinType::Channel}, {"Value", PinType::Channel, 6}},
                   {{"Mask", PinType::Channel}},
                   SHAPE_PARAMS_D(0.6f, 0.6f, 0.5f)})
@@ -230,7 +230,7 @@ public:
 // smoothstep they were made with, which packs most of the change into the middle half.
 class LinearGradientNode : public MaskBase {
 public:
-    NODELAB_NODE({"matte.linear_gradient", "Linear Gradient", "Matte",
+    REFRACTORY_NODE({"matte.linear_gradient", "Linear Gradient", "Matte",
                   {{"Mask", PinType::Channel}, {"Value", PinType::Channel, 4}},
                   {{"Mask", PinType::Channel}},
                   {ParamDesc::FloatFree("Start X", 0.5f, 0.0f, 1.0f), ParamDesc::FloatFree("Start Y", 0.2f, 0.0f, 1.0f),
@@ -276,7 +276,7 @@ public:
 class ChannelKeyNode : public Node {
 public:
     int roiPadding(const EvalContext&) const override { return 0; }  // per pixel
-    NODELAB_NODE({"matte.channel_key", "Channel Key", "Matte",
+    REFRACTORY_NODE({"matte.channel_key", "Channel Key", "Matte",
                   {{"Image", PinType::Image}},
                   {{"Matte", PinType::Channel}, {"Image", PinType::Image}},
                   {ParamDesc::Enum("Channel", 1, {"Red", "Green", "Blue", "Hue", "Saturation", "Value", "Y (luma)", "Cb", "Cr"}),
@@ -318,7 +318,7 @@ public:
 class LuminanceKeyNode : public Node {
 public:
     int roiPadding(const EvalContext&) const override { return 0; }  // per pixel
-    NODELAB_NODE({"matte.luminance_key", "Luminance Key", "Matte",
+    REFRACTORY_NODE({"matte.luminance_key", "Luminance Key", "Matte",
                   {{"Image", PinType::Image}},
                   {{"Matte", PinType::Channel}, {"Image", PinType::Image}},
                   {ParamDesc::Float("Low", 0.2f, 0.0f, 1.0f), ParamDesc::Float("High", 0.8f, 0.0f, 1.0f),
@@ -341,7 +341,7 @@ public:
 class DifferenceKeyNode : public Node {
 public:
     int roiPadding(const EvalContext&) const override { return 0; }  // per pixel
-    NODELAB_NODE({"matte.difference_key", "Difference Key", "Matte",
+    REFRACTORY_NODE({"matte.difference_key", "Difference Key", "Matte",
                   {{"Image", PinType::Image}, {"Key", PinType::Image}},
                   {{"Matte", PinType::Channel}, {"Image", PinType::Image}},
                   {ParamDesc::Color("Key Color", 0.1f, 0.8f, 0.1f), ParamDesc::Float("Tolerance", 0.1f, 0.0f, 1.0f),
@@ -374,7 +374,7 @@ public:
 class DistanceKeyNode : public Node {
 public:
     int roiPadding(const EvalContext&) const override { return 0; }  // per pixel
-    NODELAB_NODE({"matte.distance_key", "Distance Key", "Matte",
+    REFRACTORY_NODE({"matte.distance_key", "Distance Key", "Matte",
                   {{"Image", PinType::Image}, {"Key", PinType::Image}},
                   {{"Matte", PinType::Channel}, {"Image", PinType::Image}},
                   {ParamDesc::Color("Key Color", 0.1f, 0.8f, 0.1f), ParamDesc::Float("Tolerance", 0.1f, 0.0f, 1.0f),
@@ -416,7 +416,7 @@ public:
 class ChromaKeyNode : public Node {
 public:
     int roiPadding(const EvalContext&) const override { return 0; }  // per pixel
-    NODELAB_NODE({"matte.chroma_key", "Chroma Key", "Matte",
+    REFRACTORY_NODE({"matte.chroma_key", "Chroma Key", "Matte",
                   {{"Image", PinType::Image}, {"Key", PinType::Image}},
                   {{"Matte", PinType::Channel}, {"Image", PinType::Image}},
                   {ParamDesc::Color("Key Color", 0.1f, 0.8f, 0.1f), ParamDesc::Float("Acceptance", 25.0f, 1.0f, 80.0f),
@@ -457,7 +457,7 @@ public:
 class ColorSpillNode : public Node {
 public:
     int roiPadding(const EvalContext&) const override { return 0; }  // per pixel
-    NODELAB_NODE({"matte.color_spill", "Color Spill", "Matte",
+    REFRACTORY_NODE({"matte.color_spill", "Color Spill", "Matte",
                   {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f), ParamDesc::Enum("Spill Channel", 1, {"Red", "Green", "Blue"}),
@@ -500,7 +500,7 @@ public:
 
 class DoubleEdgeMaskNode : public Node {
 public:
-    NODELAB_NODE({"matte.double_edge_mask", "Double Edge Mask", "Matte",
+    REFRACTORY_NODE({"matte.double_edge_mask", "Double Edge Mask", "Matte",
                   {{"Inner Mask", PinType::Channel}, {"Outer Mask", PinType::Channel}},
                   {{"Mask", PinType::Channel}},
                   {}})
@@ -538,7 +538,7 @@ public:
 class RangeMaskNode : public Node {
 public:
     enum { Mode, Low, High, Smoothness, KeyColor, Amount, Invert };
-    NODELAB_NODE({"matte.range_mask", "Range Mask", "Matte",
+    REFRACTORY_NODE({"matte.range_mask", "Range Mask", "Matte",
                   {{"Image", PinType::Image}, {"Mask", PinType::Channel}},
                   {{"Mask", PinType::Channel}},
                   {ParamDesc::Enum("Mode", 0, {"Luminance", "Color"}),
@@ -637,7 +637,7 @@ class HslMaskNode : public Node {
 public:
     enum { UseHue, Hue, HueWidth, HueSoftness, UseSat, SatLow, SatHigh, SatSoftness, UseLight, LightLow, LightHigh,
            LightSoftness, Invert };
-    NODELAB_NODE({"matte.hsl_mask", "HSL Mask", "Matte",
+    REFRACTORY_NODE({"matte.hsl_mask", "HSL Mask", "Matte",
                   {{"Image", PinType::Image}, {"Mask", PinType::Channel}},
                   {{"Mask", PinType::Channel}},
                   {ParamDesc::Bool("Use Hue", true), ParamDesc::Float("Hue", 0.0f, 0.0f, 360.0f).withTrack(SliderTrack::Hue).when(UseHue),

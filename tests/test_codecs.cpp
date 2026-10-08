@@ -69,7 +69,7 @@ TEST_CASE("WebP, JPEG XL and AVIF: lossless exports read back exactly") {
         for (bool alpha : {false, true}) {
             CAPTURE(alpha);
             const Image img = picture(37, 23, alpha);
-            const fs::path p = fs::temp_directory_path() / (std::string("nodelab_codec") + formatExtension(c.format));
+            const fs::path p = fs::temp_directory_path() / (std::string("refractory_codec") + formatExtension(c.format));
             SaveOptions o;
             o.format = c.format;
             o.depth = c.depth;
@@ -106,7 +106,7 @@ TEST_CASE("WebP, JPEG XL and AVIF: lossy exports are close and smaller") {
         }
     for (FileFormat f : {FileFormat::WEBP, FileFormat::JXL, FileFormat::AVIF}) {
         CAPTURE(std::string(formatExtension(f)));
-        const fs::path p = fs::temp_directory_path() / (std::string("nodelab_lossy") + formatExtension(f));
+        const fs::path p = fs::temp_directory_path() / (std::string("refractory_lossy") + formatExtension(f));
         SaveOptions o;
         o.format = f;
         std::string err;
@@ -155,12 +155,12 @@ TEST_CASE("WebP, JPEG XL and AVIF carry their colour space, EXIF and XMP") {
 
     // A minimal big-endian TIFF structure with no entries stands in for an export's EXIF.
     const Bytes exif = {'M', 'M', 0, 42, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0};
-    const std::string xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">nodelab-test</x:xmpmeta>";
+    const std::string xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">refractory-test</x:xmpmeta>";
     for (FileFormat f : {FileFormat::WEBP, FileFormat::JXL, FileFormat::AVIF}) {
         for (bool lossless : {true, false}) {
             CAPTURE(std::string(formatExtension(f)));
             CAPTURE(lossless);
-            const fs::path path = fs::temp_directory_path() / (std::string("nodelab_tags") + formatExtension(f));
+            const fs::path path = fs::temp_directory_path() / (std::string("refractory_tags") + formatExtension(f));
             SaveOptions o;
             o.format = f;
             o.space = outspace::DisplayP3;
@@ -171,7 +171,7 @@ TEST_CASE("WebP, JPEG XL and AVIF carry their colour space, EXIF and XMP") {
             std::string err;
             REQUIRE(saveRendered(pathToU8(path), sp, cm, o, err));
             const Bytes file = fileBytes(path);
-            CHECK(contains(file, "nodelab-test"));
+            CHECK(contains(file, "refractory-test"));
             CHECK(contains(file, std::string("MM\0*", 4)));
             CHECK_FALSE(icc::embeddedProfile(pathToU8(path)).empty());
             auto back = loadImage(pathToU8(path), err, d);
@@ -186,7 +186,7 @@ TEST_CASE("WebP, JPEG XL and AVIF carry their colour space, EXIF and XMP") {
         }
     }
     // An sRGB export has no profile (WebP) or names sRGB.
-    const fs::path path = fs::temp_directory_path() / "nodelab_tags_srgb.avif";
+    const fs::path path = fs::temp_directory_path() / "refractory_tags_srgb.avif";
     SaveOptions o;
     o.format = FileFormat::AVIF;
     std::string err;
@@ -210,7 +210,7 @@ TEST_CASE("HDR exports: JPEG XL and AVIF say Rec.2100 PQ, other formats fall bac
     Image img = picture(16, 8, false);
     for (FileFormat f : {FileFormat::JXL, FileFormat::AVIF}) {
         CAPTURE(std::string(formatExtension(f)));
-        const fs::path p = fs::temp_directory_path() / (std::string("nodelab_pq") + formatExtension(f));
+        const fs::path p = fs::temp_directory_path() / (std::string("refractory_pq") + formatExtension(f));
         SaveOptions o;
         o.format = f;
         o.space = outspace::Rec2100PQ;

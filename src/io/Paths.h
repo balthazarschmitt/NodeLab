@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -32,6 +33,35 @@ inline bool readFileBytes(const std::string& pathU8, std::vector<char>& out) {
     out.resize(size_t(size));
     f.seekg(0);
     return size == 0 || bool(f.read(out.data(), size));
+}
+
+// The per-user folder: %APPDATA%\Refractory (empty without APPDATA). NodeLab, as the app was
+// called before 1.7, kept its settings, presets, collections and downloaded models in
+// %APPDATA%\NodeLab: until migrateAppData() moves it, that folder is used if it's the only one.
+inline std::filesystem::path appDataDir() {
+    namespace fs = std::filesystem;
+#ifdef _WIN32
+    if (const wchar_t* appdata = _wgetenv(L"APPDATA")) {
+        const fs::path base(appdata), dir = base / "Refractory", old = base / "NodeLab";
+        std::error_code ec;
+        return !fs::exists(dir, ec) && fs::is_directory(old, ec) ? old : dir;
+    }
+#endif
+    return {};
+}
+
+// Renames %APPDATA%\NodeLab to %APPDATA%\Refractory, once. Only an interactive start does
+// it (tests and scripted runs leave the user's folder alone). If a NodeLab still running holds a
+// file, the rename fails and appDataDir() keeps using the old folder until the next start.
+inline void migrateAppData() {
+    namespace fs = std::filesystem;
+#ifdef _WIN32
+    if (const wchar_t* appdata = _wgetenv(L"APPDATA")) {
+        const fs::path base(appdata), dir = base / "Refractory", old = base / "NodeLab";
+        std::error_code ec;
+        if (!fs::exists(dir, ec) && fs::is_directory(old, ec)) fs::rename(old, dir, ec);
+    }
+#endif
 }
 
 inline std::string makeAbsoluteU8(const std::string& path, const std::filesystem::path& baseDir) {

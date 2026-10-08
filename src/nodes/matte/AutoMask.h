@@ -76,7 +76,7 @@ public:
 
 class SelectSubjectNode : public AutoMaskNode {
 public:
-    NODELAB_NODE({"matte.select_subject", "Select Subject", "Matte",
+    REFRACTORY_NODE({"matte.select_subject", "Select Subject", "Matte",
                   {{"Image", PinType::Image}, {"Mask", PinType::Channel}},
                   {{"Mask", PinType::Channel}},
                   {ParamDesc::Bool("Refine Edges", true), ParamDesc::Bool("Invert", false),
@@ -93,7 +93,7 @@ public:
 class SelectPeopleNode : public AutoMaskNode {
 public:
     enum { FaceSkin = 2, Eyebrows, Eyes, Lips, Mouth, Hair, Neck, Clothes, Accessories };
-    NODELAB_NODE({"matte.select_people", "Select People", "Matte",
+    REFRACTORY_NODE({"matte.select_people", "Select People", "Matte",
                   {{"Image", PinType::Image}, {"Mask", PinType::Channel}},
                   {{"Mask", PinType::Channel}},
                   {ParamDesc::Bool("Refine Edges", true), ParamDesc::Bool("Invert", false),
@@ -110,7 +110,7 @@ public:
 class SelectLandscapeNode : public AutoMaskNode {
 public:
     enum { Sky = 2, Water, Vegetation, Mountains, NaturalGround, Architecture, ArtificialGround };
-    NODELAB_NODE({"matte.select_landscape", "Select Landscape", "Matte",
+    REFRACTORY_NODE({"matte.select_landscape", "Select Landscape", "Matte",
                   {{"Image", PinType::Image}, {"Mask", PinType::Channel}},
                   {{"Mask", PinType::Channel}},
                   {ParamDesc::Bool("Refine Edges", true), ParamDesc::Bool("Invert", false), ParamDesc::Bool("Sky", false),
@@ -128,7 +128,7 @@ public:
 class SelectObjectsNode : public AutoMaskNode {
 public:
     enum { People = 2, Animals, Vehicles, Furniture, SignsPoles, Lights, Screens, Plants };
-    NODELAB_NODE({"matte.select_objects", "Select Objects", "Matte",
+    REFRACTORY_NODE({"matte.select_objects", "Select Objects", "Matte",
                   {{"Image", PinType::Image}, {"Mask", PinType::Channel}},
                   {{"Mask", PinType::Channel}},
                   {ParamDesc::Bool("Refine Edges", true), ParamDesc::Bool("Invert", false), ParamDesc::Bool("People", true),
@@ -143,7 +143,7 @@ public:
 
 class SelectSkyNode : public AutoMaskNode {
 public:
-    NODELAB_NODE({"matte.select_sky", "Select Sky", "Matte",
+    REFRACTORY_NODE({"matte.select_sky", "Select Sky", "Matte",
                   {{"Image", PinType::Image}, {"Mask", PinType::Channel}},
                   {{"Mask", PinType::Channel}},
                   {ParamDesc::Bool("Refine Edges", true), ParamDesc::Bool("Invert", false),

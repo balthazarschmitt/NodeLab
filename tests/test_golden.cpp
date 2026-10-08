@@ -4,7 +4,7 @@
 // announced. Linear hashes may change on purpose (a faster approximation): regenerate them and say
 // which nodes changed.
 //
-// NODELAB_GOLDEN_WRITE=1 rewrites tests/golden/*.txt from the current build. The hashes depend on
+// REFRACTORY_GOLDEN_WRITE=1 rewrites tests/golden/*.txt from the current build. The hashes depend on
 // the toolchain's maths library (the WinLibs GCC build in .toolchain): a different compiler or libm
 // may legitimately differ in the last bit.
 #include <doctest/doctest.h>
@@ -58,7 +58,7 @@ std::string hashValue(const Value& v) {
     return buf;
 }
 
-fs::path goldenDir() { return fs::path(NODELAB_SOURCE_DIR) / "tests" / "golden"; }
+fs::path goldenDir() { return fs::path(REFRACTORY_SOURCE_DIR) / "tests" / "golden"; }
 
 std::map<std::string, std::string> readGolden(const std::string& name) {
     std::map<std::string, std::string> m;
@@ -72,7 +72,7 @@ std::map<std::string, std::string> readGolden(const std::string& name) {
     return m;
 }
 
-bool writing() { return std::getenv("NODELAB_GOLDEN_WRITE") != nullptr; }
+bool writing() { return std::getenv("REFRACTORY_GOLDEN_WRITE") != nullptr; }
 
 void writeGolden(const std::string& name, const std::map<std::string, std::string>& m, const char* header) {
     fs::create_directories(goldenDir());
@@ -89,7 +89,7 @@ void compare(const std::string& name, const std::map<std::string, std::string>& 
         return;
     }
     const auto want = readGolden(name);
-    REQUIRE_MESSAGE(!want.empty(), "tests/golden/" << name << " is missing: run with NODELAB_GOLDEN_WRITE=1");
+    REQUIRE_MESSAGE(!want.empty(), "tests/golden/" << name << " is missing: run with REFRACTORY_GOLDEN_WRITE=1");
     int changed = 0, missing = 0;
     for (const auto& [k, v] : got) {
         auto it = want.find(k);
@@ -188,7 +188,7 @@ std::map<std::string, std::string> nodeHashes(bool linear) {
 
 const char* kNodeHeader =
     "# Golden hashes of every node's CPU output (tests/test_golden.cpp). Regenerate with\n"
-    "# NODELAB_GOLDEN_WRITE=1 build\\nodelab_tests.exe -tc=\"golden*\" only for deliberate changes.\n";
+    "# REFRACTORY_GOLDEN_WRITE=1 build\\refractory_tests.exe -tc=\"golden*\" only for deliberate changes.\n";
 
 }  // namespace
 
@@ -204,11 +204,11 @@ TEST_CASE("golden: scene-linear node outputs") {
 // whole graph, as the viewer's Result shows them.
 TEST_CASE("golden: example projects render byte-identically") {
     std::map<std::string, std::string> got;
-    for (const char* file : {"demo.nlproj", "effects.nlproj", "infrared_foliage.nlproj", "m2_showcase.nlproj"}) {
+    for (const char* file : {"demo.refract", "effects.refract", "infrared_foliage.refract", "m2_showcase.refract"}) {
         Graph g;
         nlohmann::json ui;
         std::string err;
-        const fs::path p = fs::path(NODELAB_SOURCE_DIR) / "examples" / file;
+        const fs::path p = fs::path(REFRACTORY_SOURCE_DIR) / "examples" / file;
         REQUIRE_MESSAGE(loadProject(p.string(), g, ui, err), err);
         const int outId = g.firstOfType(OutputNode::staticInfo().type);
         REQUIRE(outId);

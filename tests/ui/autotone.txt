@@ -1,4 +1,4 @@
-# NodeLab.exe tests\ui\develop.nlproj --script tests\ui\autotone.txt
+# Refractory.exe tests\ui\develop.refract --script tests\ui\autotone.txt
 # Basic > Tone > Auto sets the tone sliders from the image arriving at the node.
 settle
 click 780 100

@@ -44,7 +44,7 @@ ImagePtr colorFromChannel(const Node& node, EvalContext& ctx, const Value& v, fl
 
 class WavelengthNode : public Node {
 public:
-    NODELAB_NODE({"conv.wavelength", "Wavelength", "Converter",
+    REFRACTORY_NODE({"conv.wavelength", "Wavelength", "Converter",
                   {{"Wavelength", PinType::Channel, 0}},
                   {{"Color", PinType::Image}},
                   {ParamDesc::Float("Wavelength", 550.0f, 360.0f, 830.0f)}})
@@ -83,7 +83,7 @@ public:
 
 class BlackbodyNode : public Node {
 public:
-    NODELAB_NODE({"conv.blackbody", "Blackbody", "Converter",
+    REFRACTORY_NODE({"conv.blackbody", "Blackbody", "Converter",
                   {{"Temperature", PinType::Channel, 0}},
                   {{"Color", PinType::Image}},
                   {ParamDesc::Float("Temperature", 3200.0f, 800.0f, 12000.0f).withTrack(SliderTrack::Kelvin)}})
@@ -128,7 +128,7 @@ public:
 
 class NormalizeNode : public Node {
 public:
-    NODELAB_NODE({"conv.normalize", "Normalize", "Converter",
+    REFRACTORY_NODE({"conv.normalize", "Normalize", "Converter",
                   {{"Value", PinType::Channel}},
                   {{"Value", PinType::Channel}},
                   {ParamDesc::Float("Low %", 0.0f, 0.0f, 100.0f), ParamDesc::Float("High %", 100.0f, 0.0f, 100.0f)}})
@@ -204,7 +204,7 @@ public:
 
 class FloatCurveNode : public Node {
 public:
-    NODELAB_NODE({"conv.float_curve", "Float Curve", "Converter",
+    REFRACTORY_NODE({"conv.float_curve", "Float Curve", "Converter",
                   {{"Value", PinType::Channel, 0}, {"Factor", PinType::Channel, 1}},
                   {{"Value", PinType::Channel}},
                   {ParamDesc::Float("Value", 0.5f, 0.0f, 1.0f), ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f),
@@ -243,7 +243,7 @@ public:
 
 class SetAlphaNode : public Node {
 public:
-    NODELAB_NODE({"conv.set_alpha", "Set Alpha", "Converter",
+    REFRACTORY_NODE({"conv.set_alpha", "Set Alpha", "Converter",
                   {{"Image", PinType::Image}, {"Alpha", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Alpha", 1.0f, 0.0f, 1.0f), ParamDesc::Enum("Mode", 0, {"Replace Alpha", "Apply Mask (multiply color)"})}})
@@ -276,7 +276,7 @@ public:
 
 class AlphaOverNode : public Node {
 public:
-    NODELAB_NODE({"math.alpha_over", "Alpha Over", "Mix",
+    REFRACTORY_NODE({"math.alpha_over", "Alpha Over", "Mix",
                   {{"Background", PinType::Image}, {"Foreground", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f), ParamDesc::Bool("Premultiplied", false)}})
@@ -326,7 +326,7 @@ public:
 
 class RerouteNode : public Node {
 public:
-    NODELAB_NODE({"util.reroute", "Reroute", "Utility",
+    REFRACTORY_NODE({"util.reroute", "Reroute", "Utility",
                   {{"", PinType::Image}},
                   {{"", PinType::Image}},
                   {}})
@@ -341,7 +341,7 @@ public:
 
 class SwitchNode : public Node {
 public:
-    NODELAB_NODE({"util.switch", "Switch", "Utility",
+    REFRACTORY_NODE({"util.switch", "Switch", "Utility",
                   {{"Off", PinType::Image}, {"On", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Bool("On", false)}})
@@ -353,7 +353,7 @@ public:
 
 class SplitNode : public Node {
 public:
-    NODELAB_NODE({"util.split", "Split (Compare)", "Utility",
+    REFRACTORY_NODE({"util.split", "Split (Compare)", "Utility",
                   {{"A", PinType::Image}, {"B", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Position", 0.5f, 0.0f, 1.0f), ParamDesc::Enum("Orientation", 0, {"Vertical line", "Horizontal line"}),
@@ -410,7 +410,7 @@ public:
 
 class ImageInfoNode : public Node {
 public:
-    NODELAB_NODE({"util.image_info", "Image Info", "Utility",
+    REFRACTORY_NODE({"util.image_info", "Image Info", "Utility",
                   {{"Image", PinType::Image}},
                   {{"Width", PinType::Number}, {"Height", PinType::Number}, {"Aspect", PinType::Number}},
                   {}})
@@ -427,7 +427,7 @@ public:
 
 class FileOutputNode : public Node {
 public:
-    NODELAB_NODE({"util.file_output", "File Output", "Utility",
+    REFRACTORY_NODE({"util.file_output", "File Output", "Utility",
                   {{"Image", PinType::Image}},
                   {},
                   {ParamDesc::SavePath("File"),

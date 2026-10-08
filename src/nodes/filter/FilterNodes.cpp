@@ -47,7 +47,7 @@ Value imageValue(gpu::TexturePtr t) {
 
 class BlurNode : public Node {
 public:
-    NODELAB_NODE({"filter.blur", "Blur", "Filter",
+    REFRACTORY_NODE({"filter.blur", "Blur", "Filter",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Size X", 10.0f, 0.0f, 200.0f).when(2, 0), ParamDesc::Float("Size Y", 10.0f, 0.0f, 200.0f).when(2, 0),
@@ -122,7 +122,7 @@ public:
 
 class DirectionalBlurNode : public Node {
 public:
-    NODELAB_NODE({"filter.directional_blur", "Directional Blur", "Filter",
+    REFRACTORY_NODE({"filter.directional_blur", "Directional Blur", "Filter",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Distance", 30.0f, 0.0f, 400.0f), ParamDesc::Float("Angle", 0.0f, -180.0f, 180.0f),
@@ -251,7 +251,7 @@ public:
 
 class BilateralBlurNode : public Node {
 public:
-    NODELAB_NODE({"filter.bilateral_blur", "Bilateral Blur", "Filter",
+    REFRACTORY_NODE({"filter.bilateral_blur", "Bilateral Blur", "Filter",
                   {{"Image", PinType::Image}, {"Determinator", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Radius", 8.0f, 0.0f, 60.0f), ParamDesc::Float("Color Sigma", 0.1f, 0.001f, 1.0f),
@@ -390,7 +390,7 @@ public:
 class FilterNode : public Node {
 public:
     enum { Soften, BoxSharpen, DiamondSharpen, Laplace, Sobel, Prewitt, Kirsch, Shadow };
-    NODELAB_NODE({"filter.filter", "Filter", "Filter",
+    REFRACTORY_NODE({"filter.filter", "Filter", "Filter",
                   {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f),
@@ -477,7 +477,7 @@ public:
 // judge at 100%: the preview proxy scales the radius down with the image.
 class SharpenNode : public Node {
 public:
-    NODELAB_NODE({"filter.sharpen", "Sharpen", "Filter",
+    REFRACTORY_NODE({"filter.sharpen", "Sharpen", "Filter",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Amount", 40.0f, 0.0f, 150.0f), ParamDesc::Float("Radius", 1.0f, 0.5f, 3.0f),
@@ -554,7 +554,7 @@ public:
 
 class DilateErodeNode : public Node {
 public:
-    NODELAB_NODE({"filter.dilate_erode", "Dilate / Erode", "Filter",
+    REFRACTORY_NODE({"filter.dilate_erode", "Dilate / Erode", "Filter",
                   {{"Mask", PinType::Channel}},
                   {{"Mask", PinType::Channel}},
                   {ParamDesc::Enum("Mode", 0, {"Distance", "Feather"}), ParamDesc::Float("Distance", 5.0f, -100.0f, 100.0f)}})
@@ -628,7 +628,7 @@ public:
 
 class KuwaharaNode : public Node {
 public:
-    NODELAB_NODE({"filter.kuwahara", "Kuwahara", "Filter",
+    REFRACTORY_NODE({"filter.kuwahara", "Kuwahara", "Filter",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Size", 6.0f, 1.0f, 50.0f)}})
@@ -726,7 +726,7 @@ public:
 
 class PixelateNode : public Node {
 public:
-    NODELAB_NODE({"filter.pixelate", "Pixelate", "Filter",
+    REFRACTORY_NODE({"filter.pixelate", "Pixelate", "Filter",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Size", 16.0f, 1.0f, 200.0f)}})
@@ -788,7 +788,7 @@ public:
 
 class PosterizeNode : public Node {
 public:
-    NODELAB_NODE({"filter.posterize", "Posterize", "Filter",
+    REFRACTORY_NODE({"filter.posterize", "Posterize", "Filter",
                   {{"Image", PinType::Image}, {"Steps", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Steps", 6.0f, 2.0f, 64.0f)}})
@@ -830,7 +830,7 @@ public:
 class GrainNode : public Node {
 public:
     enum { Amount, Size, Roughness, Seed };
-    NODELAB_NODE({"filter.grain", "Grain", "Filter",
+    REFRACTORY_NODE({"filter.grain", "Grain", "Filter",
                   {{"Image", PinType::Image}, {"Amount", PinType::Channel, Amount}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Amount", 25.0f, 0.0f, 100.0f), ParamDesc::Float("Size", 25.0f, 0.0f, 100.0f),
@@ -914,7 +914,7 @@ public:
 class GlareNode : public Node {
 public:
     enum { FogGlow, Streaks, SimpleStar };
-    NODELAB_NODE({"filter.glare", "Glare", "Filter",
+    REFRACTORY_NODE({"filter.glare", "Glare", "Filter",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}, {"Glare", PinType::Image}},
                   {ParamDesc::Enum("Type", FogGlow, {"Fog Glow", "Streaks", "Simple Star"}),
@@ -1050,7 +1050,7 @@ public:
 
 class SunBeamsNode : public Node {
 public:
-    NODELAB_NODE({"filter.sun_beams", "Sun Beams", "Filter",
+    REFRACTORY_NODE({"filter.sun_beams", "Sun Beams", "Filter",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Source X", 0.5f, 0.0f, 1.0f), ParamDesc::Float("Source Y", 0.3f, 0.0f, 1.0f),

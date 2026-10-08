@@ -93,9 +93,9 @@ bool init(std::string* why, void* shareWith) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
-    GLFWwindow* w = shareWith ? glfwCreateWindow(16, 16, "NodeLab GPU", nullptr, static_cast<GLFWwindow*>(shareWith)) : nullptr;
+    GLFWwindow* w = shareWith ? glfwCreateWindow(16, 16, "Refractory GPU", nullptr, static_cast<GLFWwindow*>(shareWith)) : nullptr;
     g_shared = w != nullptr;
-    if (!w) w = glfwCreateWindow(16, 16, "NodeLab GPU", nullptr, nullptr);
+    if (!w) w = glfwCreateWindow(16, 16, "Refractory GPU", nullptr, nullptr);
     // Later windows (ImGui's floating panels) must get the UI's usual context.
     glfwDefaultWindowHints();
     if (!w) return fail("the driver has no OpenGL 4.3 (compute shaders)");

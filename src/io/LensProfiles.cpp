@@ -648,8 +648,8 @@ std::string folder() {
     if (p.empty()) {
 #ifdef _WIN32
         // UI scripts point it at a made-up database (tests/ui/lensfun).
-        if (const wchar_t* dir = _wgetenv(L"NODELAB_LENSFUN_DIR")) p = fs::path(dir);
-        else if (const wchar_t* appdata = _wgetenv(L"APPDATA")) p = fs::path(appdata) / "NodeLab" / "lensfun";
+        if (const wchar_t* dir = _wgetenv(L"REFRACTORY_LENSFUN_DIR")) p = fs::path(dir);
+        else if (const fs::path a = appDataDir(); !a.empty()) p = a / "lensfun";
 #endif
         if (p.empty()) p = fs::current_path() / "lensfun";
     }

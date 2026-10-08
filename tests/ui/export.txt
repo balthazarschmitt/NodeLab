@@ -1,4 +1,4 @@
-# build\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\export.txt
+# build\Refractory.exe tests\ui\interact.refract --script tests\ui\export.txt
 # Pane titles, auto spacing on add, Swap (Shift+S), Arrange (Shift+P) and the Export window.
 settle
 shot build/smoke/e1_titles.png

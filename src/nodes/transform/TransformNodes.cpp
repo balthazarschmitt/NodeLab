@@ -31,7 +31,7 @@ gpu::PointOp gatherOp(const Value& src, std::string body, std::vector<float> par
 
 class TransformNode : public Node {
 public:
-    NODELAB_NODE({"xform.transform", "Transform", "Transform",
+    REFRACTORY_NODE({"xform.transform", "Transform", "Transform",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::FloatFree("X", 0.0f, -500.0f, 500.0f), ParamDesc::FloatFree("Y", 0.0f, -500.0f, 500.0f),
@@ -80,7 +80,7 @@ public:
 // keeps hard pixels when zooming far in.
 class PanZoomNode : public Node {
 public:
-    NODELAB_NODE({panzoom::kType, "Pan and Zoom", "Transform",
+    REFRACTORY_NODE({panzoom::kType, "Pan and Zoom", "Transform",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::FloatFree("Zoom", 1.0f, 0.1f, 8.0f), ParamDesc::FloatFree("X", 0.0f, -1.0f, 1.0f),
@@ -139,7 +139,7 @@ public:
 
 class FlipNode : public Node {
 public:
-    NODELAB_NODE({"xform.flip", "Flip", "Transform",
+    REFRACTORY_NODE({"xform.flip", "Flip", "Transform",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Enum("Axis", 0, {"Horizontal", "Vertical", "Both"})}})
@@ -176,7 +176,7 @@ public:
 
 class CropNode : public Node {
 public:
-    NODELAB_NODE({crop::kType, "Crop", "Transform",
+    REFRACTORY_NODE({crop::kType, "Crop", "Transform",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Left", 0.0f, 0.0f, 1.0f), ParamDesc::Float("Right", 1.0f, 0.0f, 1.0f),
@@ -354,7 +354,7 @@ private:
 
 class LensDistortionNode : public Node {
 public:
-    NODELAB_NODE({"xform.lens_distortion", "Lens Distortion", "Transform",
+    REFRACTORY_NODE({"xform.lens_distortion", "Lens Distortion", "Transform",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Distortion", 0.1f, -0.99f, 1.0f), ParamDesc::Float("Dispersion", 0.02f, 0.0f, 1.0f),
@@ -404,7 +404,7 @@ public:
 // Lightroom's manual lens corrections: distortion, chromatic aberration fringes and vignetting.
 class LensCorrectionNode : public Node {
 public:
-    NODELAB_NODE({"xform.lens_correction", "Lens Correction", "Transform",
+    REFRACTORY_NODE({"xform.lens_correction", "Lens Correction", "Transform",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Distortion", 0.0f, -100.0f, 100.0f), ParamDesc::Bool("Constrain to Image", true),
@@ -486,7 +486,7 @@ public:
 
 class DisplaceNode : public Node {
 public:
-    NODELAB_NODE({"xform.displace", "Displace", "Transform",
+    REFRACTORY_NODE({"xform.displace", "Displace", "Transform",
                   {{"Image", PinType::Image}, {"X", PinType::Channel}, {"Y", PinType::Channel}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::FloatFree("Strength X", 30.0f, -200.0f, 200.0f),
@@ -515,7 +515,7 @@ public:
 
 class MapUVNode : public Node {
 public:
-    NODELAB_NODE({"xform.map_uv", "Map UV", "Transform",
+    REFRACTORY_NODE({"xform.map_uv", "Map UV", "Transform",
                   {{"Image", PinType::Image}, {"UV", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {}})
@@ -548,7 +548,7 @@ public:
 
 class CornerPinNode : public Node {
 public:
-    NODELAB_NODE({"xform.corner_pin", "Corner Pin", "Transform",
+    REFRACTORY_NODE({"xform.corner_pin", "Corner Pin", "Transform",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::FloatFree("Upper Left X", 0.0f, 0.0f, 1.0f), ParamDesc::FloatFree("Upper Left Y", 0.0f, 0.0f, 1.0f),

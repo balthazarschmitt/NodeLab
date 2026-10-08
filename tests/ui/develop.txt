@@ -1,4 +1,4 @@
-# build\NodeLab.exe tests\ui\develop.nlproj --script tests\ui\develop.txt
+# build\Refractory.exe tests\ui\develop.refract --script tests\ui\develop.txt
 # Custom Inspectors: Basic groups, Color Mixer tabs, Color Grading wheels.
 settle
 click 780 100

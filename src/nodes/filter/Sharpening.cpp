@@ -61,7 +61,7 @@ void convolve(const std::vector<float>& src, std::vector<float>& dst, std::vecto
 class CaptureSharpenNode : public Node {
 public:
     enum { Radius = 0, Iterations, Threshold, Amount };
-    NODELAB_NODE({"filter.capture_sharpen", "Capture Sharpening", "Filter",
+    REFRACTORY_NODE({"filter.capture_sharpen", "Capture Sharpening", "Filter",
                   {{"Image", PinType::Image}, {"Amount", PinType::Channel, Amount}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Radius", 0.75f, 0.4f, 2.0f), ParamDesc::Int("Iterations", 20, 1, 100),
@@ -149,7 +149,7 @@ private:
 class DiffuseNode : public Node {
 public:
     enum { Amount = 0, Radius, Span, Iterations, EdgeSensitivity, NoiseThreshold };
-    NODELAB_NODE({"filter.diffuse", "Diffuse or Sharpen", "Filter",
+    REFRACTORY_NODE({"filter.diffuse", "Diffuse or Sharpen", "Filter",
                   {{"Image", PinType::Image}, {"Amount", PinType::Channel, Amount}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Amount", 25.0f, -100.0f, 100.0f), ParamDesc::Float("Radius", 4.0f, 0.5f, 128.0f),

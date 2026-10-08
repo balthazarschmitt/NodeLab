@@ -54,10 +54,10 @@
 
 namespace fs = std::filesystem;
 
-static const char* kProjectFilter = "NodeLab project (*.nlproj)|*.nlproj|All files|*.*";
+static const char* kProjectFilter = "Refractory project (*.refract, *.nlproj)|*.refract;*.nlproj|All files|*.*";
 
 static bool isImageFile(const std::filesystem::path& p) { return isImageFile(pathToU8(p)); }
-static const char* kDockName = "NodeLabDockSpace";
+static const char* kDockName = "RefractoryDockSpace";
 
 // Each workspace's dockspace. Nodes keeps the name layouts saved before workspaces used.
 static ImGuiID dockSpaceId(int ws) {
@@ -95,17 +95,13 @@ void closeCallback(GLFWwindow* w) {
     app->requestAction(App::Pending::Quit);
 }
 
-// Per-user settings folder (%APPDATA%\NodeLab), created on demand.
+// Per-user settings folder (%APPDATA%\Refractory), created on demand.
 static fs::path settingsDir() {
-#ifdef _WIN32
-    if (const wchar_t* appdata = _wgetenv(L"APPDATA")) {
-        fs::path p = fs::path(appdata) / "NodeLab";
-        std::error_code ec;
-        fs::create_directories(p, ec);
-        return p;
-    }
-#endif
-    return fs::current_path();
+    fs::path p = appDataDir();
+    if (p.empty()) return fs::current_path();
+    std::error_code ec;
+    fs::create_directories(p, ec);
+    return p;
 }
 
 App::App() = default;
@@ -231,7 +227,7 @@ int App::run(const RunOptions& opt) {
         inspectorOverlay_ = false;
         reduceMotion_ = true;
         // Scripts may make collections: never in the user's own list.
-        const std::filesystem::path col = std::filesystem::temp_directory_path() / "nodelab_ui_collections.json";
+        const std::filesystem::path col = std::filesystem::temp_directory_path() / "refractory_ui_collections.json";
         std::error_code ec;
         std::filesystem::remove(col, ec);  // each run starts with none
         library::setCollectionsFile(pathToU8(col));
@@ -248,7 +244,7 @@ int App::run(const RunOptions& opt) {
         glfwWindowHint(GLFW_FOCUSED, GLFW_FALSE);
         glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
     }
-    window_ = glfwCreateWindow(1600, 900, "NodeLab", nullptr, nullptr);
+    window_ = glfwCreateWindow(1600, 900, "Refractory", nullptr, nullptr);
     if (!window_) {
         std::fprintf(stderr, "failed to create window (OpenGL 3.0 required)\n");
         glfwTerminate();
@@ -306,6 +302,7 @@ int App::run(const RunOptions& opt) {
     if (automated_) {
         gpuDevice_ = opt.gpu && gpu::init(&gpuError_, window_);
     } else {
+        migrateAppData();  // NodeLab's settings, presets and models, before the first read
         loadPreferences();
         if (!gpu::init(&gpuError_, window_)) gpuError_ = "GPU unavailable: " + gpuError_;
     }
@@ -315,7 +312,7 @@ int App::run(const RunOptions& opt) {
     main->id = 0;
     viewers_.push_back(std::move(main));
 
-    // An image instead of a project (NodeLab.exe photo.CR2, or Open with): a new project with it.
+    // An image instead of a project (Refractory.exe photo.CR2, or Open with): a new project with it.
     std::error_code dirEc;
     if (!opt.project.empty() && fs::is_directory(u8ToPath(opt.project), dirEc)) {
         newProject();
@@ -1454,7 +1451,7 @@ void App::drawStatusRight() {
         // Time, as the runtime reports no progress: held short of the end when it runs long.
         fraction = float(std::min(pr.seconds / std::max(pr.expected, 1.0), 0.95));
     }
-    const std::string mem = "NodeLab " + gigabytes(stats_.privateBytes);
+    const std::string mem = "Refractory " + gigabytes(stats_.privateBytes);
     char load[96];
     std::snprintf(load, sizeof load, "RAM %s / %s   CPU %.0f%%", gigabytes(stats_.ramUsed).c_str(),
                   gigabytes(stats_.ramTotal).c_str(), stats_.systemCpu * 100.0f);
@@ -1512,7 +1509,7 @@ void App::drawStatusRight() {
         ImGui::TextDisabled("%s", load);
     if (ImGui::IsItemHovered()) {
         ImGui::BeginTooltip();
-        ImGui::Text("NodeLab: %s committed, %s in RAM (peak %s), CPU %.0f%% of %d threads",
+        ImGui::Text("Refractory: %s committed, %s in RAM (peak %s), CPU %.0f%% of %d threads",
                     gigabytes(stats_.privateBytes).c_str(), gigabytes(stats_.workingSet).c_str(),
                     gigabytes(stats_.peakWorkingSet).c_str(), stats_.cpu * 100.0f, stats_.cores);
         ImGui::Text("System: %s of %s RAM in use, CPU %.0f%%", gigabytes(stats_.ramUsed).c_str(),
@@ -1690,7 +1687,7 @@ void App::drawMainMenu() {
     }
     drawColorMenu();
     if (ImGui::BeginMenu("Help")) {
-        ImGui::TextDisabled("NodeLab %s - node-based image manipulation", versionString().c_str());
+        ImGui::TextDisabled("Refractory %s - node-based image manipulation", versionString().c_str());
         ImGui::TextDisabled("%s", gpu::available() ? ("GPU: " + gpu::description()).c_str() : gpuError_.c_str());
         ImGui::Separator();
         if (ImGui::MenuItem("Guide", "F1")) openGuide();
@@ -1849,9 +1846,7 @@ void App::handleDrops() {
             }
             continue;
         }
-        std::string ext = pathToU8(u8ToPath(p).extension());
-        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-        if (ext == ".nlproj") {
+        if (isProjectPath(p)) {
             if (!modified_) openProject(p);
             else status_ = "Save or discard changes before opening a dropped project";
         } else {
@@ -2267,7 +2262,7 @@ bool App::saveProject(bool saveAs) {
     if (!saveAs && libraryPhotoOpen()) return saveLibraryPhoto(true);
     std::string path = projectPath_;
     if (saveAs || path.empty()) {
-        auto p = saveFileDialog("Save project", kProjectFilter, "nlproj");
+        auto p = saveFileDialog("Save project", kProjectFilter, "refract");
         if (!p) return false;
         path = *p;
     }
@@ -2389,6 +2384,9 @@ bool App::saveLibraryPhoto(bool force) {
     if (!libraryPhotoOpen() || (!modified_ && !force)) return true;
     const int i = library_.current();
     if (modified_) library_.meta(i).edited = true;
+    // A NodeLab sidecar (photo.ext.nlproj) becomes photo.ext.refract now.
+    projectPath_ = library::sidecarSavePath(library_.photo(i), library_.copyOf(i));
+    library_.setCurrentProject(projectPath_);
     std::string err;
     if (!::saveProject(projectPath_, graph_, uiState(), err)) {
         status_ = "Save failed: " + err;
@@ -3468,7 +3466,7 @@ void App::markChanged(bool eval) {
 
 void App::updateTitle() {
     std::string name = projectPath_.empty() ? "Untitled" : pathToU8(u8ToPath(projectPath_).filename());
-    std::string title = name + (modified_ ? " *" : "") + " - NodeLab " + kNodeLabVersion;
+    std::string title = name + (modified_ ? " *" : "") + " - Refractory " + kRefractoryVersion;
     if (title != lastTitle_) {
         glfwSetWindowTitle(window_, title.c_str());
         lastTitle_ = title;

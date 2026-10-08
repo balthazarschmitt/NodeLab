@@ -1,4 +1,4 @@
-# build-test\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\qol.txt
+# build-test\Refractory.exe tests\ui\interact.refract --script tests\ui\qol.txt
 settle
 # splice Invert into the wire (Output shifts right if it overlaps: auto-offset)
 drag 739 345 789 115

@@ -1,7 +1,7 @@
 # Find Duplicates: copy a_scene.png, b_photo.jpg and "c_photo copy.jpg" (see library_views.txt) to
 # build\smoke\libdup, add d_rotated.jpg (b_photo turned 90 degrees clockwise) and e_small.png
 # (b_photo at a third of its size), then
-#   NodeLab.exe build\smoke\libdup --script tests\ui\library_duplicates.txt
+#   Refractory.exe build\smoke\libdup --script tests\ui\library_duplicates.txt
 # Expect one group of b, c, d and e under the Duplicates filter.
 settle
 wait 20

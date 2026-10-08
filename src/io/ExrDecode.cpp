@@ -119,7 +119,7 @@ bool decode(const uint8_t* data, size_t len, int& w, int& h, std::vector<float>&
         float* p = &rgba[dst * 4];
         for (int k = 0; k < 3; ++k) p[k] = value(images, ch[k], src);
         p[3] = ch[3] >= 0 ? value(images, ch[3], src) : 1.0f;
-        // OpenEXR stores colour premultiplied by alpha; NodeLab's images are straight.
+        // OpenEXR stores colour premultiplied by alpha; Refractory's images are straight.
         if (ch[3] >= 0 && p[3] > 0.0f && p[3] != 1.0f)
             for (int k = 0; k < 3; ++k) p[k] /= p[3];
     };

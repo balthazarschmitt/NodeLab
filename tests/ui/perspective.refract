@@ -1,4 +1,4 @@
-{"app":"NodeLab","version":1,"graph":{"nextId":10,
+{"app":"Refractory","version":1,"graph":{"nextId":10,
  "nodes":[{"id":1,"type":"io.image_input","pos":[20,20],"params":{"File":"../../examples/scene.png"}},
           {"id":2,"type":"xform.perspective","pos":[220,20],"params":{"Vertical":40.0}},
           {"id":3,"type":"xform.crop","pos":[220,420],"params":{}},

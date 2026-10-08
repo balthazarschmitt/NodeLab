@@ -1,4 +1,4 @@
-# NodeLab.exe tests\ui\interact.nlproj --script tests\ui\masknodes.txt
+# Refractory.exe tests\ui\interact.refract --script tests\ui\masknodes.txt
 # Splice Invert, then right-click > Mask Selected Nodes > Radial Gradient.
 settle
 drag 739 345 789 115

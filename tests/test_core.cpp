@@ -64,7 +64,7 @@ TEST_CASE("value conversions") {
 }
 
 TEST_CASE("split -> combine is identity") {
-    std::string file = makeTestImage("nodelab_test_split.png");
+    std::string file = makeTestImage("refractory_test_split.png");
     Graph g;
     Node* in = g.addNode("io.image_input");
     in->params[0] = file;
@@ -100,7 +100,7 @@ TEST_CASE("graph rejects cycles and bad types") {
 }
 
 TEST_CASE("evaluator recomputes only dirty nodes") {
-    std::string file = makeTestImage("nodelab_test_dirty.png");
+    std::string file = makeTestImage("refractory_test_dirty.png");
     Graph g;
     Node* in = g.addNode("io.image_input");
     in->params[0] = file;
@@ -133,7 +133,7 @@ TEST_CASE("evaluator recomputes only dirty nodes") {
 }
 
 TEST_CASE("channel drives a parameter per pixel") {
-    std::string file = makeTestImage("nodelab_test_perpixel.png");
+    std::string file = makeTestImage("refractory_test_perpixel.png");
     Graph g;
     Node* in = g.addNode("io.image_input");
     in->params[0] = file;
@@ -156,7 +156,7 @@ TEST_CASE("channel drives a parameter per pixel") {
 }
 
 TEST_CASE("project round-trip") {
-    std::string file = makeTestImage("nodelab_test_roundtrip.png");
+    std::string file = makeTestImage("refractory_test_roundtrip.png");
     Graph g;
     Node* in = g.addNode("io.image_input", 10, 20);
     in->params[0] = file;
@@ -166,7 +166,7 @@ TEST_CASE("project round-trip") {
     g.connect(in->id, 0, bc->id, 0);
     g.connect(bc->id, 0, out->id, 0);
 
-    fs::path proj = fs::temp_directory_path() / "nodelab_roundtrip.nlproj";
+    fs::path proj = fs::temp_directory_path() / "refractory_roundtrip.refract";
     std::string err;
     nlohmann::json ui = {{"zoom", 2.0}};
     REQUIRE(saveProject(pathToU8(proj), g, ui, err));

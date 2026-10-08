@@ -1,12 +1,13 @@
 #include <doctest/doctest.h>
 
 #include <filesystem>
+#include <fstream>
 
 #include "io/Paths.h"
 #include "io/Presets.h"
 
 TEST_CASE("presets save, list, load and delete") {
-    const auto dir = std::filesystem::temp_directory_path() / "nodelab_presets_test";
+    const auto dir = std::filesystem::temp_directory_path() / "refractory_presets_test";
     std::filesystem::remove_all(dir);
     presets::setFolder(pathToU8(dir));
     nlohmann::json clip = {{"nodes", {{{"id", 3}, {"type", "color.invert"}, {"x", 0}, {"y", 0}}}},
@@ -25,6 +26,27 @@ TEST_CASE("presets save, list, load and delete") {
     CHECK(j["nodes"][0]["type"] == "color.invert");
     CHECK(presets::load("missing").is_null());
     CHECK(presets::remove("b look"));
+    CHECK(presets::list().size() == 1);
+    presets::setFolder("");
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("presets saved by NodeLab (.nlpreset) are listed, load and delete") {
+    const auto dir = std::filesystem::temp_directory_path() / "refractory_presets_legacy";
+    std::filesystem::remove_all(dir);
+    presets::setFolder(pathToU8(dir));
+    std::filesystem::create_directories(dir);
+    std::ofstream(dir / "old look.nlpreset") << R"({"nodelabPreset":1,"nodes":[{"id":1,"type":"color.invert"}],"links":[]})";
+    std::string err;
+    CHECK(presets::save("new look", {{"nodes", {{{"id", 2}, {"type", "color.invert"}}}}}, err));
+    const auto names = presets::list();
+    REQUIRE(names.size() == 2);
+    CHECK(names[0] == "new look");
+    CHECK(names[1] == "old look");
+    const nlohmann::json j = presets::load("old look");
+    REQUIRE(j.is_object());
+    CHECK(j["nodes"][0]["type"] == "color.invert");
+    CHECK(presets::remove("old look"));
     CHECK(presets::list().size() == 1);
     presets::setFolder("");
     std::filesystem::remove_all(dir);

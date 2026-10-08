@@ -27,7 +27,7 @@ class VignetteNode : public Node {
 public:
     enum { Style, Amount, Midpoint, Roundness, Feather, Highlights };
     enum { HighlightPriority, ColorPriority, PaintOverlay };
-    NODELAB_NODE({"filter.vignette", "Vignette", "Filter",
+    REFRACTORY_NODE({"filter.vignette", "Vignette", "Filter",
                   {{"Image", PinType::Image}, {"Amount", PinType::Channel, Amount}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Enum("Style", HighlightPriority, {"Highlight Priority", "Color Priority", "Paint Overlay"}),
@@ -149,7 +149,7 @@ public:
 class DefringeNode : public Node {
 public:
     enum { PurpleAmount, PurpleLow, PurpleHigh, GreenAmount, GreenLow, GreenHigh };
-    NODELAB_NODE({"filter.defringe", "Defringe", "Filter",
+    REFRACTORY_NODE({"filter.defringe", "Defringe", "Filter",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Purple Amount", 0.0f, 0.0f, 20.0f), ParamDesc::Float("Purple Hue Low", 30.0f, 0.0f, 100.0f),
@@ -289,7 +289,7 @@ float hueWindow(float h, float lo, float hi) { return smoothstep(lo - 10.0, lo, 
 class BorderNode : public Node {
 public:
     enum { Size, Bottom, Aspect, Color, LineSize, LineColor };
-    NODELAB_NODE({"xform.border", "Border", "Transform",
+    REFRACTORY_NODE({"xform.border", "Border", "Transform",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Size", 4.0f, 0.0f, 25.0f), ParamDesc::Float("Bottom", 0.0f, 0.0f, 25.0f),

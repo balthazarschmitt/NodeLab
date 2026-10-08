@@ -1,4 +1,4 @@
-# NodeLab.exe tests\ui\groupvalues.nlproj --script tests\ui\groupvalues.txt
+# Refractory.exe tests\ui\groupvalues.refract --script tests\ui\groupvalues.txt
 # A group with a Number input (Amount, 0..1) shows it as a slider on the group node, and the
 # Inspector edits its Default / Min / Max.
 settle

@@ -17,7 +17,7 @@ struct Spot {
 
 class SpotRemovalNode : public Node {
 public:
-    NODELAB_NODE({"filter.spot_removal", "Spot Removal", "Filter",
+    REFRACTORY_NODE({"filter.spot_removal", "Spot Removal", "Filter",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Enum("Mode", 0, {"Heal", "Clone"}), ParamDesc::Float("Size", 0.03f, 0.002f, 0.3f),

@@ -1,4 +1,4 @@
-# build\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\addmask.txt
+# build\Refractory.exe tests\ui\interact.refract --script tests\ui\addmask.txt
 # Add Mask from the Result viewer: K adds a Brush driving a new Basic, Shift+R a Radial Gradient,
 # Shift+M opens the menu, and each addition is one undo step.
 settle

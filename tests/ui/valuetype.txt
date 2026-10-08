@@ -1,4 +1,4 @@
-# NodeLab.exe tests\ui\interact.nlproj --script tests\ui\valuetype.txt
+# Refractory.exe tests\ui\interact.refract --script tests\ui\valuetype.txt
 # Inside a group, add a Value Input and change its socket type to Channel.
 settle
 drag 739 345 789 115

@@ -1,5 +1,5 @@
-# set NODELAB_LENSFUN_DIR=tests\ui\lensfun
-# build\NodeLab.exe tests\ui\lens_profile.nlproj --script tests\ui\lens_profile.txt
+# set REFRACTORY_LENSFUN_DIR=tests\ui\lensfun
+# build\Refractory.exe tests\ui\lens_profile.refract --script tests\ui\lens_profile.txt
 # Lens Profile: a saved profile (strong distortion and vignetting) and the Inspector's lens list.
 settle
 click 700 104

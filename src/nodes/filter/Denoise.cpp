@@ -55,7 +55,7 @@ inline float unstabilise(float v, bool lin) { return lin ? std::copysign(v * v, 
 
 class DenoiseNode : public Node {
 public:
-    NODELAB_NODE({"filter.denoise", "Denoise", "Filter",
+    REFRACTORY_NODE({"filter.denoise", "Denoise", "Filter",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Luminance", 0.0f, 0.0f, 100.0f), ParamDesc::Float("Detail", 50.0f, 0.0f, 100.0f),

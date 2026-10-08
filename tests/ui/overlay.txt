@@ -1,4 +1,4 @@
-# build\NodeLab.exe tests\ui\overlay.nlproj --script tests\ui\overlay.txt
+# build\Refractory.exe tests\ui\overlay.refract --script tests\ui\overlay.txt
 # On-image controls in the Result viewer: crop frame, gradient handles, brush, histogram, clipping.
 settle
 # select Crop: the Result shows the full frame with the crop rectangle

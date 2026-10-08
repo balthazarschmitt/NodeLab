@@ -174,16 +174,16 @@ TEST_CASE("damaged project files load or fail cleanly") {
     namespace fs = std::filesystem;
     const nlohmann::json junk[] = {"text", nlohmann::json::array(), nlohmann::json::array({1, "x", nullptr}),
                                    nlohmann::json::object(), nullptr, -1e9, 3, true, -1};
-    const fs::path tmp = fs::temp_directory_path() / "nodelab_fuzz.nlproj";
+    const fs::path tmp = fs::temp_directory_path() / "refractory_fuzz.refract";
     std::mt19937 rng(7);
     int loaded = 0, runs = 0;
-    for (const char* file : {"examples/demo.nlproj", "examples/effects.nlproj", "examples/infrared_foliage.nlproj",
-                             "tests/ui/groupvalues.nlproj"}) {
-        std::ifstream in(fs::path(NODELAB_SOURCE_DIR) / file);
+    for (const char* file : {"examples/demo.refract", "examples/effects.refract", "examples/infrared_foliage.refract",
+                             "tests/ui/groupvalues.refract"}) {
+        std::ifstream in(fs::path(REFRACTORY_SOURCE_DIR) / file);
         REQUIRE(in);
         const nlohmann::json good = nlohmann::json::parse(in);
-        // NODELAB_FUZZ_RUNS sets a longer run for local hunting.
-        const int count = getenv("NODELAB_FUZZ_RUNS") ? atoi(getenv("NODELAB_FUZZ_RUNS")) : 150;
+        // REFRACTORY_FUZZ_RUNS sets a longer run for local hunting.
+        const int count = getenv("REFRACTORY_FUZZ_RUNS") ? atoi(getenv("REFRACTORY_FUZZ_RUNS")) : 150;
         for (int run = 0; run < count; ++run, ++runs) {
             nlohmann::json j = good;
             // Every value in the tree, then damage one or two of them.
@@ -213,8 +213,8 @@ TEST_CASE("damaged project files load or fail cleanly") {
                 std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
                 out << j.dump();
             }
-            // A crash gives no CAPTURE output: NODELAB_FUZZ_TRACE keeps the last file to replay.
-            if (getenv("NODELAB_FUZZ_TRACE")) {
+            // A crash gives no CAPTURE output: REFRACTORY_FUZZ_TRACE keeps the last file to replay.
+            if (getenv("REFRACTORY_FUZZ_TRACE")) {
                 std::ofstream("fuzz_last.json") << j.dump(1);
                 fprintf(stderr, "%s %d\n", file, run);
             }

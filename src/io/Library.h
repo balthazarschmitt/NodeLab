@@ -1,6 +1,6 @@
 #pragma once
 // The photo library (File > Open Folder): a folder's photos, each with its edit in a sidecar
-// project next to it (IMG_1234.CR3 -> IMG_1234.CR3.nlproj, as darktable does), so edits travel
+// project next to it (IMG_1234.CR3 -> IMG_1234.CR3.refract, as darktable does), so edits travel
 // with the photos and a sidecar opens like any other project. Ratings, the pick/reject flag and
 // a thumbnail of the edit live in the sidecar's "ui" block, under "library".
 #include <array>
@@ -56,8 +56,11 @@ std::vector<std::string> splitKeywords(const std::string& text);
 bool matchesSearch(const std::string& photoU8, const Meta& m, const std::string& query);
 
 // Lightroom's virtual copies: more edits of one photo, each in its own sidecar. Copy 0 is the
-// photo's own edit (photo.ext.nlproj); copy N > 0 lives in photo.ext.copyN.nlproj.
+// photo's own edit (photo.ext.refract); copy N > 0 lives in photo.ext.copyN.refract.
+// NodeLab's sidecars (photo.ext.nlproj, before 1.7) are read where they are: sidecarPath returns
+// one when there is no .refract. sidecarSavePath renames it first, for writing.
 std::string sidecarPath(const std::string& photoU8, int copy = 0);
+std::string sidecarSavePath(const std::string& photoU8, int copy = 0);
 bool hasSidecar(const std::string& photoU8, int copy = 0);
 
 // The folder's images (not sidecars or other files), sorted by name ignoring case.
@@ -109,7 +112,7 @@ bool pasteEdit(const nlohmann::json& graph, const std::string& sourceU8, const s
                int targetCopy = 0);
 
 // Lightroom's collections: named lists of photos (and virtual copies) from any folders, kept in
-// %APPDATA%\NodeLab\collections.json.
+// %APPDATA%\Refractory\collections.json.
 struct Collection {
     std::string name;
     std::vector<Entry> entries;

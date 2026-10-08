@@ -87,7 +87,7 @@ uint32_t seedOf(const Node& n, int param) { return uint32_t(std::max(0, int(std:
 
 class NoiseTextureNode : public TextureBase {
 public:
-    NODELAB_NODE({"tex.noise", "Noise Texture", "Texture",
+    REFRACTORY_NODE({"tex.noise", "Noise Texture", "Texture",
                   {},
                   {{"Fac", PinType::Channel}, {"Color", PinType::Image}},
                   {ParamDesc::Float("Scale", 5.0f, 0.1f, 50.0f), ParamDesc::Float("Detail", 2.0f, 0.0f, 12.0f),
@@ -126,7 +126,7 @@ public:
 
 class VoronoiTextureNode : public TextureBase {
 public:
-    NODELAB_NODE({"tex.voronoi", "Voronoi Texture", "Texture",
+    REFRACTORY_NODE({"tex.voronoi", "Voronoi Texture", "Texture",
                   {},
                   {{"Distance", PinType::Channel}, {"Color", PinType::Image}},
                   {ParamDesc::Float("Scale", 8.0f, 0.1f, 60.0f), ParamDesc::Float("Randomness", 1.0f, 0.0f, 1.0f),
@@ -155,7 +155,7 @@ public:
 class GradientTextureNode : public TextureBase {
 public:
     enum { Linear, Quadratic, Easing, Diagonal, Spherical, QuadraticSphere, Radial };
-    NODELAB_NODE({"tex.gradient", "Gradient Texture", "Texture",
+    REFRACTORY_NODE({"tex.gradient", "Gradient Texture", "Texture",
                   {},
                   {{"Fac", PinType::Channel}, {"Color", PinType::Image}},
                   {ParamDesc::Enum("Type", Linear, {"Linear", "Quadratic", "Easing", "Diagonal", "Spherical",
@@ -207,7 +207,7 @@ public:
 
 class WaveTextureNode : public TextureBase {
 public:
-    NODELAB_NODE({"tex.wave", "Wave Texture", "Texture",
+    REFRACTORY_NODE({"tex.wave", "Wave Texture", "Texture",
                   {},
                   {{"Fac", PinType::Channel}, {"Color", PinType::Image}},
                   {ParamDesc::Enum("Type", 0, {"Bands", "Rings"}), ParamDesc::Enum("Profile", 0, {"Sine", "Saw", "Triangle"}),
@@ -255,7 +255,7 @@ public:
 
 class CheckerTextureNode : public TextureBase {
 public:
-    NODELAB_NODE({"tex.checker", "Checker Texture", "Texture",
+    REFRACTORY_NODE({"tex.checker", "Checker Texture", "Texture",
                   {},
                   {{"Color", PinType::Image}, {"Fac", PinType::Channel}},
                   {ParamDesc::Float("Scale", 8.0f, 0.5f, 100.0f), ParamDesc::Color("Color 1", 0.8f, 0.8f, 0.8f),
@@ -288,7 +288,7 @@ public:
 
 class WhiteNoiseNode : public TextureBase {
 public:
-    NODELAB_NODE({"tex.white_noise", "White Noise", "Texture",
+    REFRACTORY_NODE({"tex.white_noise", "White Noise", "Texture",
                   {},
                   {{"Value", PinType::Channel}, {"Color", PinType::Image}},
                   {ParamDesc::Float("Grain Size", 1.0f, 1.0f, 32.0f), ParamDesc::Float("Seed", 0.0f, 0.0f, 100.0f)}})

@@ -1,4 +1,4 @@
-# NodeLab.exe tests\ui\interact.nlproj --script tests\ui\linkcycle.txt
+# Refractory.exe tests\ui\interact.refract --script tests\ui\linkcycle.txt
 # F (Make Links) then 1 / 2 / F to step the new wire's pins; Alt+S, Alt+D.
 settle
 move 520 104

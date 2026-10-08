@@ -1,6 +1,6 @@
-# NodeLab Guide
+# Refractory Guide
 
-NodeLab edits images with a graph of nodes. Every node takes data in on the left, does one job,
+Refractory edits images with a graph of nodes. Every node takes data in on the left, does one job,
 and passes the result out on the right. By wiring nodes together you build up a look that can be
 changed at any point: nothing is baked in until you export.
 
@@ -21,7 +21,7 @@ Ctrl+PgDn step through them):
   underneath, like Lightroom's Develop module. The Inspector is always a panel here.
 - **Nodes**: the graph between the original and the result.
 
-Each workspace keeps its own arrangement of panels, and NodeLab reopens the last one used.
+Each workspace keeps its own arrangement of panels, and Refractory reopens the last one used.
 
 - **Original** (left): the image loaded by the first Image Input node.
 - **Node Editor** (middle): the graph. Right-click empty space to add nodes.
@@ -40,7 +40,7 @@ Each workspace keeps its own arrangement of panels, and NodeLab reopens the last
 - **Status bar** (bottom): on the left, what the selected node's on-image controls do and what
   just happened. On the right, an AI mask being computed (with its progress), then the render:
   Ready or Rendering, the device (GPU or CPU), how long the last evaluation took and the
-  preview's size, then NodeLab's memory and the whole computer's RAM and CPU use. Hover it for
+  preview's size, then Refractory's memory and the whole computer's RAM and CPU use. Hover it for
   details. The RAM turns orange when it is nearly full: Windows then swaps to disk,
   which slows everything down.
 
@@ -71,8 +71,9 @@ marked **GPU**.
 4. Drag from the Saturation's output onto the **Output** node.
 5. Drag the **Amount** slider on the node. The Result panel updates live.
 6. **File > Export** (Ctrl+E) writes the result at full resolution (see Exporting below).
-7. **File > Save** (Ctrl+S) writes a `.nlproj` project file. It stores the graph and the image
+7. **File > Save** (Ctrl+S) writes a `.refract` project file. It stores the graph and the image
    paths (relative to the project), not the pixels, so keep images next to the project.
+   Projects saved by NodeLab (Refractory's name before 1.7, `.nlproj`) open as they are.
 
 ### Previewing
 
@@ -226,7 +227,7 @@ Every pin has one of three types, shown by its colour.
 
 ### Automatic Conversions
 
-You can connect pins of different types; NodeLab converts on the way.
+You can connect pins of different types; Refractory converts on the way.
 
 - **Channel to Image:** the channel becomes a gray image (R = G = B = the channel, alpha 1).
 - **Image to Channel:** the image's luminance (Rec. 709 luma, see Colour Spaces).
@@ -236,7 +237,7 @@ You can connect pins of different types; NodeLab converts on the way.
 
 Many inputs have a slider next to them when nothing is connected, for example Saturation's
 **Amount**. Connect a channel to that pin and the value comes from the channel instead, one value
-per pixel. This is the core trick of NodeLab: **Split RGB > R** into **Saturation > Amount**
+per pixel. This is the core trick of Refractory: **Split RGB > R** into **Saturation > Amount**
 makes red areas more saturated and non-red areas grayer.
 
 A value of 0..1 on a channel usually means "none to full". Sliders keep values in their useful
@@ -279,11 +280,11 @@ Colour pickers show and edit display (sRGB) values, as Blender's do; the node re
 matching linear colour. The eyedropper picks the scene values under the cursor. The histogram and
 clipping warnings show the view-transformed image.
 
-**Legacy projects.** Projects saved before 0.7 work on sRGB-encoded values, as NodeLab always did,
+**Legacy projects.** Projects saved before 0.7 work on sRGB-encoded values, as Refractory always did,
 and open unchanged: they render exactly as before and the Color menu's view settings are disabled.
 **Color > Convert Project to Scene-Linear** switches one over. Nothing is added to the graph, so
 it will look different: curves, levels and blends tuned on sRGB values may need adjusting. Ctrl+Z
-undoes the conversion. Scene-linear projects can't be opened by NodeLab 0.6 or older.
+undoes the conversion. Scene-linear projects can't be opened by Refractory 0.6 or older.
 
 ## Colour Spaces
 
@@ -292,7 +293,7 @@ the components of one colour space, and the matching **Combine** node builds an 
 them. Between the two you can edit, swap or rewire components. For example, blur only the colour
 while keeping detail sharp, or drive one component from another.
 
-All components are scaled to fit comfortably on channels. The ranges below are the ones NodeLab
+All components are scaled to fit comfortably on channels. The ranges below are the ones Refractory
 uses, which are not always the textbook units.
 
 ### RGB and sRGB
@@ -331,7 +332,7 @@ uses, which are not always the textbook units.
 ### Lab (CIE L\*a\*b\*)
 
 - **What it is:** a perceptual colour space, designed so equal numeric steps look like equal
-  visual steps. NodeLab uses the D65 white point.
+  visual steps. Refractory uses the D65 white point.
 - **L:** perceived lightness, 0 black to 1 white (L\* / 100).
 - **a:** green (negative) to red/magenta (positive), about -1..1 (a\* / 128).
 - **b:** blue (negative) to yellow (positive), about -1..1 (b\* / 128).
@@ -393,7 +394,7 @@ value while nothing is connected.
   them), **OpenEXR** (the RGBA, or the first layer with colour, as Blender's multilayer files
   have), **WebP**, **JPEG XL** or **AVIF** (with their colour profiles and orientation), or a
   camera **RAW** file (CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2, PEF and most others, decoded by
-  LibRaw). NodeLab's own TIFF, EXR, WebP, JPEG XL and AVIF exports open again this way.
+  LibRaw). Refractory's own TIFF, EXR, WebP, JPEG XL and AVIF exports open again this way.
 - Output: Image.
 - **Color Space** (as in Blender) says how the file's values are decoded in a scene-linear
   project: **sRGB** (photos and most images) converts to linear light; **Linear Rec.709** and
@@ -525,7 +526,7 @@ Blender. Invert, Posterize and the curve-based nodes still work on 0..1.
   channels (unconnected ones use their slider). Like Blender, Combine does not clamp, so it can
   also pack three data channels (masks, values above 1 or below 0) into one image for an
   Expression to read as r, g and b.
-- These are the most useful nodes in NodeLab: swap channels for false colour, drive other nodes
+- These are the most useful nodes in Refractory: swap channels for false colour, drive other nodes
   from a colour, or process one channel on its own.
 
 **Split HSV / Combine HSV**
@@ -1089,8 +1090,8 @@ otherwise.
 - Lightroom's Enable Profile Corrections: undoes the distortion, colour fringing (lateral
   chromatic aberration) and vignetting measured for your lens, at the photo's focal length and
   aperture. The profiles come from [lensfun](https://lensfun.github.io)'s database (CC BY-SA 3.0),
-  which isn't part of NodeLab.exe: the Inspector offers to download it (about 3 MB, into
-  `%APPDATA%\NodeLab\lensfun`).
+  which isn't part of Refractory.exe: the Inspector offers to download it (about 3 MB, into
+  `%APPDATA%\Refractory\lensfun`).
 - The node reads the camera, lens, focal length and aperture from the EXIF of the Image Input
   feeding it, and picks the best-matching profile when you first select it. **Detect from Photo**
   looks again; **Choose Lens** picks one by hand (for manual lenses, which write no EXIF).
@@ -1110,7 +1111,7 @@ otherwise.
   guides along a building's sides straighten it; add two along a roof line or the horizon to level
   it as well. Drag a guide's ends to adjust it; Alt+click a guide to remove it. Off ignores the
   guides (they're kept).
-- **Upright: Level, Vertical, Full, Auto.** NodeLab finds straight edges in the photo itself (those
+- **Upright: Level, Vertical, Full, Auto.** Refractory finds straight edges in the photo itself (those
   within 20 degrees of vertical or horizontal) and turns the camera to straighten them, ignoring
   lines that disagree with the rest, such as a sloping roof. **Level** only rotates, to level the
   horizon; **Vertical** also stands converging verticals up; **Full** corrects both ways;
@@ -1204,9 +1205,9 @@ with the matte applied as alpha.
 **Select Subject**
 - Lightroom's Select Subject: an AI model finds the main subject of the photo (people, animals,
   objects in front) and the node outputs it as a mask. Wire the photo into **Image**.
-- The model isn't part of NodeLab.exe. The first time, the Inspector offers to download it
-  (about 240 MB with the AI runtime, once; stored in `%APPDATA%\NodeLab\models`). Until then the
-  mask is empty. `NodeLab.exe --install-model subject` downloads it from the command line.
+- The model isn't part of Refractory.exe. The first time, the Inspector offers to download it
+  (about 240 MB with the AI runtime, once; stored in `%APPDATA%\Refractory\models`). Until then the
+  mask is empty. `Refractory.exe --install-model subject` downloads it from the command line.
 - The model sees a 1024 x 1024 copy of the photo, so it runs once per picture, not per pixel:
   about a minute on a laptop CPU, a second or two on a good GPU (Edit > Preferences >
   Compositor > AI Masks). Results are cached by picture, also on disk, so the export, the zoomed
@@ -1223,7 +1224,7 @@ with the matte applied as alpha.
 - **Model:** **Accurate** (BiRefNet, above) or **Light** (U²-Net small): a 4.6 MB download that
   runs in about a second with little memory, for computers where Accurate is too slow. Its mask
   is coarser (it sees a 320 x 320 copy), so keep **Refine Edges** on.
-  `NodeLab.exe --install-model subject-light` downloads it from the command line.
+  `Refractory.exe --install-model subject-light` downloads it from the command line.
 - Run it on the photo itself, before colour swaps or heavy grading: the model was trained on
   ordinary photos. For an infrared edit, wire the image from before the channel swap.
 - **Feather** (all AI masks) softens the mask's outline, up to 3% of the long edge at 100.
@@ -1251,7 +1252,7 @@ with the matte applied as alpha.
 - Like the other AI masks it is a one-time download (about 340 MB) with the same caching,
   **Refine Edges**, **Invert**, **Feather** and **Edge**. It takes a few seconds on the CPU.
   Changing which parts are ticked runs the model again (each choice is cached).
-  `NodeLab.exe --install-model face` downloads it from the command line.
+  `Refractory.exe --install-model face` downloads it from the command line.
 - The model's licence (NVIDIA's for SegFormer, and the CelebAMask-HQ data's) allows
   non-commercial use only.
 
@@ -1264,7 +1265,7 @@ with the matte applied as alpha.
   model; try Natural Ground or Mountains, or a Range Mask on bright areas.
 - A one-time download of about 110 MB (shared with **Select Objects**), a second or two on the
   CPU. Otherwise as **Select Subject**: caching, **Refine Edges**, **Invert**, **Feather**,
-  **Edge** and an optional **Mask**. `NodeLab.exe --install-model scene` downloads it.
+  **Edge** and an optional **Mask**. `Refractory.exe --install-model scene` downloads it.
 - The model's licence (NVIDIA's for SegFormer) allows non-commercial use only.
 
 **Select Objects**
@@ -1412,7 +1413,7 @@ Coordinates are relative to the image, so textures look the same in the preview 
 - Right-click a node (usually a group with its sliders) and choose **Save as Preset...** to keep
   the selected nodes under a name. **Add > Presets** inserts them into any project, and
   Add > Presets > Delete Preset removes one.
-- Presets are files in `%APPDATA%\NodeLab\presets` (`.nlpreset`), which can be copied to another
+- Presets are files in `%APPDATA%\Refractory\presets` (`.rfpreset`), which can be copied to another
   computer.
 
 ## Working in the Node Editor
@@ -1541,8 +1542,8 @@ progress, and **Cancel** stops it.
   final pixel size; use Screen for web and phone images and the paper options for prints.
 
 The settings and folders are saved with the project. From the command line,
-`NodeLab.exe --batch project.nlproj outDir [--png|--jpg|--tif|--exr|--webp|--jxl|--avif] [--depth N] [--quality Q] a.jpg b.jpg ...`
-does the same batch without the window, and `NodeLab.exe --render project.nlproj out.tif
+`Refractory.exe --batch project.refract outDir [--png|--jpg|--tif|--exr|--webp|--jxl|--avif] [--depth N] [--quality Q] a.jpg b.jpg ...`
+does the same batch without the window, and `Refractory.exe --render project.refract out.tif
 [--depth 16] [--quality Q]` renders one image (the extension picks the format; `--depth 32` for
 full-float EXR; `--quality` makes WebP, JPEG XL and AVIF lossy at that quality).
 Add `--device gpu` to render on the graphics card (`--precision half` for speed, full by default).
@@ -1556,7 +1557,7 @@ back to or compare.
 - Click a snapshot to **Restore** it (it can be undone with Ctrl+Z). Right-click for **Rename**,
   **Update with Current Settings** and **Delete**.
 - Snapshots are saved with the project (and with a library photo's sidecar), so they survive
-  closing NodeLab, as is the History below; a snapshot is a state you name and keep on purpose.
+  closing Refractory, as is the History below; a snapshot is a state you name and keep on purpose.
 
 ## History
 
@@ -1569,20 +1570,20 @@ inside a group is named after the group (**Look: Add Invert**).
 - The history (up to 200 steps) is saved with the project and with a library photo's sidecar,
   as darktable keeps its history stack, so Ctrl+Z still works after reopening. Each step is
   stored as the change from the next one, so it adds little to the file. If the project was
-  changed outside NodeLab (or by a version that saves it differently), the old steps are dropped.
+  changed outside Refractory (or by a version that saves it differently), the old steps are dropped.
 - **Clear History** forgets the steps and keeps the edit (saved at the next save).
 
 ## Preferences
 
 **Edit > Preferences** holds the settings that belong to you rather than to a project. They are
-saved straight away, in `%APPDATA%\NodeLab\preferences.json`.
+saved straight away, in `%APPDATA%\Refractory\preferences.json`.
 
 - **Interface:** **Resolution Scale** (as in Blender: text and controls from 80% to 150%, on top
   of Windows' own display scaling), the layout preset, whether the Inspector is an overlay or a
   panel, node timings, and **Reduce Motion** (frame all and frame selected jump instead of
   gliding).
 - **Themes:** Studio (the default: quiet greys, grey controls, the accent kept for state),
-  Classic (NodeLab's look before 1.4), Blender, Darkroom (neutral greys that don't tint how a
+  Classic (Refractory's look before 1.4), Blender, Darkroom (neutral greys that don't tint how a
   photo is judged), Midnight, High Contrast and Light. Every colour can be changed: the interface's
   background, title bars, widgets, text, accent and borders, and the Node Editor's canvas, nodes,
   fields, wires and the header colour of each node category. Editing a built-in theme makes a
@@ -1597,19 +1598,19 @@ saved straight away, in `%APPDATA%\NodeLab\preferences.json`.
 
 ## Library
 
-**File > Open Folder** (Ctrl+Shift+O) turns NodeLab into a photo browser, like Lightroom's
-filmstrip. You can also drop a folder on the window, or start `NodeLab.exe C:\Photos\Trip`.
+**File > Open Folder** (Ctrl+Shift+O) turns Refractory into a photo browser, like Lightroom's
+filmstrip. You can also drop a folder on the window, or start `Refractory.exe C:\Photos\Trip`.
 The Library panel along the bottom shows the folder's photos. Clicking the **Library** tab
 with no folder open asks for one. A folder without photos still opens, in the grid, so you can
 pick one of its subfolders from the Folders column.
 
-In NodeLab's dialogs (unsaved changes, Convert to Scene-Linear and the like), **Enter** presses
+In Refractory's dialogs (unsaved changes, Convert to Scene-Linear and the like), **Enter** presses
 the first button and **Escape** cancels.
 
 - **Opening photos:** click a thumbnail, or press ← / → to step through them. The open photo
   has a white border.
 - **Edits are saved automatically** in a sidecar next to each photo: `IMG_1234.CR3` gets
-  `IMG_1234.CR3.nlproj`. Switching photos saves the one you leave, with no question asked, so
+  `IMG_1234.CR3.refract`. Switching photos saves the one you leave, with no question asked, so
   the edits travel with the photos. A sidecar is an ordinary project, so File > Open Project
   opens it too. Ctrl+S saves the sidecar straight away; Ctrl+Z works within each photo.
 - **New photos** start with Image Input → Denoise → Basic → Output, in scene-linear. RAWs get
@@ -1641,7 +1642,7 @@ the first button and **Escape** cancels.
   - **Keyword List** has every keyword in the folder with its count: click one to add it.
   - In the Library views it is a sidebar on the right; over the editor it is a window.
 - **Collections** (the toolbar's **Collections** menu, as Lightroom's): named lists of photos from
-  any folders, kept in `%APPDATA%\NodeLab\collections.json`.
+  any folders, kept in `%APPDATA%\Refractory\collections.json`.
   - Type a name and press Enter to make a collection of the selected photos, or **Add to
     Collection** (also on the right-click menu) to add them to one.
   - Click a collection to show its photos instead of the folder's; edits, ratings and Export
@@ -1670,7 +1671,7 @@ the first button and **Escape** cancels.
 - **Virtual copies** (Lightroom's): **Ctrl+'**, or right-click a thumbnail > **Create Virtual
   Copy**, adds another edit of the same photo, starting as a copy of the current one. It is
   listed after the photo as "(Copy 1)", with its own edit, rating and flag in
-  `IMG_1234.CR3.copy1.nlproj`, so you can try a black-and-white and a colour version side by
+  `IMG_1234.CR3.copy1.refract`, so you can try a black-and-white and a colour version side by
   side. Right-click > **Remove Virtual Copy...** moves its sidecar to the Recycle Bin (the photo
   and its other edits stay).
 - **Grid view (G):** the whole folder as a grid of cards over the window, like Lightroom's
@@ -1732,7 +1733,7 @@ so we estimate it: foliage is green, and green foliage is bright in infrared.
 
 ### Infrared Foliage (lilac / white trees, dark sky)
 
-Open `examples/infrared_foliage.nlproj` and replace the Image Input's file. It is the classic
+Open `examples/infrared_foliage.refract` and replace the Image Input's file. It is the classic
 full-spectrum infrared look: glowing white-lilac leaves, a dark maroon sky with pink clouds and
 dark ground. It was fitted against a real infrared/colour photo pair.
 

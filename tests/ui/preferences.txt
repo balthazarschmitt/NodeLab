@@ -1,5 +1,5 @@
 # Preferences, Reset to Defaults and the inspector overlay:
-#   NodeLab.exe tests\ui\interact.nlproj --script tests\ui\preferences.txt
+#   Refractory.exe tests\ui\interact.refract --script tests\ui\preferences.txt
 # Changes Invert's Factor and resets it from the node menu, switches the Inspector to the
 # overlay in Edit > Preferences, picks the Blender theme, then drags the overlay's slider.
 settle

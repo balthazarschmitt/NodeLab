@@ -1,5 +1,5 @@
 # Golden hashes of every node's CPU output (tests/test_golden.cpp). Regenerate with
-# NODELAB_GOLDEN_WRITE=1 build\nodelab_tests.exe -tc="golden*" only for deliberate changes.
+# REFRACTORY_GOLDEN_WRITE=1 build\refractory_tests.exe -tc="golden*" only for deliberate changes.
 color.basic default out0 5b60570056b68f80
 color.basic pushed out0 b05c5f2ad441111f
 color.brightness_contrast default out0 25478ccdf8867580

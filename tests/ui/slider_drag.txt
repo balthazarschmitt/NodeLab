@@ -1,4 +1,4 @@
-# build\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\slider_drag.txt
+# build\Refractory.exe tests\ui\interact.refract --script tests\ui\slider_drag.txt
 # Drag Invert's Factor field far outside the node (and the canvas); it must keep tracking.
 settle
 move 810 424

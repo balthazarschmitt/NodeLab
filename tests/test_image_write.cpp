@@ -170,7 +170,7 @@ TEST_CASE("sRGB ICC profile is well formed") {
 }
 
 TEST_CASE("PNG export: 8 and 16 bit, tagged sRGB") {
-    const fs::path dir = tempDir("nodelab_png16");
+    const fs::path dir = tempDir("refractory_png16");
     const Image img = gradient(300, 7);
     std::string err;
     SaveOptions o;
@@ -208,7 +208,7 @@ TEST_CASE("PNG export: 8 and 16 bit, tagged sRGB") {
 }
 
 TEST_CASE("TIFF export: Deflate strips with the predictor decode to the pixels") {
-    const fs::path dir = tempDir("nodelab_tiff");
+    const fs::path dir = tempDir("refractory_tiff");
     for (int depth : {8, 16}) {
         const Image img = gradient(257, 600, 0.75f);
         SaveOptions o;
@@ -272,7 +272,7 @@ TEST_CASE("TIFF export: Deflate strips with the predictor decode to the pixels")
 }
 
 TEST_CASE("OpenEXR export: ZIP blocks decode to the linear values") {
-    const fs::path dir = tempDir("nodelab_exr");
+    const fs::path dir = tempDir("refractory_exr");
     Image img = gradient(70, 37, 0.5f);
     img.pixel(5)[0] = 7.25f;   // above 1 survives
     img.pixel(6)[1] = -0.5f;   // so do negatives
@@ -337,7 +337,7 @@ TEST_CASE("OpenEXR export: ZIP blocks decode to the linear values") {
 
 TEST_CASE("PNG and TIFF export: photos and graphics both compress, chunks valid") {
     // Several 1 MB zlib segments; photos take run-length matching, graphics the LZ matcher.
-    const fs::path dir = tempDir("nodelab_pngzip");
+    const fs::path dir = tempDir("refractory_pngzip");
     std::string err;
     for (bool pattern : {false, true}) {
         const Image img = bytesImage(300, 2000, pattern);
@@ -363,7 +363,7 @@ TEST_CASE("PNG and TIFF export: photos and graphics both compress, chunks valid"
 }
 
 TEST_CASE("JPEG export in parallel strips decodes like a single stb encode") {
-    const fs::path dir = tempDir("nodelab_jpegstrips");
+    const fs::path dir = tempDir("refractory_jpegstrips");
     std::string err;
     std::vector<uint8_t> rgb;
     const Image img = bytesImage(203, 150, false, &rgb);  // not whole MCUs either way
@@ -396,7 +396,7 @@ TEST_CASE("JPEG export in parallel strips decodes like a single stb encode") {
 }
 
 TEST_CASE("JPEG export carries the ICC profile and EXIF") {
-    const fs::path dir = tempDir("nodelab_jpegmeta");
+    const fs::path dir = tempDir("refractory_jpegmeta");
     SaveOptions o;
     o.format = FileFormat::JPEG;
     tiff::Ifd ifd;
@@ -419,7 +419,7 @@ TEST_CASE("JPEG export carries the ICC profile and EXIF") {
 }
 
 TEST_CASE("EXIF for exports: upright, resized, no stale thumbnail") {
-    const fs::path dir = tempDir("nodelab_exifexport");
+    const fs::path dir = tempDir("refractory_exifexport");
     // A source JPEG whose EXIF says "rotate 90", with an Exif IFD (pixel size) and an IFD1 link.
     std::string err;
     SaveOptions o;
@@ -503,7 +503,7 @@ TEST_CASE("Lanczos export resize works in linear light without halos") {
 }
 
 TEST_CASE("saveRendered: EXR is scene-linear, display formats get the view") {
-    const fs::path dir = tempDir("nodelab_saverendered");
+    const fs::path dir = tempDir("refractory_saverendered");
     auto img = std::make_shared<Image>(4, 4);
     for (size_t i = 0; i < img->pixelCount(); ++i) {
         float* p = img->pixel(i);
@@ -602,7 +602,7 @@ TEST_CASE("export formats: settings, extensions and File Output params") {
 
 TEST_CASE("image files are replaced whole, through a temporary file") {
     namespace fs = std::filesystem;
-    const fs::path dir = fs::temp_directory_path() / "nodelab_atomic_write";
+    const fs::path dir = fs::temp_directory_path() / "refractory_atomic_write";
     fs::create_directories(dir);
     const fs::path out = dir / "out.png";
     Image small(3, 2), big(9, 4);
@@ -642,7 +642,7 @@ TEST_CASE("Exports carry the library's title, caption, keywords and rating as XM
     rejected.flag = library::Rejected;
     CHECK(library::xmpPacket(rejected).find("xmp:Rating=\"-1\"") != std::string::npos);
 
-    const fs::path dir = tempDir("nodelab_xmp");
+    const fs::path dir = tempDir("refractory_xmp");
     std::string err;
     for (const FileFormat f : {FileFormat::PNG, FileFormat::JPEG, FileFormat::TIFF, FileFormat::WEBP}) {
         CAPTURE(int(f));

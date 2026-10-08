@@ -1,4 +1,4 @@
-# build-dev\NodeLab.exe tests\ui\interact.nlproj --script tests\ui\groups.txt
+# build-dev\Refractory.exe tests\ui\interact.refract --script tests\ui\groups.txt
 # Docked default layout, graph view fixed at zoom 1 / pan 0: canvas origin (439, 72).
 settle
 # Splice Invert into the Input->Output wire.

@@ -78,7 +78,7 @@ void gpuCombine(EvalContext& ctx, const Node& node, const std::vector<Value>& in
 
 class SplitRGBNode : public Node {
 public:
-    NODELAB_NODE({"color.split_rgb", "Split RGB", "Color",
+    REFRACTORY_NODE({"color.split_rgb", "Split RGB", "Color",
                   {{"Image", PinType::Image}},
                   {{"R", PinType::Channel}, {"G", PinType::Channel}, {"B", PinType::Channel}, {"A", PinType::Channel}},
                   {}})
@@ -95,7 +95,7 @@ public:
 
 class CombineRGBNode : public Node {
 public:
-    NODELAB_NODE({"color.combine_rgb", "Combine RGB", "Color",
+    REFRACTORY_NODE({"color.combine_rgb", "Combine RGB", "Color",
                   {{"R", PinType::Channel, 0}, {"G", PinType::Channel, 1}, {"B", PinType::Channel, 2}, {"A", PinType::Channel, 3}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::FloatFree("R", 0.0f, 0.0f, 1.0f), ParamDesc::FloatFree("G", 0.0f, 0.0f, 1.0f),
@@ -115,7 +115,7 @@ public:
 
 class SplitHSVNode : public Node {
 public:
-    NODELAB_NODE({"color.split_hsv", "Split HSV", "Color",
+    REFRACTORY_NODE({"color.split_hsv", "Split HSV", "Color",
                   {{"Image", PinType::Image}},
                   {{"H", PinType::Channel}, {"S", PinType::Channel}, {"V", PinType::Channel}, {"A", PinType::Channel}},
                   {}})
@@ -136,7 +136,7 @@ public:
 
 class CombineHSVNode : public Node {
 public:
-    NODELAB_NODE({"color.combine_hsv", "Combine HSV", "Color",
+    REFRACTORY_NODE({"color.combine_hsv", "Combine HSV", "Color",
                   {{"H", PinType::Channel, 0}, {"S", PinType::Channel, 1}, {"V", PinType::Channel, 2}, {"A", PinType::Channel, 3}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::FloatFree("H", 0.0f, 0.0f, 1.0f), ParamDesc::Float("S", 0.0f, 0.0f, 1.0f),
@@ -157,7 +157,7 @@ public:
 
 class SplitLabNode : public Node {
 public:
-    NODELAB_NODE({"color.split_lab", "Split Lab", "Color",
+    REFRACTORY_NODE({"color.split_lab", "Split Lab", "Color",
                   {{"Image", PinType::Image}},
                   {{"L", PinType::Channel}, {"a", PinType::Channel}, {"b", PinType::Channel}, {"A", PinType::Channel}},
                   {}})
@@ -178,7 +178,7 @@ public:
 
 class CombineLabNode : public Node {
 public:
-    NODELAB_NODE({"color.combine_lab", "Combine Lab", "Color",
+    REFRACTORY_NODE({"color.combine_lab", "Combine Lab", "Color",
                   {{"L", PinType::Channel, 0}, {"a", PinType::Channel, 1}, {"b", PinType::Channel, 2}, {"A", PinType::Channel, 3}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("L", 0.5f, 0.0f, 1.0f), ParamDesc::Float("a", 0.0f, -1.0f, 1.0f),
@@ -200,7 +200,7 @@ public:
 
 class LuminanceNode : public Node {
 public:
-    NODELAB_NODE({"color.luminance", "Luminance", "Color",
+    REFRACTORY_NODE({"color.luminance", "Luminance", "Color",
                   {{"Image", PinType::Image}},
                   {{"Value", PinType::Channel}},
                   {ParamDesc::Enum("Method", 0, {"Rec.709 luma", "Average", "Max (HSV value)", "Lab lightness"})}})
@@ -241,7 +241,7 @@ public:
 
 class BrightnessContrastNode : public Node {
 public:
-    NODELAB_NODE({"color.brightness_contrast", "Brightness / Contrast", "Color",
+    REFRACTORY_NODE({"color.brightness_contrast", "Brightness / Contrast", "Color",
                   {{"Image", PinType::Image}, {"Brightness", PinType::Channel, 0}, {"Contrast", PinType::Channel, 1}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Brightness", 0.0f, -1.0f, 1.0f), ParamDesc::Float("Contrast", 0.0f, -1.0f, 1.0f)}})
@@ -281,7 +281,7 @@ public:
 
 class SaturationNode : public Node {
 public:
-    NODELAB_NODE({"color.saturation", "Saturation", "Color",
+    REFRACTORY_NODE({"color.saturation", "Saturation", "Color",
                   {{"Image", PinType::Image}, {"Amount", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Amount", 1.0f, 0.0f, 4.0f)}})
@@ -312,7 +312,7 @@ public:
 
 class HueShiftNode : public Node {
 public:
-    NODELAB_NODE({"color.hue_shift", "Hue Shift", "Color",
+    REFRACTORY_NODE({"color.hue_shift", "Hue Shift", "Color",
                   {{"Image", PinType::Image}, {"Degrees", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Degrees", 0.0f, -180.0f, 180.0f).withTrack(SliderTrack::HueShift, 0.0f, 180.0f)}})
@@ -343,7 +343,7 @@ public:
 
 class GammaNode : public Node {
 public:
-    NODELAB_NODE({"color.gamma", "Gamma", "Color",
+    REFRACTORY_NODE({"color.gamma", "Gamma", "Color",
                   {{"Image", PinType::Image}, {"Gamma", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Gamma", 1.0f, 0.1f, 5.0f)}})
@@ -372,7 +372,7 @@ public:
 
 class ExposureNode : public Node {
 public:
-    NODELAB_NODE({"color.exposure", "Exposure", "Color",
+    REFRACTORY_NODE({"color.exposure", "Exposure", "Color",
                   {{"Image", PinType::Image}, {"Stops", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Stops", 0.0f, -5.0f, 5.0f)}})
@@ -405,7 +405,7 @@ public:
 
 class InvertNode : public Node {
 public:
-    NODELAB_NODE({"color.invert", "Invert", "Color",
+    REFRACTORY_NODE({"color.invert", "Invert", "Color",
                   {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f)}})
@@ -437,7 +437,7 @@ public:
 
 class LevelsNode : public Node {
 public:
-    NODELAB_NODE({"color.levels", "Levels", "Color",
+    REFRACTORY_NODE({"color.levels", "Levels", "Color",
                   {{"Image", PinType::Image}, {"In Black", PinType::Channel, 0}, {"In White", PinType::Channel, 1},
                    {"Gamma", PinType::Channel, 2}, {"Out Black", PinType::Channel, 3}, {"Out White", PinType::Channel, 4}},
                   {{"Image", PinType::Image}},
@@ -495,7 +495,7 @@ public:
 
 class CurvesNode : public Node {
 public:
-    NODELAB_NODE({"color.curves", "Curves", "Color",
+    REFRACTORY_NODE({"color.curves", "Curves", "Color",
                   {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f), ParamDesc::Curve("Curves")}})
@@ -549,7 +549,7 @@ public:
 #define SPLIT3_NODE(Cls, type, title, n0, n1, n2, conv, glsl)                                          \
     class Cls : public Node {                                                                          \
     public:                                                                                            \
-        NODELAB_NODE({type, title, "Color", {{"Image", PinType::Image}},                               \
+        REFRACTORY_NODE({type, title, "Color", {{"Image", PinType::Image}},                               \
                       {{n0, PinType::Channel}, {n1, PinType::Channel}, {n2, PinType::Channel}, {"A", PinType::Channel}}, \
                       {}})                                                                             \
         void evaluate(EvalContext& ctx, const std::vector<Value>& in, std::vector<Value>& out) override { \
@@ -572,7 +572,7 @@ public:
 #define COMBINE3_NODE(Cls, type, title, n0, n1, n2, d0, lo1, hi1, d1, lo2, hi2, d2, conv, glsl)         \
     class Cls : public Node {                                                                          \
     public:                                                                                            \
-        NODELAB_NODE({type, title, "Color",                                                            \
+        REFRACTORY_NODE({type, title, "Color",                                                            \
                       {{n0, PinType::Channel, 0}, {n1, PinType::Channel, 1}, {n2, PinType::Channel, 2}, {"A", PinType::Channel, 3}}, \
                       {{"Image", PinType::Image}},                                                     \
                       {ParamDesc::Float(n0, d0, 0.0f, 1.0f), ParamDesc::Float(n1, d1, lo1, hi1),       \
@@ -611,7 +611,7 @@ nlohmann::json flatHueCurves() {
 
 class HueCorrectNode : public Node {
 public:
-    NODELAB_NODE({"color.hue_correct", "Hue Correct", "Color",
+    REFRACTORY_NODE({"color.hue_correct", "Hue Correct", "Color",
                   {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f),
@@ -667,7 +667,7 @@ public:
 
 class ColorBalanceNode : public Node {
 public:
-    NODELAB_NODE({"color.color_balance", "Color Balance", "Color",
+    REFRACTORY_NODE({"color.color_balance", "Color Balance", "Color",
                   {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f), ParamDesc::Enum("Mode", 0, {"Lift / Gamma / Gain", "Offset / Power / Slope"}),
@@ -722,7 +722,7 @@ public:
 
 class ToneMapNode : public Node {
 public:
-    NODELAB_NODE({"color.tone_map", "Tone Map", "Color",
+    REFRACTORY_NODE({"color.tone_map", "Tone Map", "Color",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Exposure", 0.0f, -4.0f, 4.0f), ParamDesc::Float("White Point", 2.0f, 1.0f, 16.0f),
@@ -763,7 +763,7 @@ public:
 
 class ConvertColorspaceNode : public Node {
 public:
-    NODELAB_NODE({"color.convert_colorspace", "Convert Colorspace", "Color",
+    REFRACTORY_NODE({"color.convert_colorspace", "Convert Colorspace", "Color",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Enum("Conversion", 0, {"sRGB -> Linear", "Linear -> sRGB", "sRGB -> Gamma 2.2", "Gamma 2.2 -> sRGB"})}})
@@ -807,7 +807,7 @@ public:
 class FilmNegativeNode : public Node {
 public:
     enum { Type = 0, FilmBase, Dmax, Offset, DensityCorrection, Contrast, PrintExposure, Black };
-    NODELAB_NODE({"color.film_negative", "Film Negative", "Color",
+    REFRACTORY_NODE({"color.film_negative", "Film Negative", "Color",
                   {{"Image", PinType::Image}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Enum("Type", 0, {"Color", "Black & White"}), ParamDesc::Color("Film Base Color", 0.75f, 0.35f, 0.15f),

@@ -11,9 +11,9 @@ bool saveProject(const std::string& pathU8, const Graph& g, const nlohmann::json
     fs::path path = u8ToPath(pathU8);
     fs::path base = fs::absolute(path).parent_path();
     nlohmann::json j;
-    j["app"] = "NodeLab";
+    j["app"] = "Refractory";
     j["version"] = g.colorManagement.linear ? kProjectVersion : 1;
-    j["appVersion"] = kNodeLabVersion;
+    j["appVersion"] = kRefractoryVersion;
     j["graph"] = g.toJson(&base);
     j["ui"] = ui;
 
@@ -51,13 +51,13 @@ bool loadProject(const std::string& pathU8, Graph& g, nlohmann::json& ui, std::s
     }
     try {
         nlohmann::json j = nlohmann::json::parse(f);
-        if (j.value("app", "") != "NodeLab") {
-            err = "not a NodeLab project";
+        if (!isProjectApp(j.value("app", ""))) {
+            err = "not a Refractory project";
             return false;
         }
         if (j.value("version", 0) > kProjectVersion) {
-            err = "project was saved by NodeLab " + j.value("appVersion", std::string("(newer)")) +
-                  ", which uses a newer file format than " + kNodeLabVersion + " can read";
+            err = "project was saved by Refractory " + j.value("appVersion", std::string("(newer)")) +
+                  ", which uses a newer file format than " + kRefractoryVersion + " can read";
             return false;
         }
         fs::path base = fs::absolute(path).parent_path();
@@ -70,4 +70,10 @@ bool loadProject(const std::string& pathU8, Graph& g, nlohmann::json& ui, std::s
         return false;
     }
     return true;
+}
+
+bool isProjectPath(const std::string& pathU8) {
+    std::string ext = pathToU8(u8ToPath(pathU8).extension());
+    for (char& c : ext) c = char(std::tolower((unsigned char)c));
+    return ext == kProjectExt || ext == kLegacyProjectExt;
 }

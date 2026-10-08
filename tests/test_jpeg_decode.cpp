@@ -33,7 +33,7 @@ Image pattern(int w, int h) {
 }
 
 Bytes ourJpeg(const Image& img, int quality) {
-    const fs::path p = fs::temp_directory_path() / "nodelab_jpeg_decode.jpg";
+    const fs::path p = fs::temp_directory_path() / "refractory_jpeg_decode.jpg";
     SaveOptions o;
     o.format = FileFormat::JPEG;
     o.jpegQuality = quality;

@@ -1,4 +1,4 @@
-# build\NodeLab.exe tests\ui\frames.nlproj --script tests\ui\frames.txt
+# build\Refractory.exe tests\ui\frames.refract --script tests\ui\frames.txt
 settle
 # right-click the Image Input node (inside "Source") -> Move to Frame > Target
 click 540 90 1

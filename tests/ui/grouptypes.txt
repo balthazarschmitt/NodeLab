@@ -1,4 +1,4 @@
-# NodeLab.exe tests\ui\interact.nlproj --script tests\ui\grouptypes.txt
+# Refractory.exe tests\ui\interact.refract --script tests\ui\grouptypes.txt
 # Group Invert, then change the group input's type in the Inspector.
 settle
 drag 739 345 789 115

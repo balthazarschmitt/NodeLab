@@ -22,7 +22,7 @@ namespace {
 // renders only the part a region asks for, as Image Input does.
 class RoiTestSource : public Node {
 public:
-    NODELAB_NODE({"test.roi_source", "ROI Test Source", "Input", {}, {{"Image", PinType::Image}}, {}, true})
+    REFRACTORY_NODE({"test.roi_source", "ROI Test Source", "Input", {}, {{"Image", PinType::Image}}, {}, true})
     bool roiSourceSize(const EvalContext& ctx, int& w, int& h) const override {
         w = ctx.defaultW;
         h = ctx.defaultH;
@@ -343,7 +343,7 @@ TEST_CASE("background evaluation drafts, sizes proxies and adds details") {
             p[2] = y / 299.0f;
             p[3] = 1.0f;
         }
-    const std::filesystem::path path = std::filesystem::temp_directory_path() / "nodelab_async_test.png";
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "refractory_async_test.png";
     std::string err;
     REQUIRE(saveImage(pathToU8(path), src, err));
 

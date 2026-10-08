@@ -1,4 +1,4 @@
-# build\NodeLab.exe tests\ui\perspective.nlproj --script tests\ui\perspective.txt
+# build\Refractory.exe tests\ui\perspective.refract --script tests\ui\perspective.txt
 # Perspective's Guided Upright guides, and the Crop tool's guide overlays (O cycles them).
 settle
 # select Perspective: a fine grid over the Result

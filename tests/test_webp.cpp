@@ -302,7 +302,7 @@ TEST_CASE("WebP files: plain container for sRGB, VP8X with ICCP for wider spaces
         float* p = img.pixel(i);
         p[0] = float(i % 20) / 19.0f, p[1] = 0.5f, p[2] = float(i / 20) / 9.0f, p[3] = i < 50 ? 0.5f : 1.0f;
     }
-    const fs::path path = fs::temp_directory_path() / "nodelab_test.webp";
+    const fs::path path = fs::temp_directory_path() / "refractory_test.webp";
     CHECK(formatFromPath(path.string()) == FileFormat::WEBP);
     CHECK(std::string(formatExtension(FileFormat::WEBP)) == ".webp");
     CHECK(formatDepth(FileFormat::WEBP, 16) == 8);

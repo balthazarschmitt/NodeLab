@@ -1,7 +1,7 @@
 #pragma once
 // Node presets: a selection of nodes (often one group with its sliders) saved under a name, to
 // insert into any project from the Add menu's Presets submenu. Each is a JSON file in the user's
-// presets folder (%APPDATA%\NodeLab\presets\<name>.nlpreset), holding the nodes and the wires
+// presets folder (%APPDATA%\Refractory\presets\<name>.rfpreset), holding the nodes and the wires
 // between them in the clipboard's format, so a preset inserts exactly as a paste does.
 #include <string>
 #include <vector>

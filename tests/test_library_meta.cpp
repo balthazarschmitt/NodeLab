@@ -101,7 +101,7 @@ TEST_CASE("Library keywords split, and search matches every word") {
 }
 
 TEST_CASE("Library collections save, load and add without repeats") {
-    const fs::path file = fs::temp_directory_path() / "nodelab_tests_collections.json";
+    const fs::path file = fs::temp_directory_path() / "refractory_tests_collections.json";
     std::error_code ec;
     fs::remove(file, ec);
     CHECK(library::loadCollections().empty());
@@ -133,7 +133,7 @@ TEST_CASE("Library duplicates: the same file, and the same picture resized, but 
     CHECK(library::hashDistance(library::pictureHash(a), library::pictureHash(b)) > 10);
 
     // Through files and thumbnails, as Find Duplicates runs.
-    const fs::path dir = fs::temp_directory_path() / "nodelab_dups";
+    const fs::path dir = fs::temp_directory_path() / "refractory_dups";
     std::error_code ec;
     fs::remove_all(dir, ec);
     fs::create_directories(dir);

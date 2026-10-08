@@ -353,7 +353,7 @@ float toneCurve(float v, const ToneParams& t) {
 
 class BasicNode : public Node {
 public:
-    NODELAB_NODE({"color.basic", "Basic", "Color",
+    REFRACTORY_NODE({"color.basic", "Basic", "Color",
                   {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f),
@@ -1011,7 +1011,7 @@ std::vector<ParamDesc> mixerParams() {
 
 class ColorMixerNode : public Node {
 public:
-    NODELAB_NODE({"color.color_mixer", "Color Mixer", "Color",
+    REFRACTORY_NODE({"color.color_mixer", "Color Mixer", "Color",
                   {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   mixerParams(), false, true})
@@ -1174,7 +1174,7 @@ private:
 
 class ColorGradingNode : public Node {
 public:
-    NODELAB_NODE({"color.color_grading", "Color Grading", "Color",
+    REFRACTORY_NODE({"color.color_grading", "Color Grading", "Color",
                   {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   {ParamDesc::Float("Factor", 1.0f, 0.0f, 1.0f),
@@ -1400,7 +1400,7 @@ float toneGainEv(float e, const float* alpha) {
 class ToneEqualizerNode : public Node {
 public:
     enum { Factor = 0, Band0 = 1, Smoothing = 10, Feathering, MaskExposure, MaskContrast, ShowMask };
-    NODELAB_NODE({"color.tone_equalizer", "Tone Equalizer", "Color",
+    REFRACTORY_NODE({"color.tone_equalizer", "Tone Equalizer", "Color",
                   {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   toneEqParams(), false, true})
@@ -1538,7 +1538,7 @@ std::vector<ParamDesc> colorEqParams() {
 
 class ColorEqualizerNode : public Node {
 public:
-    NODELAB_NODE({"color.color_equalizer", "Color Equalizer", "Color",
+    REFRACTORY_NODE({"color.color_equalizer", "Color Equalizer", "Color",
                   {{"Image", PinType::Image}, {"Factor", PinType::Channel, 0}},
                   {{"Image", PinType::Image}},
                   colorEqParams(), false, true})

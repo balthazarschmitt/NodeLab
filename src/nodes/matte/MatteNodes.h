@@ -19,7 +19,7 @@ public:
         std::vector<std::array<float, 2>> pts;  // image-relative (0..1 across, 0..1 down)
     };
 
-    NODELAB_NODE({"matte.brush_mask", "Brush Mask", "Matte",
+    REFRACTORY_NODE({"matte.brush_mask", "Brush Mask", "Matte",
                   // Image (appended, so older links keep their pins): the photo Auto Mask follows.
                   {{"Mask", PinType::Channel}, {"Image", PinType::Image}},
                   {{"Mask", PinType::Channel}},

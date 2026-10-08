@@ -1,4 +1,4 @@
-{"app":"NodeLab","version":1,"graph":{"nextId":10,
+{"app":"Refractory","version":1,"graph":{"nextId":10,
  "nodes":[{"id":1,"type":"io.image_input","pos":[20,20],"params":{"File":"../../examples/scene.png"}},
           {"id":2,"type":"xform.lens_profile","pos":[220,20],"params":{"Distortion":200.0},"extra":{
            "profile":{"lens":"Test 18mm","camera":"","focal":18,"aperture":4,"distScale":1.8,"vigScale":1,

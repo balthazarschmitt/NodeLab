@@ -105,7 +105,7 @@ Runtime& runtime() {
         rt.error = "onnxruntime.dll is the wrong version";
         return rt;
     }
-    if (OrtStatus* st = api->CreateEnv(ORT_LOGGING_LEVEL_ERROR, "NodeLab", &rt.env)) {
+    if (OrtStatus* st = api->CreateEnv(ORT_LOGGING_LEVEL_ERROR, "Refractory", &rt.env)) {
         rt.error = statusText(api, st);
         return rt;
     }

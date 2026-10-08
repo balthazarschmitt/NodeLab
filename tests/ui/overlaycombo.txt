@@ -1,4 +1,4 @@
-# NodeLab.exe tests\ui\interact.nlproj --script tests\ui\overlaycombo.txt
+# Refractory.exe tests\ui\interact.refract --script tests\ui\overlaycombo.txt
 # The Inspector overlay's dropdowns open in front of it: change a group socket's type there.
 settle
 drag 739 345 789 115

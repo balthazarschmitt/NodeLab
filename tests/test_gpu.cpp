@@ -889,7 +889,7 @@ TEST_CASE("GPU blur matches the CPU on long lines") {
 TEST_CASE("GPU export matches the CPU export") {
     if (!gpuReady()) return;
     namespace fs = std::filesystem;
-    const fs::path dir = fs::temp_directory_path() / "nodelab_gpu_export";
+    const fs::path dir = fs::temp_directory_path() / "refractory_gpu_export";
     fs::remove_all(dir);
     fs::create_directories(dir);
     Graph g;

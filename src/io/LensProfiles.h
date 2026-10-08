@@ -1,8 +1,8 @@
 #pragma once
 // Lens profiles from the lensfun database (https://lensfun.github.io, CC BY-SA 3.0), like
 // Lightroom's "Enable Profile Corrections": distortion, lateral chromatic aberration (TCA) and
-// vignetting measured per lens and focal length. The database isn't part of NodeLab.exe; it is
-// downloaded on request into %APPDATA%\NodeLab\lensfun, as the AI models are.
+// vignetting measured per lens and focal length. The database isn't part of Refractory.exe; it is
+// downloaded on request into %APPDATA%\Refractory\lensfun, as the AI models are.
 //
 // A Lens Profile node stores the corrections resolved for its photo (Profile), so projects
 // render the same on machines without the database and headless renders don't need it.
@@ -99,7 +99,7 @@ Profile resolve(const Lens& lens, const Camera* camera, float focal, float apert
 
 // ---- The downloaded database
 
-// %APPDATA%\NodeLab\lensfun, created on demand. Tests point it elsewhere.
+// %APPDATA%\Refractory\lensfun, created on demand. Tests point it elsewhere.
 std::string folder();
 void setFolder(const std::string& dirU8);
 bool installed();
