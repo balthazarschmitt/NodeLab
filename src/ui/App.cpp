@@ -44,6 +44,7 @@
 #include "nodes/filter/SpotRemoval.h"
 #include "ui/Icons.h"
 #include "ui/Inspector.h"
+#include "ui/ParamWidgets.h"
 #include "ui/NodeInspectors.h"
 #include "ui/Style.h"
 #include "ui/SystemStats.h"
@@ -848,7 +849,9 @@ void App::drawInspectorOverlay() {
             if (floating) ImGui::BringWindowToDisplayBehind(self, floating);
             else ImGui::BringWindowToDisplayFront(self);
         }
+        setCurveFitBottom(editorMin_.y + margin + maxH);
         drawInspectorContents();
+        setCurveFitBottom(0.0f);
     }
     ImGui::End();
     ImGui::PopStyleVar(2);
@@ -1071,8 +1074,12 @@ void App::drawViewerWindow(Viewer& v, bool isMain) {
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom and pan together with Original and Result");
         }
         Node* ov = isMain ? overlayNode() : nullptr;
+        bool noImage = false;
+        for (const auto& [id, n] : graph_.nodes())
+            noImage |= n->info().type == ImageInputNode::staticInfo().type && n->paramS(0).empty();
         const char* emptyMsg = !v.error.empty() ? v.error.c_str()
                                : shown.empty() ? "Add an Output node (right-click the canvas)"
+                               : noImage       ? "No image yet: choose one in Image Input, or drop one here"
                                                : "No output yet - connect this node's inputs";
         if (eyedropper().active() && !v.shown && !v.shownGpu.empty()) v.shown = DisplayWorker::download(v.shownGpu);
         PickRequest pick{v.shown.get()};
@@ -1731,15 +1738,17 @@ void App::drawWorkspaceTabs() {
     for (int i = 0; i < 3; ++i) {
         const Tab& t = tabs[i];
         const bool sel = t.library ? grid : !grid && workspace_ == t.ws;
-        const bool enabled = !t.library || library_.active();
-        ImGui::BeginDisabled(!enabled);
+        // Library without a folder asks for one, rather than being a dead tab.
+        const bool enabled = true;
         const ImVec2 p = ImGui::GetCursorScreenPos();
-        if (ImGui::InvisibleButton(t.name, ImVec2(widths[i], h))) setWorkspace(t.ws, t.library);
+        if (ImGui::InvisibleButton(t.name, ImVec2(widths[i], h))) {
+            if (t.library && !library_.active()) requestAction(Pending::OpenFolder);
+            else setWorkspace(t.ws, t.library);
+        }
         const bool hovered = ImGui::IsItemHovered();
-        ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        if (hovered)
             ui::Tooltip(t.name, t.library ? "G" : "Ctrl+PgUp / Ctrl+PgDn",
-                        t.library   ? (enabled ? "The photos of the open folder" : "Open a folder first (File > Open Folder)")
+                        t.library   ? (library_.active() ? "The photos of the open folder" : "Open a folder of photos (File > Open Folder)")
                         : t.ws == WsDevelop ? "The photo, its settings in a column of panels, and the graph below"
                                             : "The graph between the original and the result");
         const ImVec2 q(p.x + widths[i], p.y + h);
@@ -1760,6 +1769,7 @@ void App::setWorkspace(int ws, bool library) {
     library_.grid = false;
     if (ws == workspace_) return;
     workspace_ = std::clamp(ws, 0, int(kWorkspaces) - 1);
+    editor_.ensureVisible();
     savePreferences();
 }
 
@@ -2154,24 +2164,25 @@ void App::drawUnsavedModal() {
         openUnsavedModal_ = false;
     }
     if (!ImGui::BeginPopupModal("Unsaved changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
-    ImGui::TextUnformatted("This project has unsaved changes.");
-    ImGui::Spacing();
-    if (ImGui::Button("Save")) {
-        ImGui::CloseCurrentPopup();
-        if (saveProject(false)) performAction(pending_);
-        pending_ = Pending::None;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Discard")) {
-        ImGui::CloseCurrentPopup();
-        modified_ = false;
-        performAction(pending_);
-        pending_ = Pending::None;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        ImGui::CloseCurrentPopup();
-        pending_ = Pending::None;
+    const std::string name = projectPath_.empty() ? std::string("Untitled") : pathToU8(u8ToPath(projectPath_).filename());
+    ImGui::Text("Save the changes to %s first?", name.c_str());
+    ImGui::TextDisabled("Discarding them can't be undone.");
+    switch (ui::dialogButtons({"Save", "Discard", "Cancel"})) {
+        case 0:
+            ImGui::CloseCurrentPopup();
+            if (saveProject(false)) performAction(pending_);
+            pending_ = Pending::None;
+            break;
+        case 1:
+            ImGui::CloseCurrentPopup();
+            modified_ = false;
+            performAction(pending_);
+            pending_ = Pending::None;
+            break;
+        case 2:
+            ImGui::CloseCurrentPopup();
+            pending_ = Pending::None;
+            break;
     }
     ImGui::EndPopup();
 }
@@ -2187,16 +2198,16 @@ void App::drawConvertModal() {
     ImGui::TextUnformatted("with the view transform applied only for display and export.");
     ImGui::TextUnformatted("Nothing is added to the graph, so the result will look different:");
     ImGui::TextUnformatted("curves, levels and blends tuned on sRGB values may need adjusting.");
-    ImGui::TextUnformatted("Ctrl+Z undoes the conversion.");
-    ImGui::Spacing();
-    if (ImGui::Button("Convert")) {
-        ImGui::CloseCurrentPopup();
-        graph_.colorManagement.linear = true;
-        markChanged(true);
-        status_ = "Converted to scene-linear";
+    ImGui::TextDisabled("Ctrl+Z undoes the conversion.");
+    switch (ui::dialogButtons({"Convert", "Cancel"})) {
+        case 0:
+            ImGui::CloseCurrentPopup();
+            graph_.colorManagement.linear = true;
+            markChanged(true);
+            status_ = "Converted to scene-linear";
+            break;
+        case 1: ImGui::CloseCurrentPopup(); break;
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
 }
 
@@ -2276,11 +2287,17 @@ bool App::saveProject(bool saveAs) {
 
 void App::openFolder(const std::string& dirU8) {
     if (!library_.open(dirU8)) {
-        status_ = "No photos in " + dirU8;
+        status_ = "Can't open " + dirU8;
         return;
     }
     showLibrary_ = true;
     library_.setCurrentProject(projectPath_);
+    if (library_.size() == 0) {
+        // The grid says so and shows the subfolders.
+        library_.grid = true;
+        status_ = "No photos in " + pathToU8(u8ToPath(dirU8).filename());
+        return;
+    }
     status_ = "Library: " + std::to_string(library_.size()) + " photos in " + pathToU8(u8ToPath(dirU8).filename());
     // Start on the first photo, unless a project with unsaved changes is open.
     if (!modified_ && library_.current() < 0) loadLibraryPhoto(0);
@@ -2525,19 +2542,19 @@ void App::handleLibraryActions(const LibraryPanel::Actions& a) {
     }
     if (ImGui::BeginPopupModal("Remove Virtual Copy?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         const bool valid = removeCopyIndex_ >= 0 && removeCopyIndex_ < library_.size() && library_.copyOf(removeCopyIndex_) > 0;
-        if (valid)
-            ImGui::Text("Remove Copy %d of %s?\nIts edit goes to the Recycle Bin; the photo stays.", library_.copyOf(removeCopyIndex_),
+        if (valid) {
+            ImGui::Text("Remove Copy %d of %s?", library_.copyOf(removeCopyIndex_),
                         pathToU8(u8ToPath(library_.photo(removeCopyIndex_)).filename()).c_str());
-        if (ImGui::Button("Remove", ImVec2(120 * style::scale(), 0)) && valid) {
-            removeVirtualCopy(removeCopyIndex_);
-            ImGui::CloseCurrentPopup();
+            ImGui::TextDisabled("Its edit goes to the Recycle Bin; the photo stays.");
         }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120 * style::scale(), 0)) || !valid) ImGui::CloseCurrentPopup();
+        const int pressed = ui::dialogButtons({"Remove", "Cancel"}, valid);
+        if (pressed == 0) removeVirtualCopy(removeCopyIndex_);
+        if (pressed >= 0 || !valid) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
     if (!a.openCollection.empty()) openCollection(a.openCollection);
     if (!a.openFolder.empty()) openFolder(a.openFolder);
+    if (a.browseFolder) requestAction(Pending::OpenFolder);
     if (a.copy) copyEdit();
     if (a.paste) pasteEdit();
     if (a.exportSelected) exportSelected();
@@ -2994,8 +3011,8 @@ void App::exportPresetRow() {
         const bool enter = ImGui::InputText("##presetName", presetName_, sizeof(presetName_), ImGuiInputTextFlags_EnterReturnsTrue);
         std::string name = presetName_;
         while (!name.empty() && name.back() == ' ') name.pop_back();
-        ImGui::BeginDisabled(name.empty());
-        if ((ImGui::Button("Save") || enter) && !name.empty()) {
+        const int pressed = ui::dialogButtons({"Save", "Cancel"}, !name.empty());
+        if ((pressed == 0 || enter) && !name.empty()) {
             ExportPreset p{name, es};
             auto same = std::find_if(exportPresets_.begin(), exportPresets_.end(), [&](const ExportPreset& q) { return q.name == name; });
             if (same != exportPresets_.end()) *same = std::move(p);
@@ -3004,9 +3021,7 @@ void App::exportPresetRow() {
             status_ = "Saved the export preset " + name;
             ImGui::CloseCurrentPopup();
         }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        if (pressed == 1) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 }

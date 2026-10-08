@@ -3,6 +3,25 @@
 NodeLab uses [semantic versioning](https://semver.org): minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
+## 1.6.1 (2026-10-07)
+
+### Changed
+- **Empty states:** a folder without photos opens in the grid with its subfolders and an
+  **Open Folder...** button; the Library tab asks for a folder when none is open; the Result
+  viewer says when no image is chosen yet; viewer hints wrap in narrow panels. Copy Edit and
+  Export Selected are disabled with no photos.
+- **Dialogs** share one layout: a question, a dim note, then buttons of equal width with the
+  main action first. Enter presses it and Escape cancels.
+- Switching workspaces frames the graph if none of it is in view.
+- **Light theme contrast:** dim text is 5.5:1 on panels (was 3.8:1), and text on accent-coloured
+  hovers and selections is 7:1 or more (was 3.9:1).
+
+### Fixed
+- In the Inspector overlay, curve editors (Hue Correct, Curves) opened large and then shrank
+  frame by frame to their minimum height. They now fit the space below them and stay that size.
+- Curve channel buttons wrap onto a second line in a narrow Inspector instead of running off its
+  edge.
+
 ## 1.6.0 (2026-10-07)
 
 ### New

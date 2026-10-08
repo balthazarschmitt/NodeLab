@@ -88,7 +88,9 @@ LibraryPanel::~LibraryPanel() {
 
 bool LibraryPanel::open(const std::string& dirU8) {
     std::vector<library::Entry> entries = library::listEntries(dirU8);
-    if (entries.empty()) return false;
+    // A folder without photos still opens, so its subfolders can be reached from the Folders column.
+    std::error_code ec;
+    if (entries.empty() && !std::filesystem::is_directory(u8ToPath(dirU8), ec)) return false;
     dir_ = folder_ = dirU8;
     collection_.clear();
     loadEntries(std::move(entries));
@@ -612,7 +614,9 @@ void LibraryPanel::toolbar(Actions& a) {
     if (ui::IconButton(ICON_INFO, "Metadata", showMetadata, nullptr, "Title, caption, keywords and colour label of the selected photos"))
         showMetadata = !showMetadata;
     wrapNext(smallButtonW("Copy Edit"));
+    ImGui::BeginDisabled(items_.empty());  // nothing to act on in an empty folder
     if (ImGui::SmallButton("Copy Edit")) a.copy = true;
+    ImGui::EndDisabled();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy this photo's edit (Ctrl+Shift+C)");
     wrapNext(smallButtonW("Paste Edit"));
     ImGui::BeginDisabled(!canPaste);
@@ -621,7 +625,9 @@ void LibraryPanel::toolbar(Actions& a) {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Paste the copied edit onto the selected photos (Ctrl+Shift+V)");
     wrapNext(smallButtonW("Export Selected..."));
+    ImGui::BeginDisabled(items_.empty());
     if (ImGui::SmallButton("Export Selected...")) a.exportSelected = true;
+    ImGui::EndDisabled();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Render the selected photos, each with its own edit, with the Export window's settings");
     if (dupRunning_) {
         ImGui::SameLine();
@@ -911,15 +917,24 @@ LibraryPanel::Actions LibraryPanel::drawGrid(bool keys) {
     }
     if (shown.empty()) {
         // An empty state with a way out, rather than a blank grid.
-        const char* msg = "No photos match the filter";
-        const ImVec2 ts = ImGui::CalcTextSize(msg);
+        const bool none = items_.empty();
+        const char* msg = none ? "No photos in this folder" : "No photos match the filter";
+        const char* button = none ? "Open Folder..." : "Show All Photos";
         const ImVec2 avail = ImGui::GetContentRegionAvail();
-        ImGui::SetCursorPos(ImVec2((avail.x - ts.x) * 0.5f, avail.y * 0.4f));
+        ImGui::SetCursorPos(ImVec2((avail.x - ImGui::CalcTextSize(msg).x) * 0.5f, avail.y * 0.4f));
         ImGui::TextDisabled("%s", msg);
-        const float bw = ImGui::CalcTextSize("Show All Photos").x + ImGui::GetStyle().FramePadding.x * 2;
-        ImGui::SetCursorPosX((avail.x - bw) * 0.5f);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImGui::GetStyle().ItemSpacing);
-        if (ImGui::Button("Show All Photos")) filter_ = 0, search_[0] = 0;
+        if (none) {
+            const char* hint = "Choose a subfolder on the left, or open another folder.";
+            ImGui::SetCursorPosX((avail.x - ImGui::CalcTextSize(hint).x) * 0.5f);
+            ImGui::TextDisabled("%s", hint);
+        }
+        const float bw = ImGui::CalcTextSize(button).x + ImGui::GetStyle().FramePadding.x * 2;
+        ImGui::SetCursorPosX((avail.x - bw) * 0.5f);
+        if (ImGui::Button(button)) {
+            if (none) a.browseFolder = true;
+            else filter_ = 0, search_[0] = 0;
+        }
         ImGui::PopStyleVar();
     }
     ImGui::EndChild();
@@ -1291,7 +1306,9 @@ void LibraryPanel::header(Actions& a) {
     ImGui::SameLine();
     photoMenu();
     ImGui::SameLine();
+    ImGui::BeginDisabled(items_.empty());  // nothing to act on in an empty folder
     if (ImGui::SmallButton("Copy Edit")) a.copy = true;
+    ImGui::EndDisabled();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy this photo's edit (Ctrl+Shift+C)");
     ImGui::SameLine();
     ImGui::BeginDisabled(!canPaste);
@@ -1300,7 +1317,9 @@ void LibraryPanel::header(Actions& a) {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Paste the copied edit onto the selected photos (Ctrl+Shift+V)");
     ImGui::SameLine();
+    ImGui::BeginDisabled(items_.empty());
     if (ImGui::SmallButton("Export Selected...")) a.exportSelected = true;
+    ImGui::EndDisabled();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Render the selected photos, each with its own edit, with the Export window's settings");
     ImGui::SameLine();
     if (ui::IconButton(ICON_INFO, "Metadata", showMetadata, nullptr, "Title, caption, keywords and colour label of the selected photos"))

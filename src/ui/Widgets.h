@@ -5,6 +5,7 @@
 // Script targets (UiItems.h): icon-only widgets answer to their name ("Before / After").
 #include <imgui.h>
 
+#include <initializer_list>
 #include <string>
 
 namespace ui {
@@ -50,5 +51,10 @@ ImVec2 windowSize(float w, float h);
 // `text` shortened with "..." to fit `maxWidth`, so a long name ends visibly rather than being
 // cut through a letter.
 std::string ellipsize(const std::string& text, float maxWidth);
+
+// A dialog's button row, the same in every dialog: a separator, then buttons of one width with
+// the main action first and Cancel last. Enter presses the first (unless a text field has the
+// keyboard or it's disabled), Escape the last. Returns the index pressed, or -1.
+int dialogButtons(std::initializer_list<const char*> labels, bool firstEnabled = true);
 
 }  // namespace ui

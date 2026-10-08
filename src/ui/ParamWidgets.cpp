@@ -14,6 +14,16 @@
 
 // ---------------------------------------------------------------- curves
 
+static float curveFitBottom = 0.0f;
+
+void setCurveFitBottom(float screenY) { curveFitBottom = screenY; }
+
+// SameLine when an item of width w still fits on the current line; otherwise it starts a new one.
+static void sameLineIfFits(float w) {
+    const float right = ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + w;
+    if (right <= ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x) ImGui::SameLine();
+}
+
 bool curveEditor(const char* id, nlohmann::json& curves, const std::vector<std::string>& keySpec) {
     std::vector<std::string> keyStore, labelStore;
     bool hueStrip = false;
@@ -47,11 +57,13 @@ bool curveEditor(const char* id, nlohmann::json& curves, const std::vector<std::
     int chan = std::clamp(st->GetInt(chanKey, 0), 0, nk - 1);
     bool changed = false;
 
+    // The buttons wrap rather than run off a narrow panel.
+    const ImGuiStyle& style = ImGui::GetStyle();
     for (int c = 0; c < nk; ++c) {
-        if (c) ImGui::SameLine();
+        if (c) sameLineIfFits(ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + ImGui::CalcTextSize(labels[c]).x);
         if (ImGui::RadioButton(labels[c], chan == c)) st->SetInt(chanKey, chan = c);
     }
-    ImGui::SameLine();
+    sameLineIfFits(ImGui::CalcTextSize("Reset").x + style.FramePadding.x * 2.0f);
     if (ImGui::SmallButton("Reset")) {
         if (hueStrip) {  // hue curves are neutral when flat at 0.5
             nlohmann::json flat = nlohmann::json::array();
@@ -70,7 +82,10 @@ bool curveEditor(const char* id, nlohmann::json& curves, const std::vector<std::
     // for editing). Adding the scroll offset keeps the size stable while the panel scrolls.
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     const float w = std::clamp(avail.x, 160.0f, 560.0f);
-    const float fitH = avail.y + ImGui::GetScrollY() - ImGui::GetStyle().ItemSpacing.y;
+    const bool autoFit = ImGui::GetCurrentWindow()->Flags & ImGuiWindowFlags_AlwaysAutoResize;
+    const float fitH = autoFit ? (curveFitBottom > 0.0f ? curveFitBottom - ImGui::GetCursorScreenPos().y - style.WindowPadding.y
+                                                        : std::min(w, 400.0f))
+                               : avail.y + ImGui::GetScrollY() - style.ItemSpacing.y;
     const float h = std::clamp(fitH, 120.0f, std::min(w, 400.0f));
     const ImVec2 p0 = ImGui::GetCursorScreenPos();
     const ImVec2 p1(p0.x + w, p0.y + h);

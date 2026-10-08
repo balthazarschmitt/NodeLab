@@ -49,6 +49,9 @@ public:
     // The graph was replaced (new/open/undo): drop selection and in-flight interactions.
     void onGraphReplaced(bool frame);  // also clears the active value field
     void frameAll() { fitFrames_ = 1; }
+    // Frames the graph if none of it is in view once the canvas has settled (after a workspace
+    // switch resizes it).
+    void ensureVisible() { checkVisible_ = 3; }
     // Ctrl+F: search this graph's nodes and those of the groups inside it by label or name, then
     // select and frame the pick. Opened next frame from the canvas, as a popup must be opened in
     // the ID scope that draws it.

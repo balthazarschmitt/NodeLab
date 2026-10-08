@@ -391,7 +391,9 @@ void apply() {
     }
     if (t.uiSet[Text]) {
         c[ImGuiCol_Text] = t.ui[Text];
-        c[ImGuiCol_TextDisabled] = lerp(t.ui[Text], bg, 0.45f);
+        // Dark text fades faster against a light background: a smaller step keeps dim text
+        // readable (about 5:1 on the Light preset's panels, past WCAG's 4.5).
+        c[ImGuiCol_TextDisabled] = lerp(t.ui[Text], bg, dark ? 0.45f : 0.33f);
     }
     if (t.uiSet[Frame]) {
         const ImVec4 f = t.ui[Frame];
@@ -429,6 +431,12 @@ void apply() {
         c[ImGuiCol_NavCursor] = a;
         c[ImGuiCol_PlotHistogram] = a;
         c[ImGuiCol_TabSelectedOverline] = a;
+        if (!dark) {
+            // Dark text on the solid accent is under 4:1; tints of it keep 7:1 or more.
+            c[ImGuiCol_ButtonHovered] = alpha(a, 0.60f);
+            c[ImGuiCol_ButtonActive] = alpha(a, 0.80f);
+            c[ImGuiCol_HeaderActive] = alpha(a, 0.70f);
+        }
     }
     if (t.uiSet[Border]) {
         c[ImGuiCol_Border] = alpha(t.ui[Border], 0.6f);

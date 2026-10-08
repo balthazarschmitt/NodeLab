@@ -59,6 +59,7 @@ public:
         bool copy = false, paste = false, exportSelected = false;
         int createCopy = -1, removeCopy = -1;  // Create / Remove Virtual Copy, on this entry
         std::string openCollection, openFolder;  // the Collections menu
+        bool browseFolder = false;               // Open Folder... (an empty folder's grid)
     };
     // Draws the panel's contents inside the current window. keys: the culling shortcuts apply
     // (the pointer isn't over the Node Editor and nothing takes text).

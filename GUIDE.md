@@ -1599,7 +1599,12 @@ saved straight away, in `%APPDATA%\NodeLab\preferences.json`.
 
 **File > Open Folder** (Ctrl+Shift+O) turns NodeLab into a photo browser, like Lightroom's
 filmstrip. You can also drop a folder on the window, or start `NodeLab.exe C:\Photos\Trip`.
-The Library panel along the bottom shows the folder's photos.
+The Library panel along the bottom shows the folder's photos. Clicking the **Library** tab
+with no folder open asks for one. A folder without photos still opens, in the grid, so you can
+pick one of its subfolders from the Folders column.
+
+In NodeLab's dialogs (unsaved changes, Convert to Scene-Linear and the like), **Enter** presses
+the first button and **Escape** cancels.
 
 - **Opening photos:** click a thumbnail, or press ← / → to step through them. The open photo
   has a white border.

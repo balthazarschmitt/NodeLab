@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 #include <GLFW/glfw3.h>
@@ -333,9 +334,24 @@ void drawImageView(const char* id, const GLTexture& tex, ViewState& view, const 
     dl->AddRectFilled(origin, end, theme::col(theme::ImageBackground));
 
     if (!tex.valid()) {
-        ImVec2 ts = ImGui::CalcTextSize(emptyText);
-        dl->AddText(ImVec2(origin.x + (avail.x - ts.x) * 0.5f, origin.y + (avail.y - ts.y) * 0.5f),
-                    IM_COL32(140, 140, 150, 255), emptyText);
+        // Word-wrapped to the panel, each line centred, so a narrow panel doesn't cut the hint off.
+        ImFont* font = ImGui::GetFont();
+        const float fs = ImGui::GetFontSize(), wrap = std::max(avail.x - 2.0f * fs, fs);
+        std::vector<std::pair<const char*, const char*>> lines;
+        for (const char* s = emptyText; *s;) {
+            const char* e = font->CalcWordWrapPositionA(fs / font->FontSize, s, s + std::strlen(s), wrap);
+            if (e == s) ++e;
+            lines.emplace_back(s, e);
+            s = e;
+            while (*s == ' ' || *s == '\n') ++s;
+        }
+        const float lineH = ImGui::GetTextLineHeight();
+        float y = origin.y + (avail.y - lineH * float(lines.size())) * 0.5f;
+        for (const auto& [s, e] : lines) {
+            const float w = ImGui::CalcTextSize(s, e).x;
+            dl->AddText(ImVec2(origin.x + (avail.x - w) * 0.5f, y), ImGui::GetColorU32(ImGuiCol_TextDisabled), s, e);
+            y += lineH;
+        }
         return;
     }
 

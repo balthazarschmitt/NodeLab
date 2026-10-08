@@ -10,6 +10,11 @@
 // keys: "key:Label" channel list (empty = master/R/G/B); "@hue" draws a hue strip behind the curve.
 bool curveEditor(const char* id, nlohmann::json& curves, const std::vector<std::string>& keys = {});
 
+// The screen y a curve editor may extend to in a window that sizes itself to its contents (the
+// Inspector overlay); 0 when there is none. Fitting such a window's own height would feed back
+// into its size, so the curve shrank a little every frame.
+void setCurveFitBottom(float screenY);
+
 // Color ramp {"interp","stops"}: click the bar to add a stop, drag markers to move,
 // select a marker to edit its color / position.
 bool rampEditor(const char* id, nlohmann::json& ramp);

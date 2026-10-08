@@ -71,6 +71,28 @@ std::string ellipsize(const std::string& text, float maxWidth) {
     return text.substr(0, lo) + "...";
 }
 
+int dialogButtons(std::initializer_list<const char*> labels, bool firstEnabled) {
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    float w = 96.0f * style::scale();
+    for (const char* l : labels) w = std::max(w, ImGui::CalcTextSize(l, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f);
+    const ImGuiIO& io = ImGui::GetIO();
+    int pressed = -1, i = 0;
+    for (const char* l : labels) {
+        if (i > 0) ImGui::SameLine();
+        ImGui::BeginDisabled(i == 0 && !firstEnabled);
+        if (ImGui::Button(l, ImVec2(w, 0))) pressed = i;
+        ImGui::EndDisabled();
+        ++i;
+    }
+    if (pressed < 0 && firstEnabled && !io.WantTextInput &&
+        (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)))
+        pressed = 0;
+    if (pressed < 0 && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) pressed = int(labels.size()) - 1;
+    return pressed;
+}
+
 bool IconButton(const char* icon, const char* name, bool on, const char* key, const char* tip) {
     const float h = ImGui::GetFrameHeight();
     const ImVec2 p = ImGui::GetCursorScreenPos();
