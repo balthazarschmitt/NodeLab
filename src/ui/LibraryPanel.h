@@ -78,6 +78,9 @@ public:
     // Lightroom's Metadata panel for the selection: colour label, title, caption, keywords, and
     // the camera's details. A window in the editor; a sidebar in the Library views.
     bool showMetadata = false;
+    // The Library views' left panel: the folder, its parent and subfolders, and the collections
+    // (Lightroom's Folders and Collections panels). Kept in the preferences.
+    bool showSources = true;
     void drawMetadataWindow(const char* title = "Metadata###LibraryMetadata");  // its workspace's window
     // Lightroom's Sort order (the toolbar's Sort menu), kept in the preferences.
     enum Sort { ByName, ByCaptureTime, ByFileType, ByRating, ByPick, ByEditTime, ByCamera, ByLens, ByIso, ByFocalLength, kSortCount };
@@ -125,6 +128,11 @@ private:
     // The entries the filter shows, in order (duplicates grouped after Find Duplicates).
     std::vector<int> shown() const;
     void toolbar(Actions& a);
+    // The Library views' two rows: the source and the actions, then the views, filters, sort and
+    // search (Lightroom's Library Filter bar).
+    void header(Actions& a);
+    void filterBar();
+    void drawSources(Actions& a);
     void collectionsMenu(Actions& a);
     void photoMenu();
     Actions drawCompare(bool keys);
@@ -168,7 +176,7 @@ private:
     // Puts the entries in this order (a permutation), keeping the current, selected and compared ones.
     void reorder(const std::vector<Item*>& order);
     // The Library views' area beside the Metadata sidebar (when shown); true: endMain closes it.
-    bool beginMain();
+    bool beginMain(Actions& a);
     void endMain(bool side);
     void findDuplicates();
     void addSelectionTo(const std::string& collection);
@@ -177,6 +185,9 @@ private:
     std::string folder_;      // the folder opened last (dir_ too, unless a collection is shown)
     std::string collection_;
     std::vector<library::Collection> collections_;
+    bool collectionsLoaded_ = false;  // the left panel lists collections_ (reloaded on changes)
+    std::string subFor_;              // the folder subfolders_ lists
+    std::vector<std::string> subfolders_;
     char newCollection_[128] = "";
     char search_[128] = "";
     std::set<std::string> expanded_;           // stacks shown open

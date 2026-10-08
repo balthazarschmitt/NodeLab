@@ -143,7 +143,7 @@ dark sky, as one group with sliders (see Help > Guide > Recipes).
 | Compare / Survey | C: two photos side by side, zoomed and panned together (←/→ next candidate, ↑ make select, ↓ swap). N: the selected photos tiled; / or the x removes one |
 | Library sort | The Library toolbar's Sort menu: file name, capture time, file type, rating, pick, edit time, camera, lens, ISO, focal length; A-Z / Z-A |
 | Virtual copies | Ctrl+' (or right-click a thumbnail): another edit of the same photo, with its own sidecar, rating and flag |
-| Library grid | G (or the Library's Grid button): the whole folder as cards; click the stars to rate, double-click / Enter / E opens a photo, Esc goes back; Ctrl+wheel resizes |
+| Library grid | G (or the Library's Grid button): the whole folder as cards; click the stars to rate, double-click / Enter / E opens a photo, Esc goes back; Ctrl+wheel resizes. A filter bar (stars, flags, labels, sort, search) and a Folders / Collections column on the left |
 | Copy / paste edit | Ctrl+Shift+C copies the open photo's edit, Ctrl+Shift+V pastes it onto the selected photos (each keeps its own file and rating) |
 | Export selected | Library → Export Selected... (or File menu): each selected photo exported with its own edit, using the Export window's format and size |
 | Export | File > Export (Ctrl+E) opens the Export window: renders in the background with a progress bar and Cancel. Format (PNG/TIFF 8 or 16 bit, JPEG + quality with EXIF, WebP, JPEG XL 8/16 bit and AVIF 8/10 bit lossless or lossy, OpenEXR half/full float scene-linear), Color Space (sRGB, Display P3, Adobe RGB, ProPhoto, Rec.2020, Rec.2100 PQ HDR in PNG, JPEG XL and AVIF), size (original, long edge, percent; Lanczos in linear light) |

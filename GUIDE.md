@@ -1617,9 +1617,12 @@ The Library panel along the bottom shows the folder's photos.
     thumbnail); the same key again removes it. Purple is in right-click > Color Label.
   - Rating a photo writes its sidecar, so ratings, flags, labels and keywords stay with the folder.
 - **Selecting:** Ctrl+click adds or removes a photo, Shift+click selects a range. Selected
-  photos have a blue border.
+  photos have a border in the theme's accent colour.
 - **Filter:** the menu shows All Photos, Picked, everything but rejects, Rejected, photos with at
   least N stars, Edited photos, one colour label, or Duplicates. ← / → skip photos the filter hides.
+  - In the Library views the filter bar (Lightroom's) has the same filters as buttons: a star
+    shows photos rated that many stars or more, the flags show picks or rejects, and a colour dot
+    shows that label. Clicking the lit one again shows all photos.
 - **Search** (the box on the Library toolbar): shows the photos whose file name, title, caption or
   keywords contain every word typed, ignoring case.
 - **Metadata** (the toolbar's **Metadata** button, or View > Metadata), as Lightroom's Metadata and
@@ -1675,6 +1678,12 @@ The Library panel along the bottom shows the folder's photos.
     **Escape** or **Loupe** goes back without opening one.
   - **Size** (or Ctrl+wheel) changes the card size. The filter, Copy / Paste Edit and Export
     Selected work as in the filmstrip.
+  - A line under the grid counts the photos, how many the filter shows and how many are
+    selected. When the filter hides everything, **Show All Photos** clears it.
+  - **Folders** (the folder button left of the folder's name, as Lightroom's Folders and
+    Collections panels) shows a column on the left: the parent folder, the subfolders to open,
+    and the collections with their counts. Type a name under them and press Enter to make a
+    collection of the selected photos.
 - **Compare view (C):** two photos side by side, as Lightroom's Compare: the **Select** (the first
   selected photo) and the **Candidate** (the second selected one, or the next photo).
   - ← / → change the Candidate; **↑** (or **Make Select**) makes it the Select and brings the

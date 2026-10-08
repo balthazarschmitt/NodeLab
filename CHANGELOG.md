@@ -3,7 +3,17 @@
 NodeLab uses [semantic versioning](https://semver.org): minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
-## 1.5.0 (2026-10-07)
+## Unreleased
+
+### New
+- **Library redesign** (Lightroom's Library): the Grid, Compare and Survey views have a header
+  with the folder's name and the actions, and a filter bar with the view buttons, star, flag and
+  colour-label filters, the filter and sort menus and the search box.
+- A **Folders / Collections** column on the left of the Library views: the parent folder, the
+  subfolders, and the collections with their counts.
+- The grid has 3:2 cards in the theme's colours, dims rejected photos, counts the photos under
+  it, and offers **Show All Photos** when the filter hides everything.
+
 
 ### New
 - **Node editor redesign:** a dot grid, soft shadows, and headers tinted with the node's

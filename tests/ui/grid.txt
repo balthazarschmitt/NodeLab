@@ -12,18 +12,17 @@ wait 30
 settle
 shot build/smoke/grid1.png
 # The fourth star of the second photo, then select it and Ctrl+click the third
-click 323 267
-click 307 180
+clickat "Library Grid/card#2" 0.578 0.93
+click "Library Grid/card#2"
 ctrl on
-click 504 180
+click "Library Grid/card#3"
 ctrl off
 key 2
 key p
 settle
 shot build/smoke/grid2.png
 # Double-click the fourth: it opens, and the grid closes
-click 701 180
-click 701 180
+doubleclick "Library Grid/card#4"
 settle
 wait 30
 settle

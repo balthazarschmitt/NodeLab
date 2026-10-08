@@ -149,6 +149,7 @@ void App::loadPreferences() {
                 if (e.is_string()) alsoPresets_.push_back(e.get<std::string>());
         library_.sortBy = std::clamp(j.value("librarySort", 0), 0, LibraryPanel::kSortCount - 1);
         library_.sortDescending = j.value("librarySortDescending", false);
+        library_.showSources = j.value("librarySources", true);
         overlay_.cropGuide = std::clamp(j.value("cropGuide", int(NodeOverlay::Thirds)), 0, NodeOverlay::kCropGuideCount - 1);
         overlay_.cropGuideTurn = std::clamp(j.value("cropGuideTurn", 0), 0, 3);
         loupe_.grid = j.value("loupeGrid", false);
@@ -190,6 +191,7 @@ void App::savePreferences() const {
                         {"exportAlso", alsoPresets_},
                         {"librarySort", library_.sortBy},
                         {"librarySortDescending", library_.sortDescending},
+                        {"librarySources", library_.showSources},
                         {"cropGuide", overlay_.cropGuide},
                         {"cropGuideTurn", overlay_.cropGuideTurn},
                         {"loupeGrid", loupe_.grid},

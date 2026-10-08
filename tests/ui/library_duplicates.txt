@@ -11,13 +11,9 @@ key g
 settle
 wait 30
 settle
-move 870 63
-wait 2
-click 870 63
+click "Library Grid/Photo"
 wait 3
-move 946 287
-wait 2
-click 946 287
+click "Find Duplicates"
 wait 60
 settle
 wait 30
