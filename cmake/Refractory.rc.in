@@ -1,6 +1,10 @@
 // Generated from cmake/Refractory.rc.in - shows up under the exe's Properties > Details.
 #include <winver.h>
 
+// The app icon (res/Refractory.ico, drawn by tools/make_icon.py). Explorer shows the exe's first
+// icon, and GLFW gives its windows the one named GLFW_ICON (title bar, taskbar, Alt+Tab).
+GLFW_ICON ICON "@CMAKE_SOURCE_DIR@/res/Refractory.ico"
+
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION     @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
 PRODUCTVERSION  @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0

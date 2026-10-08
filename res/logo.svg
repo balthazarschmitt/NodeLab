@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180">
+  <!-- Refractory's logo. tools/make_icon.py draws the same geometry into res/Refractory.ico. -->
+  <rect width="180" height="180" rx="36" fill="#1f2023"/>
+  <polygon points="90,34 38,138 104,138" fill="#363c48"/>
+  <polygon points="90,34 104,138 142,138" fill="#262a32"/>
+  <line x1="86" y1="44" x2="46" y2="128" stroke="#ffffff" stroke-opacity="0.18" stroke-width="2"/>
+  <line x1="90" y1="34" x2="104" y2="138" stroke="#e8e8ec" stroke-opacity="0.35" stroke-width="1.5"/>
+  <polygon points="90,34 38,138 142,138" fill="none" stroke="#e8e8ec" stroke-width="2.5" stroke-linejoin="round"/>
+  <line x1="10" y1="104" x2="63" y2="88" stroke="#ffffff" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="63" y1="88" x2="120" y2="94" stroke="#ffffff" stroke-opacity="0.55" stroke-width="3"/>
+  <g stroke-width="4" stroke-linecap="round">
+    <line x1="120" y1="94" x2="164" y2="64" stroke="#e5484d"/>
+    <line x1="120" y1="94" x2="168" y2="80" stroke="#f2a33a"/>
+    <line x1="120" y1="94" x2="169" y2="96" stroke="#e8d44d"/>
+    <line x1="120" y1="94" x2="168" y2="112" stroke="#46a758"/>
+    <line x1="120" y1="94" x2="166" y2="128" stroke="#3e8ed0"/>
+    <line x1="120" y1="94" x2="162" y2="143" stroke="#8e4ec6"/>
+  </g>
+</svg>

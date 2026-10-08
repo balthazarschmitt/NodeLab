@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 # The app version. Bump it (and CHANGELOG.md) when a feature set lands; see CLAUDE.md.
-project(Refractory VERSION 1.9.0 LANGUAGES C CXX)
+project(Refractory VERSION 1.10.0 LANGUAGES C CXX)
 
 if(MINGW)
     # GCC on 64-bit Windows can't keep the stack aligned to 32 bytes, so AVX code that spills a
@@ -423,6 +423,8 @@ if(WIN32)
     enable_language(RC)
     configure_file(cmake/Refractory.rc.in ${CMAKE_BINARY_DIR}/generated/Refractory.rc @ONLY)
     target_sources(Refractory PRIVATE ${CMAKE_BINARY_DIR}/generated/Refractory.rc)
+    set_source_files_properties(${CMAKE_BINARY_DIR}/generated/Refractory.rc PROPERTIES
+        OBJECT_DEPENDS ${CMAKE_SOURCE_DIR}/res/Refractory.ico)
 endif()
 if(WIN32)
     target_link_libraries(Refractory PRIVATE comdlg32 ole32 uuid)

@@ -3,6 +3,13 @@
 Refractory uses [semantic versioning](https://semver.org): minor versions add
 features and patch versions fix bugs. Each release is tagged `vX.Y.Z` in git.
 
+## 1.10.0 (2026-10-08)
+
+### Added
+- **App icon:** a prism splitting a white beam into a spectrum. It shows on the exe in Explorer,
+  in the title bar, the taskbar and Alt+Tab. Small sizes (16 to 32 px) use a simpler, bolder
+  drawing. The source is `res/logo.svg`; `tools/make_icon.py` draws `res/Refractory.ico`.
+
 ## 1.9.0 (2026-10-08)
 
 ### Added

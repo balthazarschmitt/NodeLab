@@ -1,3 +1,5 @@
+<img src="res/logo.svg" width="96" alt="Refractory logo: a prism splitting a white beam into a spectrum">
+
 # Refractory
 
 Node-based image manipulation. Import a photo, wire color data between nodes, and see the original

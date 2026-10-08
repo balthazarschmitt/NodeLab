@@ -35,6 +35,9 @@ build\refractory_tests.exe
     pass `-DFETCHCONTENT_UPDATES_DISCONNECTED=ON`.
   - `CMakeLists.txt` defaults `CMAKE_TLS_CAINFO` to Git for Windows' CA bundle, because WinLibs'
     CMake has none.
+- **App icon:** `res/Refractory.ico`, embedded by `cmake/Refractory.rc.in` as `GLFW_ICON` (GLFW
+  uses that name for its windows). After changing the logo (`res/logo.svg`), redraw it with
+  `python tools/make_icon.py`, which keeps the same geometry.
 - **Release linking:** the Release exe links statically (`-static`, `-mwindows`). It needs only
   Windows system DLLs and OpenGL 3.0.
 
